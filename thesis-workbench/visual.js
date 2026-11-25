@@ -332,46 +332,74 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         }
         return null
     }
+    // Join only adjacent prose cards, keeping the caret at the former break.
+    // Rebuild the right inline nodes with callbacks owned by the surviving card.
+    function joinProse(left,right){
+        const leftCard=cards().find(c=>c._part===left),rightCard=cards().find(c=>c._part===right);
+        const area=leftCard?.querySelector('.richText'),rightArea=rightCard?.querySelector('.richText');
+        if(!area||!rightArea)return false;
+        const tail=area.lastElementChild,head=rightArea.firstElementChild;
+        const paragraph=n=>n&&/^(P|DIV|H[1-6])$/.test(n.tagName);
+        if(!paragraph(tail)||!paragraph(head))return false;
+        const fresh=visualRich(richMarkdown(rightArea),()=>{left.raw=richMarkdown(area);flush()});
+        const start=fresh.firstElementChild;if(!paragraph(start))return false;
+        // Marked inserts formatting newlines between block elements. Those are
+        // not visible text and must not become a line break at the join.
+        if(tail.lastChild?.nodeName==='BR'&&tail.childNodes.length===1)tail.lastChild.remove();
+        const boundary=tail.childNodes.length;
+        if(!(start.childNodes.length===1&&start.firstChild.nodeName==='BR'))tail.append(...start.childNodes);
+        start.remove();area.append(...fresh.childNodes);
+        parts.splice(parts.indexOf(right),1);rightCard.remove();selectedPart=left;clearObject();
+        area.focus({preventScroll:true});const r=document.createRange();r.setStart(tail,boundary);r.collapse(true);
+        const s=getSelection();s.removeAllRanges();s.addRange(r);remember();
+        left.raw=richMarkdown(area);flush();return true
+    }
+    function deleteInRich(area,forward){
+        const card=area.closest('.visualCard'),p=card?._part;
+        const s=getSelection();if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.anchorNode))return false;
+        // Empty editable paragraphs still exist until saved.
+        if(p?.kind==='text'&&!area.textContent.replace(/[\u200b\u00a0]/g,'').trim()&&!area.querySelector('math-field,[data-token],img')){
+            if(parts.length===1)return true;
+            const i=parts.indexOf(p);
+            const before=cards().slice(0,i).reverse().find(c=>c._part.kind==='text')?.querySelector('.richText');
+            const after=cards().slice(i+1).find(c=>c._part.kind==='text')?.querySelector('.richText');
+            removePart(p,true);
+            const dest=forward?(after||before):(before||after);
+            if(dest)placeIn(dest,dest===before);else root.focus({preventScroll:true});
+            return true
+        }
+        const caret=s.getRangeAt(0).cloneRange(),atom=atomicAt(area,caret,forward);
+        if(atom){
+            const r=document.createRange();r.setStartBefore(atom);r.collapse(true);atom.remove();s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));return true
+        }
+        if(p?.kind!=='text')return false;
+        const edge=document.createRange();edge.selectNodeContents(area);
+        if(forward)edge.setStart(caret.startContainer,caret.startOffset);else edge.setEnd(caret.startContainer,caret.startOffset);
+        const frag=edge.cloneContents();
+        // Ignore only DOM formatting newlines; real spaces and inline objects
+        // still count as content, and an internal BR is handled natively.
+        if(frag.textContent.replace(/[\u200b\r\n]/g,'')||frag.querySelector('math-field,[data-token],img,br'))return false;
+        const neighbor=parts[parts.indexOf(p)+(forward?1:-1)];
+        if(!neighbor)return false;
+        if(neighbor.kind!=='text'){removePart(neighbor,true);return true}
+        return forward?joinProse(p,neighbor):joinProse(neighbor,p)
+    }
     root.addEventListener('keydown',e=>{
-        if(!editingEnabled)return;
-        if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;
+        if(!editingEnabled||e.defaultPrevented||e.isComposing||e.keyCode===229)return;
         const inMath=e.composedPath().some(x=>x.tagName==='MATH-FIELD');
         const area=e.target.closest?.('.richText'),inControl=e.target.closest?.('input,textarea,select,button');
         if(!['Backspace','Delete'].includes(e.key)||e.ctrlKey||e.metaKey||e.altKey||inMath||inControl)return;
-        const forward=e.key==='Delete';
-        if(area){
-            const card=area.closest('.visualCard'),p=card?._part;
-            // An empty editable paragraph is still a content block in the
-            // live editor, even though the saved document omits blank parts.
-            if(p?.kind==='text'&&!area.textContent.replace(/[\u200b\u00a0]/g,'').trim()&&!area.querySelector('math-field,[data-token],img')){
-                e.preventDefault();
-                if(parts.length===1)return;
-                const i=parts.indexOf(p);
-                const before=[...body.children].slice(0,i).reverse().find(c=>c._part.kind==='text')?.querySelector('.richText');
-                const after=[...body.children].slice(i+1).find(c=>c._part.kind==='text')?.querySelector('.richText');
-                removePart(p,true);
-                const dest=forward?(after||before):(before||after);
-                if(dest)placeIn(dest,dest===before);else root.focus({preventScroll:true});
-                return
-            }
-            const s=getSelection();if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.anchorNode))return;
-            const caret=s.getRangeAt(0).cloneRange(),atom=atomicAt(area,caret,forward);
-            if(atom){
-                e.preventDefault();const r=document.createRange();r.setStartBefore(atom);r.collapse(true);atom.remove();s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));return
-            }
-            if(p?.kind!=='text')return;
-            const edge=document.createRange();edge.selectNodeContents(area);
-            if(forward)edge.setStart(caret.startContainer,caret.startOffset);else edge.setEnd(caret.startContainer,caret.startOffset);
-            const frag=edge.cloneContents();
-            if(frag.textContent.replace(/\u200b/g,'')||frag.querySelector('math-field,[data-token],img'))return;
-            const neighbor=parts[parts.indexOf(p)+(forward?1:-1)];
-            if(neighbor&&neighbor.kind!=='text'){e.preventDefault();removePart(neighbor,true)}
-            return
-        }
+        if(area){if(deleteInRich(area,e.key==='Delete'))e.preventDefault();return}
         if(selectedObject){
-            e.preventDefault();const card=[...body.children].find(c=>c._part===selectedObject);
+            e.preventDefault();const card=cards().find(c=>c._part===selectedObject);
             if(!card?._deleteSelectedImage?.())removePart(selectedObject)
         }
+    });
+    // Mobile soft keyboards may send beforeinput without a keydown.
+    root.addEventListener('beforeinput',e=>{
+        if(!editingEnabled||e.defaultPrevented||e.isComposing||!['deleteContentBackward','deleteContentForward'].includes(e.inputType)||e.composedPath().some(x=>x.tagName==='MATH-FIELD'))return;
+        const area=e.target.closest?.('.richText');
+        if(area&&deleteInRich(area,e.inputType==='deleteContentForward'))e.preventDefault()
     });
     function remember(){const s=window.getSelection();if(focused&&s?.rangeCount&&focused.contains(s.getRangeAt(0).commonAncestorContainer))selection=s.getRangeAt(0).cloneRange()}
     function insertInline(node){

@@ -107,10 +107,32 @@ async function checkMixedRange(browser,mobile){
     }
     await context.close();
 }
+async function checkNewlineDeletion(browser,mobile){
+    const {p,context,errors}=await fixture(browser,mobile);
+    if(mobile)await p.evaluate(()=>{if(!editingEnabled)toggleEditMode()});
+    const reset=async body=>{await p.evaluate(body=>{find('demo-start').body=body;select('demo-start');renderPanes()},body)};
+    const areas=p.locator('.pane .part-text .richText');
+    const caret=async(i,end)=>areas.nth(i).evaluate((area,end)=>{area.focus();const r=document.createRange();r.selectNodeContents(end?area.lastElementChild:area.firstElementChild);r.collapse(!end);const s=getSelection();s.removeAllRanges();s.addRange(r)},end);
+    const del=async key=>{if(mobile)await p.evaluate(key=>document.activeElement.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:key==='Delete'?'deleteContentForward':'deleteContentBackward'})),key);else await p.keyboard.press(key)};
+    const raw=()=>p.evaluate(()=>find('demo-start').body);
+    for(const key of ['Backspace','Delete']){
+        await reset('Alpha **bold**\n\nOmega [[ref:demo-method]] $x^2$\n\nThird\n');
+        const count=await areas.count();await caret(key==='Delete'?0:1,key==='Delete');await del(key);
+        assert.equal(await raw(),'Alpha **bold**Omega [[ref:demo-method]] $x^2$\n\nThird\n');
+        assert.equal(await areas.count(),count-1);
+        const atJoin=await p.evaluate(()=>{const r=getSelection().getRangeAt(0),left=r.cloneRange();left.selectNodeContents(document.activeElement);left.setEnd(r.startContainer,r.startOffset);return left.toString()});
+        assert.equal(atJoin,'Alpha bold');
+        if(!mobile){await p.keyboard.type('!');assert.equal(await raw(),'Alpha **bold!**Omega [[ref:demo-method]] $x^2$\n\nThird\n');await p.evaluate(()=>undo(false));await p.evaluate(()=>undo(false));assert.equal(await raw(),'Alpha **bold**\n\nOmega [[ref:demo-method]] $x^2$\n\nThird\n')}
+    }
+    await reset('Alpha\n\nOmega\n');await caret(1,true);await del('Backspace');if(!mobile)assert.equal(await raw(),'Alpha\n\nOmeg\n');
+    await reset('Alpha\n\n:::equation keep-eq\nx^2\n:::\n\nOmega\n');await caret(1,true);await del('Delete');assert((await raw()).includes(':::equation keep-eq'));
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--workspace-only')){
             const initial='C:\\Projects\\example.paper',network='\\\\server\\share\\network.paper';
