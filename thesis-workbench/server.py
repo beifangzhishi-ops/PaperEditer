@@ -198,7 +198,10 @@ class Handler(BaseHTTPRequestHandler):
             if p=='/api/state':
                 with LOCK,workspace_tx():
                     if WORKSPACE_ERROR:return self.respond(409,{'error':WORKSPACE_ERROR})
-                    s=state();s['originalLabels']=load(DATA/'original_labels.json');s['importReport']=load(DATA/'import-report.json')
+                    s=state();q=parse_qs(u.query)
+                    if q.get('since')==[s['revision']] and q.get('workspace')==[workspace_info()['id']]:
+                        return self.respond(200,{'unchanged':True,'revision':s['revision'],'workspace':workspace_info()})
+                    s['originalLabels']=load(DATA/'original_labels.json');s['importReport']=load(DATA/'import-report.json')
                     s['workspace']=workspace_info()
                     s['readingPosition']=reading_position()
                 return self.respond(200,s)

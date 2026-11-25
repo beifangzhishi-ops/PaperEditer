@@ -14,6 +14,10 @@ function subfigureLetter(i){let s='';for(i++;i>0;i=Math.floor((i-1)/26))s=String
 let db, view='thesis', panes=[{id:null,edit:false}], active=0, open=new Set(), targets=new Map(), numbers=new Map(), aliases=new Map(), search='', dragging=null, timer, saving=false, dirty=false, conflict=false, version=0, toastTimer, longTimer;
 let undoStack=[], redoStack=[];
 let trashSupported=false;
+let syncBase=null,syncBusy=false,syncNeeded=false,syncConflict=null,syncLoading=false,workspaceChanged=false;
+let draftDB=null,draftQueue=Promise.resolve(),draftWarning=false,draftRunning=false;
+const draftPending=new Map();
+const draftTab=(()=>{try{let id=sessionStorage.getItem('wb:draft-tab');if(!id){id=uid();sessionStorage.setItem('wb:draft-tab',id)}return id}catch{return uid()}})();
 const paneBox=$('panes'), nav=$('nav'), dialog=$('dialog');
 const READING_KEY='wb:reading-position:v1';
 const PAGE_FOLD_KEY='wb:page-folds:v1';
@@ -175,6 +179,165 @@ function showToast(t){$('toast').textContent=t;$('toast').hidden=false;clearTime
 function status(t){$('status').textContent=t}
 async function api(url,body){const r=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-PaperEditer-Workspace':currentWorkspace?.id||''},body:JSON.stringify(body)});let v=await r.json();if(!r.ok)throw Object.assign(new Error(v.error||'HTTP '+r.status),{status:r.status});return v}
 function editableSnapshot(){return clone({thesis:db.thesis,blocks:db.blocks,trash:db.trash||[]})}
+// Three-way reconciliation. Stable node IDs, not whole-document last-writer-wins.
+function syncEqual(a,b){
+    if(a===b)return true;
+    if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+    const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>Object.hasOwn(b,k)&&syncEqual(a[k],b[k]));
+}
+function nodeContent(n){if(!n)return undefined;const {parent,order,level,...content}=n;return content}
+function mergeBody(base,local,remote,resolveConflict){
+    // Paragraphs and explicit equation/figure/table blocks are indivisible units.
+    // Preserve the exact original Markdown including blank lines.
+    if(!window.Diff?.diffArrays)return null;
+    function chunks(raw){const out=[];let end=0;const prose=s=>{if(s)out.push(...s.split(/(\n[ \t]*\n+)/).filter(Boolean))};for(const m of raw.matchAll(objectPattern())){prose(raw.slice(end,m.index));out.push(m[0]);end=m.index+m[0].length}prose(raw.slice(end));return out}
+    const original=chunks(base);
+    function edits(raw){let at=0,change=null;const result=[],parts=Diff.diffArrays(original,chunks(raw),{timeout:250});if(!parts)return null;for(const part of parts){if(!part.added&&!part.removed){if(change){result.push(change);change=null}at+=part.count;continue}if(!change)change={start:at,end:at,values:[]};if(part.removed){at+=part.count;change.end=at}else change.values.push(...part.value)}if(change)result.push(change);return result}
+    const a=edits(local),b=edits(remote);if(!a||!b)return null;
+    const overlaps=(x,y)=>x.start===y.start||Math.max(x.start,y.start)<Math.min(x.end,y.end)||(x.start===x.end&&x.start>=y.start&&x.start<=y.end)||(y.start===y.end&&y.start>=x.start&&y.start<=x.end);
+    const remaining=[...a.map(h=>({...h,side:'local'})),...b.map(h=>({...h,side:'remote'}))],combined=[];
+    while(remaining.length){
+        const group=[remaining.shift()];for(let i=0;i<group.length;i++)for(let j=remaining.length-1;j>=0;j--)if(group[i].side!==remaining[j].side&&overlaps(group[i],remaining[j]))group.push(...remaining.splice(j,1));
+        const start=Math.min(...group.map(h=>h.start)),end=Math.max(...group.map(h=>h.end)),left=group.filter(h=>h.side==='local'),right=group.filter(h=>h.side==='remote');
+        if(!left.length||!right.length){combined.push(...group);continue}
+        const apply=edits=>{const value=original.slice(start,end);for(const h of edits.sort((x,y)=>y.start-x.start))value.splice(h.start-start,h.end-h.start,...h.values);return value.join('')};
+        const l=apply(left),r=apply(right);if(l!==r&&!resolveConflict)return null;
+        combined.push({start,end,values:[l===r?l:resolveConflict(start,end,l,r)]});
+    }
+    const result=[...original];for(const h of combined.sort((x,y)=>y.start-x.start))result.splice(h.start,h.end-h.start,...h.values);return result.join('');
+}
+function mergeSnapshots(base,local,remote,choices={}){
+    if(syncEqual(local,remote)||syncEqual(base,local))return {state:remote,conflicts:[]};
+    if(syncEqual(base,remote))return {state:local,conflicts:[]};
+    const conflicts=[];
+    function choose(key,label,a,b){if(!choices[key])conflicts.push({key,label,local:a,remote:b});return choices[key]==='remote'?b:a}
+    function select(key,label,o,a,b){if(syncEqual(a,b)||syncEqual(b,o))return a;if(syncEqual(a,o))return b;return choose(key,label,a,b)}
+    const result={};
+    for(const space of ['thesis','blocks']){
+        const original=base[space],mine=local[space],theirs=remote[space],maps=[original,mine,theirs].map(list=>new Map(list.map(n=>[n.id,n]))),[om,lm,rm]=maps;
+        const layout=list=>list.map(n=>[n.id,n.parent||null]);
+        const ol=layout(original),ll=layout(mine),rl=layout(theirs);
+        const deleteEdit=original.some(n=>(!lm.has(n.id)&&rm.has(n.id)&&!syncEqual(nodeContent(n),nodeContent(rm.get(n.id))))||(!rm.has(n.id)&&lm.has(n.id)&&!syncEqual(nodeContent(n),nodeContent(lm.get(n.id)))));
+        const structureConflict=deleteEdit||(!syncEqual(ol,ll)&&!syncEqual(ol,rl)&&!syncEqual(ll,rl));
+        const key='structure:'+space;
+        if(structureConflict&&!choices[key])conflicts.push({key,label:(space==='thesis'?'博论树':'知识块')+'：目录结构或删除冲突',local:mine,remote:theirs});
+        const selected=structureConflict?(choices[key]==='remote'?theirs:mine):syncEqual(ol,ll)?theirs:mine;
+        result[space]=selected.map((n,i)=>{
+            const o=om.get(n.id),a=lm.get(n.id),b=rm.get(n.id);let value;
+            if(!a||!b)value=nodeContent(n);
+            else if(!o)value=select(space+':'+n.id,n.title||n.id,undefined,nodeContent(a),nodeContent(b));
+            else{
+                const ac=nodeContent(a),bc=nodeContent(b),oc=nodeContent(o);
+                if(syncEqual(ac,bc)||syncEqual(bc,oc))value=ac;
+                else if(syncEqual(ac,oc))value=bc;
+                else{
+                    // Independently edited fields and nonoverlapping body objects can merge.
+                    value={};for(const field of new Set([...Object.keys(oc),...Object.keys(ac),...Object.keys(bc)])){
+                        const x=oc[field],y=ac[field],z=bc[field];let v;
+                        if(field==='body'&&!syncEqual(x,y)&&!syncEqual(x,z)&&!syncEqual(y,z)){
+                            const merged=mergeBody(x,y,z,(start,end,l,r)=>choose(space+':'+n.id+':body:'+start+':'+end,(n.title||n.id)+'：正文对象',l,r));v=merged===null?choose(space+':'+n.id+':body',(n.title||n.id)+'：正文',y,z):merged;
+                        }else if(field==='title'&&space==='blocks'&&y===blockLabel(a.body)&&z===blockLabel(b.body))v=y;
+                        else v=select(space+':'+n.id+':'+field,(n.title||n.id)+'：'+field,x,y,z);
+                        if(v!==undefined)value[field]=v;
+                    }
+                    if(space==='blocks'&&a.title===blockLabel(a.body)&&b.title===blockLabel(b.body))value.title=blockLabel(value.body);
+                }
+            }
+            return {...value,parent:n.parent||null,order:i,level:n.level};
+        });
+    }
+    // Trash operations also modify references and block membership. Do not
+    // independently merge them with concurrent structural changes/deletions.
+    const changed=(a,b)=>!syncEqual(a,b),lt=changed(base.trash,local.trash),rt=changed(base.trash,remote.trash);
+    function trashIntersects(transaction,other){
+        const old=new Map([...base.thesis,...base.blocks].map(n=>[n.id,n])),a=new Map([...transaction.thesis,...transaction.blocks].map(n=>[n.id,n])),b=new Map([...other.thesis,...other.blocks].map(n=>[n.id,n]));
+        const touched=new Set([...new Set([...old.keys(),...a.keys()])].filter(id=>changed(nodeContent(old.get(id)),nodeContent(a.get(id)))));
+        const removed=new Set();for(const [id,n] of old)if(!a.has(id)){removed.add(id);for(const m of n.body.matchAll(objectPattern()))removed.add(m[2]);for(const m of n.body.matchAll(/wb-id:([^\s"]+)/g))removed.add(m[1])}
+        for(const id of new Set([...old.keys(),...b.keys()]))if(changed(nodeContent(old.get(id)),nodeContent(b.get(id)))){
+            if(touched.has(id))return true;const n=b.get(id);if(n&&[...removed].some(r=>n.body.includes(':'+r+']]')||JSON.stringify([n.annotation,n.objectBindings,n.freePlacements]).includes(JSON.stringify(r))))return true;
+        }
+        return conflicts.some(c=>c.key==='structure:blocks');
+    }
+    if(changed(local,remote)&&((lt&&rt)||(lt&&trashIntersects(local,remote))||(rt&&trashIntersects(remote,local)))){
+        const k='trash-transaction';
+        if(!choices[k])return {state:local,conflicts:[{key:k,label:'回收站及关联引用操作冲突',local,remote}]};
+        return {state:choices[k]==='remote'?remote:local,conflicts:[]};
+    }
+    result.trash=select('trash','回收站',base.trash,local.trash,remote.trash);
+    // Moving an explicitly identified object can appear as a deletion plus
+    // insertion in a textual diff. Never introduce duplicate stable IDs.
+    function identityCounts(s){const counts=new Map(),add=id=>counts.set(id,(counts.get(id)||0)+1);for(const n of [...s.thesis,...s.blocks]){add(n.id);for(const m of n.body.matchAll(objectPattern()))add(m[2]);for(const m of n.body.matchAll(/wb-id:([^\s"]+)/g))add(m[1])}return counts}
+    const originalCounts=[base,local,remote].map(identityCounts);
+    if([...identityCounts(result)].some(([id,count])=>count>Math.max(1,...originalCounts.map(m=>m.get(id)||0)))){
+        const k='identity-transaction';if(!choices[k])return {state:local,conflicts:[{key:k,label:'对象移动或复制冲突（避免重复 ID）',local,remote}]};
+        return {state:choices[k]==='remote'?remote:local,conflicts:[]};
+    }
+    return {state:result,conflicts};
+}
+function draftKey(){return (currentWorkspace?.id||'directory')+':'+draftTab}
+function openDraftDB(){
+    if(!draftDB)draftDB=new Promise((resolve,reject)=>{const r=indexedDB.open('PaperEditer-drafts',1);r.onupgradeneeded=()=>r.result.createObjectStore('drafts');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
+    return draftDB;
+}
+async function draftAccess(key,value,read=false){const store=await openDraftDB();return new Promise((resolve,reject)=>{const tx=store.transaction('drafts',read?'readonly':'readwrite'),s=tx.objectStore('drafts');const r=read?s.get(key):value?s.put(value,key):s.delete(key);tx.oncomplete=()=>resolve(r.result);tx.onerror=tx.onabort=()=>reject(tx.error||r.error)})}
+function persistDraft(){
+    if(!db||!syncBase)return;
+    const key=draftKey(),value=dirty?{base:syncBase,local:editableSnapshot(),revision:db.revision}:null;
+    draftPending.set(key,value);if(draftRunning)return;draftRunning=true;
+    draftQueue=(async()=>{while(draftPending.size){const [key,value]=draftPending.entries().next().value;draftPending.delete(key);try{await draftAccess(key,value)}catch(e){console.warn(e);if(!draftWarning){draftWarning=true;showToast('浏览器无法保存本地草稿，请不要关闭页面。')}}}})().finally(()=>{draftRunning=false});
+}
+function syncStatus(){status(workspaceChanged?'工作区已切换 · 请刷新':conflict?'保存冲突 · 点击刷新处理':dirty?'待保存':'已同步')}
+function applySynced(remote,merged,preserveEditor=false){
+    const before=editableSnapshot();syncBase=clone({thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]});
+    const local=clone(merged),redraw=!syncEqual(before,local);
+    if(redraw&&preserveEditor){for(const space of ['thesis','blocks'])for(let i=0;i<db[space].length;i++){const n=db[space][i],next=local[space][i];if(!syncEqual(n,next)){for(const k of Object.keys(n))if(!Object.hasOwn(next,k))delete n[k];Object.assign(n,next)}}db.trash=local.trash}
+    else if(redraw)Object.assign(db,local);
+    Object.assign(db,{revision:remote.revision,originalLabels:remote.originalLabels,importReport:remote.importReport});
+    dirty=!syncEqual(local,syncBase);conflict=false;syncConflict=null;syncNeeded=false;version++;
+    if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshBlockNetworks()}else renderPanes()}
+    persistDraft();syncStatus();if(dirty){clearTimeout(timer);timer=setTimeout(save,100)}
+}
+function reconcile(remote,base=syncBase,local=editableSnapshot(),respectFocus=false){
+    const remoteData={thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]},m=mergeSnapshots(base,local,remoteData);
+    if(m.conflicts.length){conflict=true;dirty=true;syncConflict={remote,base,local};persistDraft();syncStatus();showToast('检测到并发冲突，草稿已保留。点击刷新处理。');return}
+    const preserve=respectFocus&&!syncCanApply();
+    if(preserve&&!syncCanPreserve(local,m.state)){syncNeeded=true;status('有新版本 · 结束输入后同步');return}
+    applySynced(remote,m.state,preserve);
+}
+function downloadSyncDraft(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download=name+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+function showSyncConflict(){
+    if(!syncConflict)return;
+    const {remote,base}=syncConflict,local=editableSnapshot(),server={thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]},choices={};
+    const d=showDialog('处理并发修改');d.append(el('p','small','双方草稿均保留。选择每个冲突项的版本，其他不冲突的修改会自动合并。目录或回收站冲突以完整操作为单位。'));
+    const backups=el('div','');backups.append(btn('导出本地草稿',()=>downloadSyncDraft('local-draft',local)),btn('导出服务器版本',()=>downloadSyncDraft('server-draft',server)));d.append(backups);
+    const fields=el('div');d.append(fields);const done=btn('确认合并并保存',()=>{const m=mergeSnapshots(base,local,server,choices);if(m.conflicts.length)return;dialog.close();applySynced(remote,m.state)});d.append(done);
+    function draw(){const m=mergeSnapshots(base,local,server,choices);fields.replaceChildren();for(const c of m.conflicts){const row=el('section');row.append(el('h3','',c.label));for(const [side,title] of [['local','本地版本'],['remote','服务器版本']]){const content=el('textarea');content.readOnly=true;content.rows=4;content.value=typeof c[side]==='string'?c[side]:JSON.stringify(c[side],null,2)??'（不存在）';content.style.width='100%';row.append(el('p','small',title),content,btn('采用'+title,()=>{choices[c.key]=side;draw()}))}fields.append(row)}done.disabled=!!m.conflicts.length;if(!m.conflicts.length)fields.append(el('p','','已选择全部冲突项。确认后保存。'))}draw();
+}
+function syncCanApply(){return !dialog.open&&!dragging&&$('menu').hidden&&(!document.activeElement?.closest('.richText,.editableTitle,math-field,textarea')||!editingEnabled)}
+function syncCanPreserve(local,merged){
+    if(dialog.open||dragging||!$('menu').hidden)return false;
+    if(syncEqual(local,merged))return true;
+    // Keep the live editor DOM and node references intact for changes in
+    // unrelated, non-rendered chapters. Structural/knowledge changes may
+    // affect visible references and are deferred until the editor loses focus.
+    if(!syncEqual(local.blocks,merged.blocks)||!syncEqual(local.trash,merged.trash))return false;
+    const visible=new Set([...paneBox.querySelectorAll('.visualDocument')].map(d=>d._owner));
+    for(const p of panes){if(p.id){visible.add(p.id);for(const n of descendants(spaceOf(p.id),p.id))visible.add(n.id)}}
+    if(local.thesis.length!==merged.thesis.length)return false;
+    return local.thesis.every((n,i)=>{const next=merged.thesis[i];return n.id===next.id&&n.parent===next.parent&&n.order===next.order&&n.level===next.level&&(!visible.has(n.id)||syncEqual(n,next))});
+}
+async function syncNow(force=false){
+    if(!db||!syncBase||syncLoading||syncBusy||saving||conflict||workspaceChanged||document.hidden&&!force)return;
+    syncBusy=true;const workspace=currentWorkspace?.id;
+    try{
+        const r=await api('/api/state?since='+encodeURIComponent(db.revision)+'&workspace='+encodeURIComponent(workspace||'directory'));
+        if(syncLoading||workspace!==currentWorkspace?.id)return;
+        if(r.workspace?.id!==workspace){workspaceChanged=true;persistDraft();syncStatus();return}
+        if(r.unchanged||r.revision===db.revision){syncNeeded=false;return}
+        reconcile(r,syncBase,editableSnapshot(),!force);
+    }catch(e){if(force)showToast(e.message);else console.warn(e)}
+    finally{syncBusy=false;if(dirty&&!conflict&&!workspaceChanged&&!syncNeeded){clearTimeout(timer);timer=setTimeout(save,100)}}
+}
 function checkpoint(){undoStack.push(editableSnapshot());if(undoStack.length>30)undoStack.shift();redoStack=[]}
 function refreshObjectLabels(){
     for(const el of document.querySelectorAll('.visualRef[data-token],a.ref[data-ref]')){
@@ -190,20 +353,24 @@ function refreshObjectLabels(){
     }
     for(const wrap of document.querySelectorAll('[data-subfigure]')){const t=resolve(wrap.dataset.subfigure);if(t)wrap.title='子图 '+t.number}
 }
-function change(structural=false){dirty=true;version++;reindex();status('待保存');clearTimeout(timer);timer=setTimeout(save,850);if(structural){renderNav();renderPanes()}else{refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshBlockNetworks()}scheduleToolbarUpdate()}
+function change(structural=false){dirty=true;version++;reindex();syncStatus();persistDraft();clearTimeout(timer);timer=setTimeout(save,850);if(structural){renderNav();renderPanes()}else{refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshBlockNetworks()}scheduleToolbarUpdate()}
 async function save(){
-    if(!dirty||saving||conflict)return;
+    if(!dirty||saving||conflict||workspaceChanged||syncLoading||syncBusy)return;
+    if(syncNeeded){await syncNow();return}
     saving=true;const v=version, snapshot={...editableSnapshot(),revision:db.revision};
     status('保存中');
     try{
         const r=await api('/api/save',snapshot);
-        db.revision=r.revision;
-        dirty=v!==version;status(dirty?'待保存':'已保存');
-    }catch(e){status('保存失败');if(e.status===409)conflict=true;showToast(e.message);console.error(e)}
-    finally{saving=false;if(dirty&&!conflict&&v!==version){clearTimeout(timer);timer=setTimeout(save,850)}}
+        db.revision=r.revision;syncBase={thesis:snapshot.thesis,blocks:snapshot.blocks,trash:snapshot.trash};
+        dirty=v!==version;persistDraft();status(dirty?'待保存':'已保存');
+    }catch(e){if(e.status===409){syncNeeded=true;status('等待同步 · 请结束当前输入');persistDraft()}else{status('保存失败 · 草稿保留');showToast(e.message);console.warn(e)}}
+    finally{saving=false;if(syncNeeded)syncNow();else if(dirty&&!conflict&&v!==version){clearTimeout(timer);timer=setTimeout(save,850)}}
 }
 async function load(force=false){
-    if(dirty&&!force&&!confirm('当前有尚未保存的修改，确定重新加载？'))return;
+    if(syncLoading)return;
+    if(dirty&&!force&&!confirm('当前有尚未保存的修改，重新加载将尝试恢复本地草稿。继续？'))return;
+    syncLoading=true;while(saving||syncBusy)await new Promise(r=>setTimeout(r,30));
+    await draftQueue;
     await flushReading();
     clearTimeout(timer);
     try{
@@ -223,7 +390,8 @@ async function load(force=false){
             }catch{pageFoldStates={}}
         }
         $('workspaceName').textContent=currentWorkspace?.name||'PaperEditer';$('workspaceName').title=currentWorkspace?.name||'PaperEditer';
-        db=result;trashSupported=Array.isArray(result.trash);db.trash=db.trash||[];dirty=false;conflict=false;undoStack=[];redoStack=[];
+        db=clone(result);trashSupported=Array.isArray(result.trash);db.trash=db.trash||[];dirty=false;conflict=false;undoStack=[];redoStack=[];
+        syncBase=editableSnapshot();syncConflict=null;syncNeeded=false;workspaceChanged=false;
         reindex();
         const r=result.readingPosition||readPosition();
         const firstReadingLoad=!readingRestored||!!result.readingPosition;
@@ -247,7 +415,9 @@ async function load(force=false){
         status('已加载');renderNav();renderPanes();readingReady=true;
         // Migrate a previously stored local position only if the server has none.
         if(!result.readingPosition&&r){readingInteracted=true;rememberPosition();readingInteracted=false}
+        try{const draft=await draftAccess(draftKey(),null,true);if(draft?.base&&draft?.local){Object.assign(db,clone(draft.local),{revision:draft.revision});syncBase=draft.base;dirty=true;reindex();renderNav();renderPanes();reconcile(result,draft.base,draft.local);if(conflict)showSyncConflict();else showToast('已恢复本地未保存草稿。')}}catch(e){console.warn(e);showToast('无法读取本地草稿。')}
     }catch(e){readingReady=false;db=null;currentWorkspace=null;readingRestored=false;nav.replaceChildren();$('sideTools').replaceChildren();$('workspaceName').textContent='PaperEditer';for(const id of ['treeTab','blockTab','dual','newNode','search'])$(id).disabled=true;status('未打开文件');paneBox.replaceChildren(el('p','empty',e.message));console.error(e)}
+    finally{syncLoading=false;if(dirty&&!conflict&&!workspaceChanged){clearTimeout(timer);timer=setTimeout(save,100)}}
 }
 function mobileClose(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
 function setView(v){
@@ -1134,7 +1304,7 @@ $('treeTab').onclick=()=>setView('thesis');$('blockTab').onclick=()=>setView('bl
 $('drawer').onclick=()=>{$('sidebar').classList.toggle('open');$('overlay').classList.toggle('show')};$('overlay').onclick=mobileClose;
 $('search').oninput=e=>{search=e.target.value;renderNav()};$('newNode').onclick=()=>newNode(view);
 $('dual').onclick=()=>{if(panes.length===1){panes.push({id:panes[0].id,edit:false,thesisReading:thesisPosition(panes[0].thesisReading)});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
-$('refresh').onclick=()=>{if(dialog._commitNote)closeWorkbenchDialog();load()};$('closeDialog').onclick=()=>closeWorkbenchDialog();
+$('refresh').onclick=()=>{if(dialog._commitNote)closeWorkbenchDialog();if(conflict){showSyncConflict();return}if(workspaceChanged||!db){load();return}syncNow(true)};$('closeDialog').onclick=()=>closeWorkbenchDialog();
 $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
     if(dialog._commitNote)closeWorkbenchDialog();
@@ -1149,7 +1319,7 @@ async function openWorkspaceDialog(){
         input.disabled=submit.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;message.textContent='正在打开…';
         try{
             clearTimeout(timer);
-            while(saving)await new Promise(r=>setTimeout(r,50));
+            while(saving||syncBusy)await new Promise(r=>setTimeout(r,50));
             if(dirty)await save();
             if(dirty||conflict)throw new Error('当前工作区有未保存的内容，不能切换。');
             captureReading();await flushReading();
@@ -1274,7 +1444,7 @@ document.addEventListener('keydown',e=>{
     if(editingEnabled&&dialog.open&&dialog.classList.contains('blankNoteDialog')&&e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.isComposing&&e.keyCode!==229&&!e.composedPath().some(x=>x.tagName==='MATH-FIELD')){
         if(!e.target.closest('button')&&dialog.contains(e.target)){e.preventDefault();closeWorkbenchDialog();return}
     }
-    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();save()}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();if(conflict)showSyncConflict();else if(syncNeeded&&!dialog.open)syncNow(true);else save()}
 });
 
 // Native fullscreen must be requested directly from a trusted click/tap.
@@ -1424,7 +1594,10 @@ async function installPaperEditer(){
 syncInstallButton();
 
 window.addEventListener('pagehide',()=>{captureReading();flushReading()});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){captureReading();flushReading();readingInteracted=false}});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){captureReading();flushReading();readingInteracted=false}else syncNow()});
+window.addEventListener('focus',()=>syncNow());
+document.addEventListener('focusout',()=>setTimeout(()=>syncNow(),0),true);
+setInterval(()=>syncNow(),1500);
 window.addEventListener('beforeunload',e=>{captureReading();flushReading();if(dirty){e.preventDefault();e.returnValue=''}});
 document.addEventListener('DOMContentLoaded',async()=>{
     if(typeof editor!=='function'||typeof newNode!=='function'||!window.marked||!window.DOMPurify){

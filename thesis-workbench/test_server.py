@@ -3,6 +3,9 @@ import json
 import sqlite3
 import contextlib
 import hashlib
+import threading
+import urllib.request
+import urllib.parse
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -34,6 +37,26 @@ class WorkspaceTests(unittest.TestCase):
         server.initialize_data()
         self.assertEqual(server.state()["thesis"][0]["body"], "Example edit.\n")
         self.assertEqual(server.save(state)[0], 409)
+
+    def test_conditional_state_detects_external_edits(self):
+        server.initialize_data()
+        with patch.object(server,'CONFIG',Path(self.tmp.name)/'settings.json'), patch.object(server,'PACKAGE',None), patch.object(server,'WORKSPACE_ERROR',None):
+            with server.WorkbenchServer(('127.0.0.1',0),server.Handler) as http:
+                thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+                try:
+                    url=f'http://127.0.0.1:{http.server_port}/api/state'
+                    def get(suffix=''):
+                        with urllib.request.urlopen(url+suffix,timeout=5) as response:return json.load(response)
+                    initial=get();query='?'+urllib.parse.urlencode({'since':initial['revision'],'workspace':initial['workspace']['id']})
+                    self.assertEqual(get(query),{'unchanged':True,'revision':initial['revision'],'workspace':initial['workspace']})
+                    server.path(initial['thesis'][0],'thesis').write_text('External agent update.\n',encoding='utf-8')
+                    changed=get(query)
+                    self.assertNotEqual(changed['revision'],initial['revision'])
+                    self.assertEqual(changed['thesis'][0]['body'],'External agent update.\n')
+                    self.assertEqual(server.save(initial)[0],409)
+                    self.assertNotIn('unchanged',get('?'+urllib.parse.urlencode({'since':changed['revision'],'workspace':'wrong'})))
+                finally:
+                    http.shutdown();thread.join(timeout=5)
 
     def test_incomplete_workspace_is_not_overwritten(self):
         self.data.mkdir()

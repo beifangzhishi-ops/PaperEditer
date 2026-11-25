@@ -11,12 +11,17 @@ const origin='http://127.0.0.1:18761';
 async function fixture(browser,mobile=false,shared=null){
     const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1280,height:900},hasTouch:mobile,isMobile:mobile,permissions:['clipboard-read','clipboard-write']});
     const p=await context.newPage(),errors=[];
+    let ownState=structuredClone(data.state),rev=0;
+    function currentState(){return shared?{...(shared.state||data.state),workspace:shared.workspace,readingPosition:shared.reading[shared.workspace.id]||null}:ownState}
     p.setDefaultTimeout(12000);
     p.on('pageerror',e=>errors.push(e.message));
-    p.on('dialog',d=>{errors.push('Unexpected dialog: '+d.message());d.accept()});
+    p.on('dialog',d=>{if(d.type()!=='beforeunload')errors.push('Unexpected dialog: '+d.message());d.accept()});
     await p.route(origin+'/**',async r=>{
         const u=new URL(r.request().url()),name=u.pathname;
-        if(name==='/api/state')return r.fulfill({json:shared?{...(shared.state||data.state),workspace:shared.workspace,readingPosition:shared.reading[shared.workspace.id]||null}:data.state});
+        if(name==='/api/state'){
+            const state=currentState();if(u.searchParams.get('since')===state.revision&&u.searchParams.get('workspace')===state.workspace.id)return r.fulfill({json:{unchanged:true,revision:state.revision,workspace:state.workspace}});
+            return r.fulfill({json:state});
+        }
         if(name==='/api/reading'){
             if(shared)shared.reading[r.request().headers()['x-paperediter-workspace']]=r.request().postDataJSON();
             return r.fulfill({json:{ok:true}})
@@ -28,7 +33,13 @@ async function fixture(browser,mobile=false,shared=null){
             shared.workspace={id:filename,name:filename.split(/[\\/]/).pop(),path:filename};shared.recent=[shared.workspace,...shared.recent.filter(x=>x.path!==filename)];
             return r.fulfill({json:shared.workspace})
         }
-        if(name==='/api/save')return r.fulfill({json:{revision:'mock'}});
+        if(name==='/api/save'){
+            const payload=r.request().postDataJSON(),state=currentState();
+            if(payload.revision!==state.revision||r.request().headers()['x-paperediter-workspace']!==state.workspace.id)return r.fulfill({status:409,json:{error:'版本冲突'}});
+            const revision='mock-'+(shared?(shared.rev=(shared.rev||0)+1):++rev),next={...state,...payload,revision};
+            if(shared)shared.state=next;else ownState=next;
+            return r.fulfill({json:{revision}});
+        }
         if(name==='/assets/demo.png')return r.fulfill({body:Buffer.from(data.image,'base64'),contentType:'image/png'});
         if(name==='/workbench.js')return r.fulfill({body:fs.readFileSync(path.join(__dirname,'app.js'),'utf8')+'\n;\n'+fs.readFileSync(path.join(__dirname,'visual.js'),'utf8'),contentType:'text/javascript'});
         const file=name==='/'?'index.html':name.startsWith('/vendor/')?'node_modules/'+name.slice(8):name.slice(1);
@@ -296,6 +307,31 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--sync-only')){
+            const shared={workspace:data.state.workspace,state:structuredClone(data.state),reading:{},recent:[]};
+            const desktop=await fixture(browser,false,shared),mobile=await fixture(browser,true,shared),p=desktop.p,q=mobile.p;
+            const edit=async(page,id,body)=>page.evaluate(([id,body])=>{find(id).body=body;change(true);clearTimeout(timer)},[id,body]);
+            const a='Paragraph A.\n\n:::equation sync-eq\nx=1\n:::\n\nParagraph B.\n';
+            await edit(p,'demo-start',a);await p.evaluate(()=>save());await q.waitForFunction(a=>find('demo-start').body===a,a);
+            // Separate paragraphs and formula in one section, same initial revision.
+            await edit(q,'demo-start',a.replace('x=1','x=2'));await edit(p,'demo-start',a.replace('Paragraph A.','Paragraph A edited.'));
+            await p.evaluate(()=>save());await q.evaluate(()=>save());
+            const merged=a.replace('x=1','x=2').replace('Paragraph A.','Paragraph A edited.');
+            await p.waitForFunction(merged=>find('demo-start').body===merged&&!dirty,merged);await q.waitForFunction(merged=>find('demo-start').body===merged&&!dirty,merged);
+            // Conflict only the overlapping paragraph; retain independent edits.
+            const plan=await p.evaluate(()=>{const base='One\n\nTwo\n\nThree\n',local='Local one\n\nTwo\n\nLocal three\n',remote='Remote one\n\nRemote two\n\nThree\n',conflicts=[];const state=mergeBody(base,local,remote,(s,e,l,r)=>{conflicts.push([l,r]);return r});return {state,conflicts}});
+            assert.deepEqual(plan,{state:'Remote one\n\nRemote two\n\nLocal three\n',conflicts:[['Local one','Remote one']]});
+            // Concurrent separate sections and a reader update without refresh.
+            await edit(p,'demo-start',merged+'\nDesktop.');await edit(q,'demo-method','Mobile section.');await p.evaluate(()=>save());await q.evaluate(()=>save());
+            await p.waitForFunction(()=>find('demo-method').body==='Mobile section.'&&!dirty);await q.waitForFunction(()=>find('demo-start').body.endsWith('Desktop.')&&!dirty);
+            // Same object: reject overlap, keep draft through reload, resolve locally.
+            await edit(p,'demo-start','Desktop conflict.');await edit(q,'demo-start','Mobile conflict.');await p.evaluate(()=>save());await q.evaluate(()=>save());
+            await q.waitForFunction(()=>conflict);await q.evaluate(()=>draftQueue);await q.reload();await q.waitForFunction(()=>conflict&&dialog.open);
+            assert.equal(await q.evaluate(()=>find('demo-start').body),'Mobile conflict.');
+            await q.getByRole('button',{name:'采用本地版本',exact:true}).click();await q.getByRole('button',{name:'确认合并并保存',exact:true}).click();
+            await p.waitForFunction(()=>find('demo-start').body==='Mobile conflict.'&&!dirty);await q.waitForFunction(()=>!dirty&&!conflict);
+            assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop/mobile live refresh, independent sections and objects, conflict draft reload and resolution');return;
+        }
         if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
