@@ -46,13 +46,13 @@ async function checkTreeMenuDrag(p){
     await p.evaluate(()=>select('demo-start'));
     const row=p.locator('#nav .navrow').first();
     await row.locator('button').last().click();
-    assert.deepEqual(await p.locator('#menu button').allTextContents(),['新建同级','新建子','删除']);
-    await menu(p,'新建同级').click();
+    assert.deepEqual(await p.locator('#menu button').allTextContents(),['新建同级目录','新建子目录','删除']);
+    await menu(p,'新建同级目录').click();
     const sibling=await p.evaluate(()=>panes[active].id);
     assert(await p.evaluate(id=>find(id).title===''&&find(id).body===''&&find(id).parent===null&&!dialog.open&&children('thesis',null).at(-1).id===id,sibling));
     await contextAt(p,p.locator('#nav .navrow.selected'));
-    assert.deepEqual(await p.locator('#menu button').allTextContents(),['新建同级','新建子','删除']);
-    await menu(p,'新建子').click();
+    assert.deepEqual(await p.locator('#menu button').allTextContents(),['新建同级目录','新建子目录','删除']);
+    await menu(p,'新建子目录').click();
     const child=await p.evaluate(()=>panes[active].id);
     assert(await p.evaluate(([id,parent])=>find(id).parent===parent&&find(id).title===''&&find(id).body===''&&!dialog.open,[child,sibling]));
     await p.locator('.pane .editableTitle').first().fill('Temporary child');
@@ -64,7 +64,12 @@ async function checkTreeMenuDrag(p){
             source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dt}));
             target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt,clientY:window.treeDrag.y}));
         },[sibling,pos]);
-        if(hold)await p.waitForFunction(()=>document.querySelector('.drop-inside'));
+        const expected=pos<.5?'drop-before':'drop-after';
+        const preview=p.locator('#nav .'+expected);
+        assert.equal(await preview.count(),1);
+        assert.equal(await preview.getAttribute('data-node-id'),pos<.5?'demo-start':'demo-method');
+        assert.equal(await preview.evaluate(row=>getComputedStyle(row,'::after').left),'0px');
+        if(hold){await p.waitForFunction(()=>document.querySelector('.drop-inside'));assert.equal(await preview.count(),0)}
         if(leave)await p.evaluate(()=>{const {target,dt,y}=window.treeDrag;target.dispatchEvent(new DragEvent('dragleave',{bubbles:true,dataTransfer:dt}));target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt,clientY:y}))});
         await p.evaluate(()=>{const {target,dt,y}=window.treeDrag;target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt,clientY:y}))});
     };
@@ -72,6 +77,8 @@ async function checkTreeMenuDrag(p){
     await p.evaluate(id=>moveTo(id,'demo-start','after'),sibling);
     await drag(.6,true,true);assert.equal(await p.evaluate(id=>find(id).parent,sibling),null);
     await drag(.6,true);assert.equal(await p.evaluate(id=>find(id).parent,sibling),'demo-start');
+    // Moving out of an expanded parent uses the very same insertion line.
+    await drag(.9,false);assert.equal(await p.evaluate(id=>find(id).parent,sibling),null);
     await p.evaluate(id=>select(id),sibling);
     await p.locator('#nav .navrow.selected button').last().click();
     await p.evaluate(()=>window.confirm=()=>true);

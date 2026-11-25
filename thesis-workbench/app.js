@@ -702,12 +702,12 @@ function createEmptyThesis(parent=null,after=null){
     if(after){const sibling=find(after),last=descendants('thesis',after).at(-1)||sibling;list.splice(list.indexOf(last)+1,0,n)}else list.push(n);
     normalizeOrder('thesis');change(false);select(id);
 }
-function treeNodeMenu(n){return [['新建同级',()=>createEmptyThesis(n.parent||null,n.id)],['新建子',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)]]}
+function treeNodeMenu(n){return [['新建同级目录',()=>createEmptyThesis(n.parent||null,n.id)],['新建子目录',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)]]}
 const TREE_NEST_DELAY=600;
 let treeDrop=null;
 function clearTreeDrop(){
     if(!treeDrop)return;
-    clearTimeout(treeDrop.timer);treeDrop.row.classList.remove('drop-before','drop-after','drop-inside');treeDrop=null
+    clearTimeout(treeDrop.timer);clearTreeDropPaint(treeDrop);treeDrop=null
 }
 function updateTreeDrop(row,n,e){
     const source=find(dragging);
@@ -715,12 +715,31 @@ function updateTreeDrop(row,n,e){
     const rect=row.getBoundingClientRect(),pos=(e.clientY-rect.top)/rect.height;
     const center=pos>=.25&&pos<=.75,side=pos<.5?'before':'after';
     if(!treeDrop||treeDrop.row!==row||treeDrop.center!==center){
-        clearTreeDrop();const state={row,center,where:side,ready:center&&view==='blocks',timer:null};treeDrop=state;
+        clearTreeDrop();const state={row,node:n,space:view,center,where:side,ready:center&&view==='blocks',timer:null};treeDrop=state;
         if(center&&!state.ready)state.timer=setTimeout(()=>{if(treeDrop===state&&dragging&&row.isConnected){state.ready=true;state.where='inside';paintTreeDrop(state)}},TREE_NEST_DELAY)
     }
     treeDrop.where=treeDrop.ready?'inside':side;paintTreeDrop(treeDrop);return treeDrop.where
 }
-function paintTreeDrop(state){state.row.classList.remove('drop-before','drop-after','drop-inside');state.row.classList.add('drop-'+state.where)}
+function clearTreeDropPaint(state){
+    if(!state.marker)return;
+    state.marker.classList.remove('drop-before','drop-after','drop-inside');state.marker.style.removeProperty('--drop-indent');state.marker=null
+}
+function paintTreeDrop(state){
+    let marker=state.row;
+    // Inserting after an expanded node means after its entire visible subtree,
+    // at the target's level, not between the parent and its first child.
+    if(state.space==='thesis'&&state.where==='after'&&!search.trim()){
+        for(let next=state.row.nextElementSibling;next?.dataset.nodeId;next=next.nextElementSibling){
+            const node=find(next.dataset.nodeId),chain=ancestors(node);
+            if(!chain.includes(state.node.id))break;
+            if(node.id!==dragging&&!chain.includes(dragging))marker=next;
+        }
+    }
+    const indent=state.row.style.paddingLeft||'0px';
+    if(state.marker===marker&&state.paintedWhere===state.where)return;
+    clearTreeDropPaint(state);state.marker=marker;state.paintedWhere=state.where;
+    marker.style.setProperty('--drop-indent',indent);marker.classList.add('drop-'+state.where)
+}
 function renderNav(){
     if(!db)return;
     clearTreeDrop();
@@ -739,7 +758,7 @@ function renderNav(){
     if(view==='blocks')nav.append(btn('块网总览',()=>{replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
     function add(n,depth,hit=false){
         const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));
-        row.style.paddingLeft=Math.min(depth,8)*12+'px';row.draggable=true;
+        row.style.paddingLeft=Math.min(depth,8)*12+'px';row.dataset.nodeId=n.id;row.draggable=true;
         const kids=children(view,n.id);
         const toggle=btn(kids.length?(open.has(n.id)?'▾':'▸'):'·',()=>{if(open.has(n.id))open.delete(n.id);else open.add(n.id);renderNav()});
         const rowMenu=()=>view==='blocks'?[...nodeMenu(n),['删除',()=>deleteNode(n)]]:treeNodeMenu(n);
