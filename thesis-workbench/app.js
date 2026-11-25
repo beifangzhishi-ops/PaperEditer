@@ -694,7 +694,7 @@ function newAnnotation(binding,e){
 }
 function refToken(t){return '[['+(t.kind==='equation'?'eqref':'ref')+':'+(t.actualId||t.id)+']]'}
 function refMenu(t){return [['复制交叉引用',()=>copy(refToken(t))],['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],['查看关联网',()=>relationDialog(t.owner,t.id)]]}
-function nodeMenu(n){if(spaceOf(n.id)==='blocks')return [['复制交叉引用',()=>copy(refToken(resolve(n.id)))]];return [...refMenu(resolve(n.id)),['复制正文（含公式源码）',()=>copy(n.body)],['复制为新知识块',()=>createBlockFrom(n.body,n.title,n.id)],['新建子节点',()=>newNode(spaceOf(n.id),n.id)],['上移',()=>moveRelative(n,-1)],['下移',()=>moveRelative(n,1)],['缩进',()=>indent(n)],['取消缩进',()=>outdent(n)],['合并至上一节点',()=>mergePrev(n)],['删除节点',()=>deleteNode(n)]]}
+function nodeMenu(n){return spaceOf(n.id)==='blocks'?[['复制交叉引用',()=>copy(refToken(resolve(n.id)))]]:treeNodeMenu(n)}
 function createEmptyThesis(parent=null,after=null){
     if(!requireEditMode())return;
     checkpoint();const id='sec-'+uid(),n={id,title:'',parent,level:1,number:'',file:'thesis/'+id+'.md',source:'',order:db.thesis.length,body:''};
@@ -761,7 +761,7 @@ function renderNav(){
         row.style.paddingLeft=Math.min(depth,8)*12+'px';row.dataset.nodeId=n.id;row.draggable=true;
         const kids=children(view,n.id);
         const toggle=btn(kids.length?(open.has(n.id)?'▾':'▸'):'·',()=>{if(open.has(n.id))open.delete(n.id);else open.add(n.id);renderNav()});
-        const rowMenu=()=>view==='blocks'?[...nodeMenu(n),['删除',()=>deleteNode(n)]]:treeNodeMenu(n);
+        const rowMenu=()=>view==='blocks'?[...nodeMenu(n),['删除',()=>deleteNode(n)]]:nodeMenu(n);
         const t=el('span','navlabel',label(n));row.append(toggle,t,btn('⋯',e=>menuAt(e,rowMenu())));
         if(hit){const excerpt=n.body.toLowerCase().indexOf(query);if(excerpt>=0){const sub=el('span','searchhit',n.body.slice(Math.max(0,excerpt-14),excerpt+40));t.append(sub)}}
         row.addEventListener('click',()=>select(n.id));context(row,rowMenu,()=>resolve(n.id),true);
@@ -1099,7 +1099,7 @@ function renderChild(n,host,pi){
     d._populate=populate;
     d.open=!pageFoldState(pi).has(foldKey);populate();
     d.addEventListener('toggle',()=>{if(!d.isConnected||pageFoldKey(pi)!==initialPageKey)return;populate();setPageFold(pi,foldKey,!d.open);captureReading()});
-    context(s,()=>nodeMenu(n),()=>resolve(n.id),spaceOf(n.id)==='blocks');host.append(d)
+    context(s,()=>nodeMenu(n),()=>resolve(n.id),true);host.append(d)
 }
 function renderPanes(){
     if(!db)return;

@@ -730,10 +730,10 @@ function editor(n,host,pi,summary=null){
     const title=el('input','editableTitle');title.value=n.title;title.placeholder='标题';title.setAttribute('aria-label','章节标题');
     setEditorControlMode(title);
     const heading=el(summary?'span':'div','editableHeading');heading.dataset.bindObject=n.id;if(numbers.get(n.id))heading.append(el('span','headingNumber',numbers.get(n.id)));
-    function sectionMenu(){return isBlock?nodeMenu(n):[...nodeMenu(n),['保存',()=>save()],['展开下级',()=>host.querySelectorAll('details.child').forEach(x=>x.open=true)],['折叠下级',()=>host.querySelectorAll('details.child').forEach(x=>x.open=false)],['高级：复制源码',()=>copy(n.body)]]}
+    function sectionMenu(){return nodeMenu(n)}
     const isBlock=spaceOf(n.id)==='blocks';
     if(!isBlock)heading.append(title);else heading.append(el('div','spacer'));
-    heading.append(btn('⋯',e=>menuAt(e,sectionMenu()),'sectionMore'));context(heading,sectionMenu,()=>resolve(n.id),isBlock);
+    heading.append(btn('⋯',e=>menuAt(e,sectionMenu()),'sectionMore'));context(heading,sectionMenu,()=>resolve(n.id),true);
     const doc=visualDocument(n.body,s=>{if(s===n.body)return;checkpoint();n.body=s;if(isBlock)n.title=blockLabel(s);change(false);if(isBlock)renderNav();for(const card of doc.root.querySelectorAll('.visualCard')){const p=card._part;if(p?.id){const label=card.querySelector('.visualNum');if(label)label.textContent=resolve(p.id)?.number||''}}},n.id,pi);
     title.addEventListener('input',()=>{if(!editingEnabled)return;const t=title.value.trim();if(t===n.title)return;checkpoint();n.title=t;change(false);renderNav();if(summary)summary.querySelector('.childCollapsedTitle').textContent=label(n)});
     doc.root._sectionMenu=sectionMenu;
