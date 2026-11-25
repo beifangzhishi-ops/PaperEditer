@@ -4,10 +4,11 @@ PaperEditer 的 Git 仓库仅维护编辑器本身及虚构示例，不管理实
 
 ## 开发流程
 
-1. 参考 [安装说明](README.md) 安装依赖，在独立分支开发，每次提交保持范围单一。
+1. 参考 [安装说明](README.md) 安装依赖。所有开发必须从最新 `main` 创建独立分支及 Git worktree，不直接在发布分支开发；每次提交保持范围单一。完整规则见 [AGENTS.md](AGENTS.md)。
 2. 使用 `thesis-workbench/example.paper` 的副本及对应 `example-data/` 复现问题，不使用真实论文作为测试夹具。
 3. 在 `thesis-workbench/` 中运行 `python -m unittest test_server` 和 `node test_ui.cjs`。浏览器路径可通过 `PAPEREDITER_CHROME_PATH` 指定；在非 Windows 系统上请指定已安装浏览器的可执行文件路径。
 4. 提交前检查 `git diff --cached`、`git status --short`，确认修改与测试数据可以公开。新增源码或测试夹具时，按需更新 `.gitignore` 中的精确白名单，不要强制添加被忽略的文件。
+5. 测试通过、完整提交且工作区干净后，在完成提交的消息正文添加 `Ready-for-merge: yes` 并记录测试结果。等待用户发出合并指令；未完成的分支不参与发布。合并后须验证受影响功能，再重启服务并检查健康状态。没有可合并分支时不重启。
 
 ## 问题反馈
 
