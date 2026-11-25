@@ -10,11 +10,11 @@ function visualParts(raw){
 }
 function visualMath(tex,display,onInput){
     const f=document.createElement('math-field');f.className='visualMath'+(display?' displayMath':'');f.setAttribute('contenteditable','false');f.setAttribute('math-virtual-keyboard-policy','auto');
-    f.setAttribute('aria-label','可编辑数学公式');f.value=tex;f._texOriginal=tex;f._texChanged=false;
+    f.setAttribute('aria-label','可编辑数学公式');f.value=tex;f._texOriginal=tex;f._texChanged=false;f.dataset.tex=tex;
     setEditorControlMode(f);
     function removeBuiltinMenu(){if(!f.isConnected)return;try{f.menuItems=[];f.popoverPolicy='off'}catch(err){/* Wait for MathLive to mount its internal editor. */}}
     customElements.whenDefined('math-field').then(()=>requestAnimationFrame(removeBuiltinMenu));f.addEventListener('focusin',removeBuiltinMenu);
-    f.addEventListener('input',e=>{e.stopPropagation();if(!editingEnabled)return;f._texChanged=true;onInput(f.value)});
+    f.addEventListener('input',e=>{e.stopPropagation();if(!editingEnabled)return;f._texChanged=true;f.dataset.tex=f.value;onInput(f.value)});
     return f;
 }
 function mathPanel(field){
@@ -48,11 +48,11 @@ function visualRich(raw,changed,compact=false){
     host.addEventListener('paste',e=>{if(e.defaultPrevented)return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed()});
     return host
 }
-function richMarkdown(host){
+function richMarkdown(host,fragment=false){
     function walk(n){
         if(n.nodeType===Node.TEXT_NODE)return (n.textContent||'').replace(/\u00a0/g,' ');
         if(n.nodeType!==Node.ELEMENT_NODE)return '';
-        if(n.tagName==='MATH-FIELD')return '$'+(n._texChanged?n.value:n._texOriginal||n.value||'')+'$';
+        if(n.tagName==='MATH-FIELD')return '$'+(n.dataset.tex??(n._texChanged?n.value:n._texOriginal||n.value||''))+'$';
         if(n.dataset.token)return n.dataset.token;
         const inner=[...n.childNodes].map(walk).join('');
         if(n.tagName==='BR')return '\n';
@@ -65,7 +65,7 @@ function richMarkdown(host){
         if(n.tagName==='IMG'&&n.getAttribute('src')?.startsWith('/assets/'))return '!['+(n.alt||'图片')+']('+n.getAttribute('src')+')';
         return inner;
     }
-    return [...host.childNodes].map(walk).join('').trim()
+    const text=[...host.childNodes].map(walk).join('');return fragment?text.replace(/^\n+|\n+$/g,''):text.trim()
 }
 // The document consists of independent editable paragraphs. Keep native
 // line movement within each one, and bridge their visual line boundaries.
@@ -172,6 +172,125 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     }
     root._draftHistory=draftHistory;
     root._canDraftHistory=redo=>!!(redo?draftRedo:draftUndo).length;
+    // A visual document has several independent editing hosts. Keep a logical
+    // range across them rather than letting the browser edit their outer DOM.
+    let mixed=null,anchorPoint=null,focusPoint=null,dragging=false;
+    const cards=()=>[...body.children];
+    const point=(node,offset)=>({node,offset});
+    const edge=(card,end)=>{const area=card._part.kind==='text'&&card.querySelector('.richText');return area?point(area,end?area.childNodes.length:0):point(body,cards().indexOf(card)+(end?1:0))};
+    const collapsed=p=>{const r=document.createRange();r.setStart(p.node,p.offset);r.collapse(true);return r};
+    const compare=(a,b)=>collapsed(a).compareBoundaryPoints(Range.START_TO_START,collapsed(b));
+    const cardOf=n=>(n.nodeType===1?n:n.parentElement)?.closest('.visualCard');
+    function rangeOf(a,b){const r=collapsed(a);if(compare(a,b)<=0)r.setEnd(b.node,b.offset);else r.setStart(b.node,b.offset);return r}
+    function selectedPieces(r){
+        if(!r||r.collapsed||!body.contains(r.startContainer)||!body.contains(r.endContainer))return [];
+        return cards().flatMap(card=>{
+            const bounds=document.createRange();bounds.selectNode(card);
+            if(r.compareBoundaryPoints(Range.END_TO_START,bounds)>=0||r.compareBoundaryPoints(Range.START_TO_END,bounds)<=0)return [];
+            const p=card._part;
+            if(p.kind!=='text')return [{card,p,raw:card._clipboardRaw?.()||p.raw}];
+            const area=card.querySelector('.richText'),whole=document.createRange();whole.selectNodeContents(area);
+            const local=whole.cloneRange();
+            if(area.contains(r.startContainer))local.setStart(r.startContainer,r.startOffset);
+            if(area.contains(r.endContainer))local.setEnd(r.endContainer,r.endOffset);
+            if(local.collapsed)return [];
+            const before=whole.cloneRange(),after=whole.cloneRange();before.setEnd(local.startContainer,local.startOffset);after.setStart(local.endContainer,local.endOffset);
+            const md=x=>{const h=el('div');h.append(x.cloneContents());return richMarkdown(h,true)};
+            return [{card,p,local,raw:md(local),before:md(before),after:md(after)}]
+        })
+    }
+    function nativeRange(){const s=getSelection();return s?.rangeCount&&body.contains(s.anchorNode)&&body.contains(s.focusNode)?s.getRangeAt(0):null}
+    function activeMixed(){if(mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer))return mixed;const r=nativeRange();return r&&selectedPieces(r).length>1?r:null}
+    root._mixedRange=activeMixed;
+    const handles=[el('span','rangeHandle rangeStart'),el('span','rangeHandle rangeEnd')];
+    for(const h of handles){h.hidden=true;root.append(h);h.setAttribute('aria-hidden','true')}
+    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;if(window.CSS?.highlights)CSS.highlights.delete('paper-range')}
+    root._clearMixed=clearMixed;
+    function syncRange(){
+        const r=activeMixed()||nativeRange(),pieces=selectedPieces(r),cross=!!activeMixed();
+        for(const c of cards())c.classList.toggle('rangeSelected',cross&&pieces.some(x=>x.card===c&&!x.local));
+        if(cross&&window.CSS?.highlights&&window.Highlight)CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));
+        if(!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length){for(const h of handles)h.hidden=true;return}
+        for(let i=0;i<2;i++){
+            const piece=i?pieces.at(-1):pieces[0],rr=piece.local?.cloneRange();if(rr)rr.collapse(!i);
+            const b=rr?caretBounds(rr):piece.card.getBoundingClientRect(),h=handles[i];
+            if(!b){h.hidden=true;continue}const x=rr?b.left:i?b.right:b.left,y=rr?b.bottom:i?b.bottom:b.top;
+            h.hidden=x<0||x>innerWidth||y<0||y>innerHeight;h.style.left=Math.max(9,Math.min(innerWidth-9,x))+'px';h.style.top=y+'px'
+        }
+    }
+    root._syncRange=syncRange;
+    function setRange(a,b){
+        anchorPoint=a;focusPoint=b;const r=rangeOf(a,b);clearObject();mixed=r;
+        const s=getSelection();root.focus({preventScroll:true});try{s.setBaseAndExtent(a.node,a.offset,b.node,b.offset)}catch{}
+        syncRange();scheduleToolbarUpdate()
+    }
+    function pointAt(x,y,fixed){
+        let card=document.elementFromPoint(x,y)?.closest('.visualCard');
+        if(!card||card.parentElement!==body)card=cards().filter(c=>c.getClientRects().length).sort((a,b)=>{const d=c=>{const r=c.getBoundingClientRect();return Math.max(r.top-y,y-r.bottom,0)};return d(a)-d(b)})[0];
+        if(!card)return null;
+        if(card._part.kind!=='text')return edge(card,compare(fixed,edge(card,false))<=0);
+        const area=card.querySelector('.richText'),r=document.caretRangeFromPoint?.(x,y);
+        if(r&&area.contains(r.startContainer)&&!(r.startContainer.nodeType===1?r.startContainer:r.startContainer.parentElement)?.closest('math-field,[data-token]'))return point(r.startContainer,r.startOffset);
+        const rect=area.getBoundingClientRect();return edge(card,y>rect.top+rect.height/2||x>rect.right)
+    }
+    function selectionAnchor(){const s=getSelection();return anchorPoint||(s?.anchorNode&&body.contains(s.anchorNode)?point(s.anchorNode,s.anchorOffset):null)}
+    root.addEventListener('pointerdown',e=>{
+        if(e.target.closest('.rangeHandle'))return;
+        if(e.button===0&&e.shiftKey){const a=selectionAnchor(),b=a&&pointAt(e.clientX,e.clientY,a);if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node))){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}}
+        if(e.button===0){clearMixed()}
+    },true);
+    root.addEventListener('click',e=>{if(e.shiftKey&&activeMixed()){e.preventDefault();e.stopImmediatePropagation()}},true);
+    for(let i=0;i<2;i++)handles[i].addEventListener('pointerdown',e=>{
+        const r=activeMixed()||nativeRange();if(!r)return;
+        e.preventDefault();e.stopPropagation();dragging=true;const h=handles[i],fixed=i?point(r.startContainer,r.startOffset):point(r.endContainer,r.endOffset);h.setPointerCapture(e.pointerId);
+        const move=ev=>{const b=pointAt(ev.clientX,ev.clientY-10,fixed);if(b)setRange(fixed,b)};
+        const end=()=>{dragging=false;h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);syncRange()};
+        h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
+    });
+    root._prepareTouchRange=e=>{
+        if(!e.target.closest('.part-text .richText')||activeMixed()||nativeRange()?.collapsed===false)return;
+        const r=document.caretRangeFromPoint?.(e.clientX,e.clientY),n=r?.startContainer;
+        if(n?.nodeType!==Node.TEXT_NODE||!body.contains(n)||!n.textContent.trim())return;
+        const segments=[...new Intl.Segmenter(undefined,{granularity:'word'}).segment(n.textContent)];
+        const word=segments.find(x=>x.index<=r.startOffset&&x.index+x.segment.length>r.startOffset&&x.isWordLike);if(!word)return;
+        const s=getSelection();s.setBaseAndExtent(n,word.index,n,word.index+word.segment.length);syncRange()
+    };
+    function mixedClipboard(r,cut){const pieces=selectedPieces(r),raw=pieces.map(x=>x.raw).filter(x=>x.trim()).join('\n\n');return cut?raw:remapCopiedObjects(raw,owner,true)}
+    function replaceMixed(r,text=''){
+        if(!editingEnabled||!root.isConnected)return;
+        const pieces=selectedPieces(r);if(!pieces.length)return;
+        const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
+        const replacement=[];if(first.before?.trim())replacement.push({kind:'text',raw:first.before});
+        if(text.trim())replacement.push(...visualParts(remapCopiedObjects(text,owner)));
+        if(last.after?.trim())replacement.push({kind:'text',raw:last.after});
+        parts.splice(i,j-i+1,...replacement);if(!parts.length)parts=[{kind:'text',raw:''}];
+        selectedPart=parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();flush();const dest=cards().find(c=>c._part===selectedPart)?.querySelector('.part-text .richText');if(dest)placeIn(dest);else root.focus({preventScroll:true})
+    }
+    function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null)replaceMixed(r,t)}}]]}
+    root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
+    for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
+        const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
+        if(type==='paste'){if(editingEnabled)replaceMixed(r,e.clipboardData.getData('text/plain'));return}
+        if(type==='cut'&&!editingEnabled)return;const text=mixedClipboard(r,type==='cut');e.clipboardData.setData('text/plain',text);localClipboard=text;localClipboardPreferred=false;if(type==='cut')replaceMixed(r)
+    },true);
+    root.addEventListener('keydown',e=>{
+        if(e.isComposing||e.keyCode===229)return;
+        const r=activeMixed();
+        if(r&&['Delete','Backspace'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();if(editingEnabled)replaceMixed(r);return}
+        if(r&&e.key==='Escape'){clearMixed();getSelection()?.removeAllRanges();return}
+        if(!e.shiftKey||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)||e.ctrlKey||e.altKey||e.metaKey)return;
+        const a=selectionAnchor(),s=getSelection(),b=focusPoint||(s?.focusNode&&body.contains(s.focusNode)?point(s.focusNode,s.focusOffset):null);if(!a||!b)return;
+        const forward=['ArrowRight','ArrowDown'].includes(e.key),vertical=['ArrowUp','ArrowDown'].includes(e.key),card=cardOf(b.node),list=cards();let next;
+        if(card?._part.kind==='text'){
+            const area=card.querySelector('.richText'),rest=document.createRange();rest.selectNodeContents(area);if(forward)rest.setStart(b.node,b.offset);else rest.setEnd(b.node,b.offset);
+            const frag=rest.cloneContents(),atEdge=!frag.textContent.trim()&&!frag.querySelector('math-field,[data-token],img');
+            const caret=caretBounds(collapsed(b)),line=vertical&&proseEdge(area,!forward),atLine=vertical&&caret&&Math.abs((caret.top+caret.bottom)/2-line.y)<(parseFloat(getComputedStyle(area).lineHeight)||26)*.6;
+            if(atEdge||atLine)next=list[list.indexOf(card)+(forward?1:-1)];
+            else if(r){try{s.collapse(b.node,b.offset);s.modify('move',forward?'forward':'backward',vertical?'line':'character');const p=point(s.focusNode,s.focusOffset);if(body.contains(p.node)) {e.preventDefault();setRange(a,p);return}}catch{}}
+        }else if(b.node===body)next=list[b.offset+(forward?0:-1)];else if(card)next=list[list.indexOf(card)+(forward?1:-1)];
+        if(next){e.preventDefault();e.stopImmediatePropagation();setRange(a,edge(next,next._part.kind==='text'?!forward:forward));next.scrollIntoView({block:'nearest'})}
+    },true);
+    root.addEventListener('beforeinput',e=>{if(activeMixed()&&!dragging&&editingEnabled&&e.inputType?.startsWith('insert')&&!e.isComposing){e.preventDefault();if(e.inputType==='insertText'&&e.data)replaceMixed(activeMixed(),e.data)}},true);
     function selectObject(p,card){
         selectedObject=p.kind==='text'?null:p;
         document.querySelectorAll('.selectedImage').forEach(x=>x.classList.remove('selectedImage'));
@@ -213,46 +332,74 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         }
         return null
     }
+    // Join only adjacent prose cards, keeping the caret at the former break.
+    // Rebuild the right inline nodes with callbacks owned by the surviving card.
+    function joinProse(left,right){
+        const leftCard=cards().find(c=>c._part===left),rightCard=cards().find(c=>c._part===right);
+        const area=leftCard?.querySelector('.richText'),rightArea=rightCard?.querySelector('.richText');
+        if(!area||!rightArea)return false;
+        const tail=area.lastElementChild,head=rightArea.firstElementChild;
+        const paragraph=n=>n&&/^(P|DIV|H[1-6])$/.test(n.tagName);
+        if(!paragraph(tail)||!paragraph(head))return false;
+        const fresh=visualRich(richMarkdown(rightArea),()=>{left.raw=richMarkdown(area);flush()});
+        const start=fresh.firstElementChild;if(!paragraph(start))return false;
+        // Marked inserts formatting newlines between block elements. Those are
+        // not visible text and must not become a line break at the join.
+        if(tail.lastChild?.nodeName==='BR'&&tail.childNodes.length===1)tail.lastChild.remove();
+        const boundary=tail.childNodes.length;
+        if(!(start.childNodes.length===1&&start.firstChild.nodeName==='BR'))tail.append(...start.childNodes);
+        start.remove();area.append(...fresh.childNodes);
+        parts.splice(parts.indexOf(right),1);rightCard.remove();selectedPart=left;clearObject();
+        area.focus({preventScroll:true});const r=document.createRange();r.setStart(tail,boundary);r.collapse(true);
+        const s=getSelection();s.removeAllRanges();s.addRange(r);remember();
+        left.raw=richMarkdown(area);flush();return true
+    }
+    function deleteInRich(area,forward){
+        const card=area.closest('.visualCard'),p=card?._part;
+        const s=getSelection();if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.anchorNode))return false;
+        // Empty editable paragraphs still exist until saved.
+        if(p?.kind==='text'&&!area.textContent.replace(/[\u200b\u00a0]/g,'').trim()&&!area.querySelector('math-field,[data-token],img')){
+            if(parts.length===1)return true;
+            const i=parts.indexOf(p);
+            const before=cards().slice(0,i).reverse().find(c=>c._part.kind==='text')?.querySelector('.richText');
+            const after=cards().slice(i+1).find(c=>c._part.kind==='text')?.querySelector('.richText');
+            removePart(p,true);
+            const dest=forward?(after||before):(before||after);
+            if(dest)placeIn(dest,dest===before);else root.focus({preventScroll:true});
+            return true
+        }
+        const caret=s.getRangeAt(0).cloneRange(),atom=atomicAt(area,caret,forward);
+        if(atom){
+            const r=document.createRange();r.setStartBefore(atom);r.collapse(true);atom.remove();s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));return true
+        }
+        if(p?.kind!=='text')return false;
+        const edge=document.createRange();edge.selectNodeContents(area);
+        if(forward)edge.setStart(caret.startContainer,caret.startOffset);else edge.setEnd(caret.startContainer,caret.startOffset);
+        const frag=edge.cloneContents();
+        // Ignore only DOM formatting newlines; real spaces and inline objects
+        // still count as content, and an internal BR is handled natively.
+        if(frag.textContent.replace(/[\u200b\r\n]/g,'')||frag.querySelector('math-field,[data-token],img,br'))return false;
+        const neighbor=parts[parts.indexOf(p)+(forward?1:-1)];
+        if(!neighbor)return false;
+        if(neighbor.kind!=='text'){removePart(neighbor,true);return true}
+        return forward?joinProse(p,neighbor):joinProse(neighbor,p)
+    }
     root.addEventListener('keydown',e=>{
-        if(!editingEnabled)return;
-        if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;
+        if(!editingEnabled||e.defaultPrevented||e.isComposing||e.keyCode===229)return;
         const inMath=e.composedPath().some(x=>x.tagName==='MATH-FIELD');
         const area=e.target.closest?.('.richText'),inControl=e.target.closest?.('input,textarea,select,button');
         if(!['Backspace','Delete'].includes(e.key)||e.ctrlKey||e.metaKey||e.altKey||inMath||inControl)return;
-        const forward=e.key==='Delete';
-        if(area){
-            const card=area.closest('.visualCard'),p=card?._part;
-            // An empty editable paragraph is still a content block in the
-            // live editor, even though the saved document omits blank parts.
-            if(p?.kind==='text'&&!area.textContent.replace(/[\u200b\u00a0]/g,'').trim()&&!area.querySelector('math-field,[data-token],img')){
-                e.preventDefault();
-                if(parts.length===1)return;
-                const i=parts.indexOf(p);
-                const before=[...body.children].slice(0,i).reverse().find(c=>c._part.kind==='text')?.querySelector('.richText');
-                const after=[...body.children].slice(i+1).find(c=>c._part.kind==='text')?.querySelector('.richText');
-                removePart(p,true);
-                const dest=forward?(after||before):(before||after);
-                if(dest)placeIn(dest,dest===before);else root.focus({preventScroll:true});
-                return
-            }
-            const s=getSelection();if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.anchorNode))return;
-            const caret=s.getRangeAt(0).cloneRange(),atom=atomicAt(area,caret,forward);
-            if(atom){
-                e.preventDefault();const r=document.createRange();r.setStartBefore(atom);r.collapse(true);atom.remove();s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));return
-            }
-            if(p?.kind!=='text')return;
-            const edge=document.createRange();edge.selectNodeContents(area);
-            if(forward)edge.setStart(caret.startContainer,caret.startOffset);else edge.setEnd(caret.startContainer,caret.startOffset);
-            const frag=edge.cloneContents();
-            if(frag.textContent.replace(/\u200b/g,'')||frag.querySelector('math-field,[data-token],img'))return;
-            const neighbor=parts[parts.indexOf(p)+(forward?1:-1)];
-            if(neighbor&&neighbor.kind!=='text'){e.preventDefault();removePart(neighbor,true)}
-            return
-        }
+        if(area){if(deleteInRich(area,e.key==='Delete'))e.preventDefault();return}
         if(selectedObject){
-            e.preventDefault();const card=[...body.children].find(c=>c._part===selectedObject);
+            e.preventDefault();const card=cards().find(c=>c._part===selectedObject);
             if(!card?._deleteSelectedImage?.())removePart(selectedObject)
         }
+    });
+    // Mobile soft keyboards may send beforeinput without a keydown.
+    root.addEventListener('beforeinput',e=>{
+        if(!editingEnabled||e.defaultPrevented||e.isComposing||!['deleteContentBackward','deleteContentForward'].includes(e.inputType)||e.composedPath().some(x=>x.tagName==='MATH-FIELD'))return;
+        const area=e.target.closest?.('.richText');
+        if(area&&deleteInRich(area,e.inputType==='deleteContentForward'))e.preventDefault()
     });
     function remember(){const s=window.getSelection();if(focused&&s?.rangeCount&&focused.contains(s.getRangeAt(0).commonAncestorContainer))selection=s.getRangeAt(0).cloneRange()}
     function insertInline(node){
@@ -358,7 +505,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     }
     function objectRaw(p){p.raw=':::'+p.kind+' '+p.id+(p.flags?' '+p.flags:'')+'\n'+p.body+'\n:::';flush()}
     function draw(){
-        body.replaceChildren();focused=null;selection=null;selectedObject=null;
+        clearMixed();body.replaceChildren();focused=null;selection=null;selectedObject=null;
         for(const p of parts){
             const card=el('section','visualCard');card._part=p;card.addEventListener('pointerdown',e=>{selectedPart=p;if(e.button===0&&!e.target.closest('.richText,math-field,button,input,textarea,select,.resizeHandle,.visualRef')){selectObject(p,card);if(p.kind!=='text'&&!e.target.closest('summary'))root.focus({preventScroll:true})}else if(e.button===0&&!e.target.closest('.resizeHandle'))clearObject()});
             card._selectImage=wrap=>{selectedPart=selectedObject=p;for(const c of body.children)c.classList.remove('selectedObject');document.querySelectorAll('.selectedImage').forEach(x=>{if(x!==wrap)x.classList.remove('selectedImage')});getSelection()?.removeAllRanges();root.focus({preventScroll:true});wrap.classList.add('selectedImage')};
@@ -468,6 +615,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         else showToast('已复制，粘贴将生成新 ID')
     }
     root._clipboardMenu=e=>{
+        const multi=activeMixed();if(multi)return mixedMenu(multi);
         const card=e.target.closest('.visualCard'),p=card?._part||selectedPart;
         const area=e.target.closest('.richText'),math=e.target.closest('math-field');
         const wrap=e.target.closest('.resizeImage');
@@ -517,7 +665,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root.tabIndex=0;draw();
     return {root,getValue:value};
 }
-document.addEventListener('pointerdown',e=>{if(isActionSurface(e.target))return;for(const root of document.querySelectorAll('.visualDocument'))if(!root.contains(e.target))root._clearObject?.()},true);
+document.addEventListener('pointerdown',e=>{if(isActionSurface(e.target))return;for(const root of document.querySelectorAll('.visualDocument'))if(!root.contains(e.target)){root._clearObject?.();root._clearMixed?.()}},true);
+document.addEventListener('selectionchange',()=>{for(const root of document.querySelectorAll('.visualDocument'))root._syncRange?.()});
+document.addEventListener('scroll',()=>{for(const root of document.querySelectorAll('.visualDocument'))root._syncRange?.()},true);
 function editor(n,host,pi){
     const title=el('input','editableTitle');title.value=n.title;title.placeholder='标题';title.setAttribute('aria-label','章节标题');
     setEditorControlMode(title);

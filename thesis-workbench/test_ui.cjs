@@ -74,10 +74,66 @@ async function checkTrashReferences(p){
     await p.evaluate(()=>restoreTrash(db.trash[0]));
     assert.equal(await p.evaluate(()=>{const before=JSON.parse(window.beforeTrash),after=editableSnapshot();return before.thesis.every(n=>after.thesis.find(x=>x.id===n.id).body===n.body)&&before.blocks.every(n=>{const a=after.blocks.find(x=>x.id===n.id);return a.body===n.body&&JSON.stringify(a.annotation)===JSON.stringify(n.annotation)&&a.objectBindings?.length===n.objectBindings?.length&&a.freePlacements?.length===n.freePlacements?.length})&&!after.trash.length}),true);
 }
+async function checkMixedRange(browser,mobile){
+    const {p,context,errors}=await fixture(browser,mobile);
+    await p.evaluate(()=>{find('demo-start').body='Alpha start\n\n:::equation range-eq\nx^2\n:::\n\n:::figure range-fig\nA figure\n\n![Swatches](/assets/demo.png "wb-id:range-sub")\n:::\n\nOmega end\n';select('demo-start')});
+    const first=p.locator('.pane .part-text .richText').first(),last=p.locator('.pane .part-text .richText').last();
+    const textPoint=async(loc,offset)=>loc.evaluate((a,i)=>{const n=a.querySelector('p').firstChild,r=document.createRange();r.setStart(n,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},offset);
+    if(mobile){
+        const cdp=await context.newCDPSession(p),start=await textPoint(first,2);
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
+        await p.locator('.rangeEnd:visible').waitFor();
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        await p.waitForTimeout(550);
+        await last.scrollIntoViewIfNeeded();
+        const handle=await p.locator('.rangeEnd:visible').boundingBox(),dest=await textPoint(last,5);
+        if(!handle)throw Error('missing range handle');
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:handle.x+handle.width/2,y:handle.y+10}]});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:dest.x,y:dest.y+10}]});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    }else{
+        await first.evaluate(a=>{a.focus();const n=a.querySelector('p').firstChild;getSelection().collapse(n,6)});
+        const dest=await textPoint(last,5);await p.keyboard.down('Shift');await p.mouse.click(dest.x,dest.y);await p.keyboard.up('Shift');
+    }
+    await p.waitForFunction(()=>document.querySelectorAll('.rangeSelected').length===2);
+    const copy=await p.evaluate(async()=>{const d=document.querySelector('.pane .visualDocument');await d._clipboardMenu({target:d,useCurrentSelection:true})[1][1]();return localClipboard});
+    assert(copy.includes(':::equation ')&&copy.includes(':::figure ')&&copy.includes('Omega')&&!copy.includes(':::equation range-eq'));
+    assert.deepEqual(errors,[]);
+    if(!mobile){
+        const cut=await p.evaluate(async()=>{const d=document.querySelector('.pane .visualDocument');await d._clipboardMenu({target:d,useCurrentSelection:true})[0][1]();return localClipboard});
+        assert(cut.includes(':::equation range-eq')&&cut.includes(':::figure range-fig'));
+        assert.equal(await p.evaluate(()=>find('demo-start').body.includes(':::figure range-fig')),false);
+        await p.evaluate(()=>undo(false));await p.waitForFunction(()=>find('demo-start').body.includes(':::figure range-fig'));
+    }
+    await context.close();
+}
+async function checkNewlineDeletion(browser,mobile){
+    const {p,context,errors}=await fixture(browser,mobile);
+    if(mobile)await p.evaluate(()=>{if(!editingEnabled)toggleEditMode()});
+    const reset=async body=>{await p.evaluate(body=>{find('demo-start').body=body;select('demo-start');renderPanes()},body)};
+    const areas=p.locator('.pane .part-text .richText');
+    const caret=async(i,end)=>areas.nth(i).evaluate((area,end)=>{area.focus();const r=document.createRange();r.selectNodeContents(end?area.lastElementChild:area.firstElementChild);r.collapse(!end);const s=getSelection();s.removeAllRanges();s.addRange(r)},end);
+    const del=async key=>{if(mobile)await p.evaluate(key=>document.activeElement.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:key==='Delete'?'deleteContentForward':'deleteContentBackward'})),key);else await p.keyboard.press(key)};
+    const raw=()=>p.evaluate(()=>find('demo-start').body);
+    for(const key of ['Backspace','Delete']){
+        await reset('Alpha **bold**\n\nOmega [[ref:demo-method]] $x^2$\n\nThird\n');
+        const count=await areas.count();await caret(key==='Delete'?0:1,key==='Delete');await del(key);
+        assert.equal(await raw(),'Alpha **bold**Omega [[ref:demo-method]] $x^2$\n\nThird\n');
+        assert.equal(await areas.count(),count-1);
+        const atJoin=await p.evaluate(()=>{const r=getSelection().getRangeAt(0),left=r.cloneRange();left.selectNodeContents(document.activeElement);left.setEnd(r.startContainer,r.startOffset);return left.toString()});
+        assert.equal(atJoin,'Alpha bold');
+        if(!mobile){await p.keyboard.type('!');assert.equal(await raw(),'Alpha **bold!**Omega [[ref:demo-method]] $x^2$\n\nThird\n');await p.evaluate(()=>undo(false));await p.evaluate(()=>undo(false));assert.equal(await raw(),'Alpha **bold**\n\nOmega [[ref:demo-method]] $x^2$\n\nThird\n')}
+    }
+    await reset('Alpha\n\nOmega\n');await caret(1,true);await del('Backspace');if(!mobile)assert.equal(await raw(),'Alpha\n\nOmeg\n');
+    await reset('Alpha\n\n:::equation keep-eq\nx^2\n:::\n\nOmega\n');await caret(1,true);await del('Delete');assert((await raw()).includes(':::equation keep-eq'));
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
+        if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--workspace-only')){
             const initial='C:\\Projects\\example.paper',network='\\\\server\\share\\network.paper';
             const shared={workspace:{id:initial,name:'example.paper',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
