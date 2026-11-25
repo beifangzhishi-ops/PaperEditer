@@ -404,6 +404,11 @@ function installToolHint(button){
         clearTimeout(hintTimer);const fired=press.fired;press=null;
         if(fired){suppressClick=true;hintDismiss=setTimeout(hideToolHint,1400)}
         else if(type!=='pointerup'){suppressClick=true;hideToolHint()}
+        else if(['剪切','复制','粘贴'].includes(button.dataset.tool)&&button.getAttribute('aria-disabled')!=='true'&&[...document.querySelectorAll('.visualDocument')].some(d=>d._mixedRange?.())){
+            // Chromium may suppress the compatibility click after dragging
+            // a touch selection. Execute the short tap once on pointerup.
+            button.click();suppressClick=true
+        }
     });
     button.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation()});
     button.addEventListener('click',e=>{
@@ -426,8 +431,10 @@ function toolbarContext(){
     let target=usable(toolbarTarget)?toolbarTarget:null;
     const s=getSelection(),r=s?.rangeCount?s.getRangeAt(0):null;
     const rangeTarget=r&&(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
+    const mixedDoc=[...scope.querySelectorAll('.visualDocument')].find(d=>d._mixedRange?.());
     const selected=scope.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
-    if(selected&&usable(selected))target=selected;
+    if(mixedDoc&&usable(mixedDoc))target=mixedDoc;
+    else if(selected&&usable(selected))target=selected;
     else if(usable(rangeTarget)&&(!target||target.closest('.richText')===rangeTarget||focus===rangeTarget))target=rangeTarget;
     else if(usable(focus)&&focus.matches('input,textarea,math-field,.richText'))target=focus;
     else if(!target||target.closest('.toolbar,button:not(.objectNoteMarker,.freeNoteMarker),.noteResizeHandle'))target=[...scope.querySelectorAll('.richText,.visualDocument,.page')].find(t=>usable(t)&&t.matches('.richText'))||scope.querySelector('.visualDocument,.page')||scope;
@@ -464,7 +471,8 @@ function positionFloatingTools(){
     const scope=dialog.open?dialog:paneBox.children[active],s=getSelection(),r=s?.rangeCount?s.getRangeAt(0):null;
     const a=r&&(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
     const selected=scope?.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
-    const anchor=selected?.getBoundingClientRect()||(a&&scope?.contains(a)&&(focus===a||!r.collapsed)?r.getBoundingClientRect():null)||(focus?.matches('math-field,.editableTitle')&&scope?.contains(focus)?focus.getBoundingClientRect():null);
+    const mixed=[...(scope?.querySelectorAll('.visualDocument')||[])].map(d=>d._mixedRange?.()).find(Boolean);
+    const anchor=mixed?.getBoundingClientRect()||selected?.getBoundingClientRect()||(a&&scope?.contains(a)&&(focus===a||!r.collapsed)?r.getBoundingClientRect():null)||(focus?.matches('math-field,.editableTitle')&&scope?.contains(focus)?focus.getBoundingClientRect():null);
     const visible=scope?.getBoundingClientRect();
     if(anchor&&visible&&(anchor.width||anchor.height)&&anchor.bottom>=Math.max(oy,visible.top)&&anchor.top<=Math.min(oy+h,visible.bottom)){
         x=anchor.left+anchor.width/2-bar.offsetWidth/2;
@@ -537,7 +545,7 @@ function context(e,items,target=null,exact=false){
     e.addEventListener('pointerdown',ev=>{
         if(isActionSurface(ev.target))return;
         if(ev.pointerType==='touch'&&!ev.target.closest('.resizeHandle,.noteResizeHandle')){
-            clearTimeout(longTimer);start={x:ev.clientX,y:ev.clientY,fired:false};longTimer=setTimeout(()=>{if(start)start.fired=true;touchMenuAt=Date.now();showFloatingTools(ev,get(ev))},550);ev.stopPropagation()
+            clearTimeout(longTimer);start={x:ev.clientX,y:ev.clientY,fired:false};longTimer=setTimeout(()=>{if(start)start.fired=true;touchMenuAt=Date.now();ev.target.closest('.visualDocument')?._prepareTouchRange?.(ev);ev.useCurrentSelection=true;showFloatingTools(ev,get(ev))},550);ev.stopPropagation()
         }
     });
     e.addEventListener('pointermove',ev=>{if(start&&Math.hypot(ev.clientX-start.x,ev.clientY-start.y)>10){clearTimeout(longTimer);start=null}});
@@ -610,6 +618,8 @@ function bindNoteToObject(id,binding){
     checkpoint();n.objectBindings=[...objectNoteBindings(n),{targetId:binding.targetId,floatOffset:{x:14,y:8}}];change(false)
 }
 function simpleContextMenu(e,explicit){
+    const rangeDoc=e.target.closest('.visualDocument');
+    if(rangeDoc?._mixedRange?.())return modeMenuItems(rangeDoc._clipboardMenu(e));
     const pane=e.target.closest('.pane'),pi=pane?[...paneBox.children].indexOf(pane):active;
     const docs=pane?[...pane.querySelectorAll('.visualDocument')].filter(d=>d.getClientRects().length):[];
     const distance=d=>{const r=d.getBoundingClientRect();return Math.max(r.top-e.clientY,0,e.clientY-r.bottom)};

@@ -60,6 +60,13 @@
 .viewMode .editableTitle{cursor:text;caret-color:transparent}
 .viewMode .mathPalette,.viewMode .insertPlus,.viewMode .emptyFigureAdd,.viewMode .resizeHandle,.viewMode .visualHandle,.viewMode .createBlockButton{display:none!important}
 .viewMode .visualCard.selectedObject:not(.part-text),.viewMode .selectedImage{outline:1px solid #b9cbd8}
+/* Whole objects in a prose range are atomic, including their captions. */
+::highlight(paper-range){background:#315fc6;color:white}
+.visualCard.rangeSelected{outline:2px solid #315fc6;outline-offset:1px;background:#315fc614}
+.rangeHandle{position:fixed;width:24px;height:28px;z-index:45;transform:translateX(-50%);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}
+.rangeHandle::before{content:'';display:block;width:3px;height:9px;background:#315fc6;margin:0 auto}
+.rangeHandle::after{content:'';display:block;width:16px;height:16px;background:#315fc6;border-radius:50%;margin:0 auto;border:1px solid white}
+.rangeHandle[hidden]{display:none}
 .viewMode math-field::part(virtual-keyboard-toggle){display:none!important}
 /* Native fullscreen and immersive fallback share the same full header. */
 #fullscreenToggle{display:grid;place-items:center;min-width:34px;flex:none}
