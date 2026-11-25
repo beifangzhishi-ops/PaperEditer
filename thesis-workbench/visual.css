@@ -1,0 +1,95 @@
+.visualDocument{margin:10px 0;min-width:0}.visualToolbar{display:flex;flex-wrap:wrap;gap:5px;padding:8px;background:#f7f9fb;border:1px solid #dce3e9;border-radius:8px;position:sticky;top:54px;z-index:4}.visualToolbar button{font-size:13px}.visualCard{border:1px solid #e4e9ee;border-radius:8px;margin:9px 0;background:#fff;min-width:0}.visualCard:focus-within{border-color:#91aec6}.visualCardHead{display:flex;gap:4px;align-items:center;padding:3px 8px;border-bottom:1px solid #edf0f3}.visualCardHead button{padding:1px 6px;font-size:12px}.visualHandle{cursor:grab;color:#8c9ba6;user-select:none}.visualCardContent{padding:8px 12px;min-width:0;overflow-x:auto}.richText{min-height:2em;outline:0;line-height:1.85;overflow-wrap:anywhere;min-width:0;white-space:normal}.richText:empty:before{content:'点击输入正文';color:#9aa6b0;pointer-events:none}.richText p{margin:0 0 .3em}.richText p:last-child{margin-bottom:0}.richText.compact{min-height:1.5em}.richText img,.visualImages img{max-width:100%;height:auto}.visualRef{border:1px solid #bed0df;border-radius:4px;padding:0 3px;color:#2b658f;background:#f3f8fc;font-size:.9em;cursor:pointer;white-space:normal}.visualMath{display:inline-block;min-width:28px;max-width:100%;font-size:1.03em;vertical-align:middle;border:1px solid #dce7ee;border-radius:5px;background:#fafcfe;--caret-color:#28659a;--selection-background-color:#dbeaf6;--contains-highlight-background-color:#eaf3f9}.visualMath.displayMath{display:block;min-height:46px;min-width:100%;width:max-content;padding:5px 8px;font-size:1.18em}.mathPalette{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 2px}.mathPalette button{font-size:12px;padding:3px 7px}.visualTable{border-collapse:collapse;min-width:100%}.visualTable td,.visualTable th{border:1px solid #dbe2e8;padding:6px;min-width:80px;vertical-align:top}.visualTable th{background:#f4f7f9}.visualPickList{max-height:45vh;overflow:auto}.visualPickList button{display:block;width:100%;text-align:left;white-space:normal;margin:4px 0}.visualPicker input{width:100%}.visualPicker{margin:10px 0;padding:10px;background:#f2f5f8;border-radius:8px}.visualNum{white-space:nowrap}.visualCardContent[hidden]{display:none}.visualCardHead .danger{color:#9b4743}@media(max-width:760px){.visualToolbar{position:static;gap:4px}.visualToolbar button,.mathPalette button{padding:5px 7px;min-height:34px}.visualCardHead{flex-wrap:wrap}.visualCardContent{padding:8px}.richText{font-size:16px}.visualMath{font-size:1em}.visualMath.displayMath{font-size:1.12em}.visualCardHead button{min-height:30px}.visualCardHead .spacer{min-width:5px}}
+/* Always-edit layout: controls follow the object, not the top toolbar. */
+.editableHeading{display:flex;align-items:center;gap:10px;margin:15px 0 18px;min-width:0}.headingNumber,.editableTitle{font-size:25px;font-weight:650;line-height:1.45}.editableTitle{flex:1;min-width:0;border:1px solid transparent;background:transparent;padding:3px 4px;outline:none}.editableTitle:focus{border-color:#aabfce;background:#fff}.sectionMore,.partMore,.partFold,.sidebarMore,.insertPlus{border:0;background:transparent;color:#71828f}.sectionMore{align-self:flex-start}.visualDocument{margin:0;min-width:0}.visualCard{border:1px solid transparent;border-radius:5px;margin:7px 0;position:relative;min-width:0;background:transparent}.visualCard:hover,.visualCard:focus-within,.visualCard.folded{border-color:#e3e9ee}.visualCardHead{border-bottom:0;min-height:20px;padding:0 4px;opacity:0;transition:opacity .12s;gap:3px}.visualCard:hover>.visualCardHead,.visualCard:focus-within>.visualCardHead,.visualCard.folded>.visualCardHead,.visualCard:not(.part-text)>.visualCardHead{opacity:1}.visualCardContent{padding:2px 5px 7px}.visualCardHead button{font-size:13px;padding:0 5px;min-height:21px}.visualCardHead .partLabel{font-size:12px}.visualCard .richText{font-size:16px;line-height:1.9}.visualCard.part-text .visualCardHead{position:absolute;right:2px;top:-11px;z-index:2;background:#fff;border-radius:4px}.visualCard.part-text .visualCardHead .spacer{display:none}.visualCard.part-text .visualCardContent{padding-top:4px}.visualCard.folded.part-text .visualCardHead{position:static}.visualBottom{padding:3px 0 10px}.insertPlus{font-size:19px;padding:2px 8px}.mathPalette{display:none}.visualCard:focus-within .mathPalette,.visualCard.showMathTools .mathPalette{display:flex}.visualMath{background:transparent;border-color:transparent}.visualMath:focus-within{border-color:#b4c9d9;background:#fafcfe}.visualMath.displayMath{min-height:40px;text-align:center;width:100%;min-width:0}.visualMath::part(menu-toggle),.visualMath::part(virtual-keyboard-toggle){opacity:0}.visualMath:focus-within::part(menu-toggle),.visualMath:focus-within::part(virtual-keyboard-toggle),.visualMath:hover::part(menu-toggle){opacity:1}.visualRef{border:none;background:none;text-decoration:underline;text-decoration-style:dotted}.visualImages{margin:3px 0 9px}.visualImages .richText{text-align:center}.part-figure>.visualCardContent>.richText,.part-table>.visualCardContent>.richText{font-size:14px;color:#586672;text-align:center}.resizeImage{position:relative;box-sizing:border-box;margin:8px auto;max-width:100%;cursor:default;overflow:visible}.resizeImage img{display:block;width:100%;height:auto;margin:0;cursor:pointer;user-select:none;-webkit-user-drag:none}.resizeImage.selectedImage{outline:2px solid #3977b5;outline-offset:0}.resizeHandle{position:absolute;display:none;width:14px;height:14px;background:white;border:2px solid #3977b5;border-radius:3px;touch-action:none;z-index:3;user-select:none}.selectedImage>.resizeHandle{display:block}.resizeHandle.nw{left:0;top:0;transform:translate(-50%,-50%);cursor:nwse-resize}.resizeHandle.ne{right:0;top:0;transform:translate(50%,-50%);cursor:nesw-resize}.resizeHandle.sw{left:0;bottom:0;transform:translate(-50%,50%);cursor:nesw-resize}.resizeHandle.se{right:0;bottom:0;transform:translate(50%,50%);cursor:nwse-resize}.visualImages .resizeImage{max-width:calc(100% - 16px)}#menu{max-height:calc(100dvh - 12px);overflow-y:auto;max-width:calc(100vw - 12px);min-width:176px}#menu button{white-space:normal;font-size:14px}.navrow .navlabel+button{opacity:0}.navrow:hover .navlabel+button,.navrow.selected .navlabel+button,.navrow:focus-within .navlabel+button{opacity:1}#sideTools{justify-content:flex-end;margin:0 0 4px}.childbody>.editableHeading{margin-top:8px}.childbody .editableTitle,.childbody .headingNumber{font-size:20px}
+@media(max-width:760px){.headingNumber,.editableTitle{font-size:21px}.editableHeading{gap:5px;margin:10px 0}.visualCardHead,.navrow .navlabel+button{opacity:1}.visualCard.part-text .visualCardHead{position:static;background:transparent}.visualCard.part-text .visualCardHead .spacer{display:block}.visualCardHead button,.sectionMore{min-height:29px;min-width:29px}.visualCardContent{padding:4px 6px}.resizeHandle{width:22px;height:22px}.visualImages .resizeImage{max-width:calc(100% - 24px)}.visualMath.displayMath{font-size:1.08em}.visualCard .richText{font-size:16px}.mathPalette button{min-height:32px}.page{padding-top:13px}}
+/* Continuous text: paragraph tools do not occupy document space. */
+.visualCard.part-text>.visualCardHead{display:none!important}.visualCard.part-text{margin:0 0 9px;border-color:transparent;border-radius:0}.visualCard.part-text:hover,.visualCard.part-text:focus-within{border-color:transparent}.visualCard.part-text>.visualCardContent{padding:0 5px}.visualCard.part-text .richText{min-height:1.5em}.visualCard.part-text .richText p{margin:0}.inlineAnnotation{display:inline;color:#537797;background:#eef4f8;border-radius:4px;padding:0 4px;font-size:.82em;white-space:nowrap;text-decoration:none}.inlineAnnotation:hover{background:#dce9f4}.floatingDialog{position:fixed;inset:auto;margin:0;z-index:25;width:min(680px,calc(100vw - 16px));max-height:calc(100dvh - 16px);box-shadow:0 10px 40px #26303833}.floatingDialog h2{margin-top:0;cursor:move;touch-action:none;user-select:none;padding:2px 0 10px;border-bottom:1px solid #e8edf1}.floatingDialog .visualDocument{margin-top:8px}@media(max-width:760px){.visualCard.part-text>.visualCardContent{padding:0 3px}.visualCard.part-text{margin-bottom:8px}.floatingDialog{width:calc(100vw - 16px)}}
+.visualMath::part(menu-toggle),.visualMath::part(virtual-keyboard-toggle){display:none!important;width:0!important;min-width:0!important;margin:0!important;padding:0!important}
+.visualMath:not(.displayMath){min-width:0!important;padding:0!important;margin:0!important;border:0!important;border-radius:0;vertical-align:baseline}
+.blankNoteDialog{width:min(380px,calc(100vw - 16px));padding:10px 12px;border:1px solid #c7d0d8;border-radius:7px;box-shadow:0 5px 22px #0003}.blankNoteDialog #dialogBody>h2{font-size:0;height:9px;margin:0;padding:0;border:0;cursor:move}.blankNoteDialog .dialogclose{display:none}.blankNoteDialog .visualDocument{margin:0}.blankNoteDialog .visualCard.part-text{margin:0}.blankNoteDialog .visualCard.part-text>.visualCardContent{padding:2px}.blankNoteDialog .richText{min-height:110px;line-height:1.6}.blankNoteDialog .richText:empty:before{content:none}.blankNoteDialog .visualBottom{display:none}.noteFooter{display:flex;justify-content:flex-end;padding-top:8px}.noteSave{background:#2868a2;color:white;border-color:#2868a2;min-width:66px}.noteSave:hover{background:#205b8e}
+/* Note windows: corner resizing, fixed save row, and compact inline anchors. */
+.blankNoteDialog[open]{display:flex;flex-direction:column;box-sizing:border-box;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:hidden}.blankNoteDialog #dialogBody{display:flex;flex:1 1 0;flex-direction:column;min-height:0;min-width:0}.blankNoteDialog #dialogBody>h2{flex:none}.blankNoteDialog .visualDocument{flex:1 1 0;min-height:0;overflow-y:auto;overflow-x:hidden;margin:0}.blankNoteDialog .visualBody{min-height:100%}.blankNoteDialog .visualCard.part-text:only-child,.blankNoteDialog .visualCard.part-text:only-child>.visualCardContent{min-height:100%}.blankNoteDialog .richText{min-height:90px}.noteFooter{flex:none;padding:5px 12px 0 0}.noteResizeHandle{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;touch-action:none;user-select:none;z-index:5}.noteResizeHandle:after{content:'';position:absolute;right:3px;bottom:3px;width:10px;height:10px;background:linear-gradient(135deg,transparent 44%,#8c9ba6 45%,#8c9ba6 53%,transparent 54%,transparent 67%,#8c9ba6 68%,#8c9ba6 76%,transparent 77%)}.inlineAnnotation{display:inline;color:#a77a19;background:transparent;border:0;padding:0 2px;font-size:.85em;font-weight:600;line-height:inherit;cursor:pointer;vertical-align:super;white-space:nowrap}.inlineAnnotation:hover{background:#fff2bf;border-radius:3px}.inlineAnnotation:focus-visible{outline:1px solid #a77a19}@media(max-width:760px){.noteResizeHandle{width:28px;height:28px}.noteFooter{padding-right:20px}}
+.objectNoteMarkers{display:inline-flex;align-items:center;gap:4px;flex:none}.objectNoteMarkers>.objectNoteMarker{min-width:18px;min-height:18px;border:0;background:transparent;color:#a77a19;font-size:14px;font-weight:600;padding:0 2px;line-height:1.4;cursor:pointer}.objectNoteMarkers>.objectNoteMarker:hover{background:#fff2bf;border-radius:3px}.resizeImage>.objectNoteMarkers{position:absolute;top:3px;right:6px;z-index:4;background:#fffffff0;border-radius:3px}.editableHeading>.objectNoteMarkers{align-self:center}.visualCard.selectedObject:not(.part-text){outline:2px solid #3977b5;outline-offset:1px}
+.page{position:relative}.freeNoteLayer{position:absolute;inset:0;pointer-events:none;z-index:3}.freeNoteMarker{position:absolute;pointer-events:auto;min-width:18px;min-height:18px;padding:0 2px;line-height:1.3;border:0;background:#fff9de;color:#a77a19;border-radius:3px;font-size:14px;font-weight:600;cursor:pointer}.freeNoteMarker:hover{background:#fff2bf}
+/* Compact context actions and touch-friendly floating toolbar. */
+#menu{padding:3px;min-width:124px;max-width:calc(100vw - 8px);border-radius:6px;z-index:40}
+#menu button{padding:4px 9px;font-size:13px;line-height:1.45;border-radius:4px;min-height:27px}
+#floatingTools{position:fixed;display:flex;align-items:center;gap:2px;padding:3px;background:#fff;border:1px solid #dce1e5;border-radius:7px;box-shadow:0 3px 15px #26303830;z-index:39;max-width:calc(100vw - 8px);white-space:nowrap}
+#floatingTools[hidden]{display:none}
+#floatingTools button{border:0;border-radius:4px;padding:5px 9px;font-size:13px;min-height:30px}
+@media(pointer:coarse){#floatingTools button{min-height:40px;min-width:42px}#menu button{min-height:38px;padding:5px 10px}}
+@media(max-width:760px){header{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}header::-webkit-scrollbar{display:none}header>*{flex-shrink:0}header .spacer{flex:1 0 0}#workspaceName{max-width:92px;overflow:hidden;text-overflow:ellipsis}#menu{max-height:calc(100dvh - 8px)}}
+@media(max-width:480px){
+    header{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:34px 34px;height:86px;gap:4px;padding:6px 8px;overflow:visible}
+    header .spacer,header #status{display:none}
+    header #drawer{grid-area:1/1;justify-self:start}
+    header #workspaceName{grid-area:1/2/2/4;max-width:none}
+    header nav{grid-area:1/4/2/6;justify-content:flex-end}
+    header #openWorkspace{grid-area:2/1}header #dual{grid-area:2/2}header #refresh{grid-area:2/3}header #headerActions{grid-area:2/4}header #shortcutSettings{grid-area:2/5}
+    header button{font-size:12px;padding:3px 4px;min-width:0;height:34px}
+    #layout{height:calc(100dvh - 86px)}aside{top:86px}#overlay.show{inset:86px 0 0}
+}
+/* Explicitly toggled, icon-only toolbar; stable while scrolling/typing. */
+#floatingTools{justify-content:center;flex-wrap:wrap;gap:2px;padding:4px;border-radius:11px;white-space:normal;box-shadow:0 4px 18px #26303830}
+#floatingTools button{display:grid;place-items:center;width:35px;height:35px;min-width:0;min-height:0;padding:0;color:#345166;touch-action:manipulation}
+#floatingTools button svg,#headerActions svg{display:block;pointer-events:none}
+#floatingTools button:nth-child(4),#floatingTools button:nth-child(7){border-left:1px solid #e1e7ec;border-radius:0}
+#headerActions{display:grid;place-items:center;min-width:38px;padding:4px 8px}
+#headerActions.active{color:#245481;background:#dceaf5;border-color:#97b6d0}
+.floatingToolsEnabled .page{padding-bottom:110px}
+@media(pointer:coarse){#floatingTools button{width:37px;height:40px}}
+@media(max-width:360px){#floatingTools button{width:32px;height:38px}}
+.shortcutList{display:grid;gap:7px;margin:12px 0}
+.shortcutRow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #e8edf1}
+.shortcutControls{display:flex;gap:5px;align-items:center;min-width:0}
+.shortcutControls input{width:125px;padding:5px;font-size:13px}
+.shortcutControls select{padding:5px;font-size:13px}
+.shortcutControls button{padding:4px 7px;font-size:12px}
+@media(max-width:560px){.shortcutRow{align-items:flex-start;flex-direction:column;gap:4px}.shortcutControls{width:100%;flex-wrap:wrap}.shortcutControls input{flex:1;min-width:80px;width:100px}}
+/* Names are transient hints, including for currently unavailable tools. */
+#floatingTools button[aria-disabled="true"]{opacity:.38;cursor:default;background:transparent}
+#floatingTools button,#headerActions{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+#toolHint{position:fixed;z-index:46;pointer-events:none;color:white;background:#263038;border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.45;max-width:calc(100vw - 8px);white-space:normal;box-shadow:0 2px 8px #26303830}
+#toolHint[hidden]{display:none}
+/* Viewing keeps the content selectable but never opens an editing keyboard. */
+#floatingTools #editModeToggle{border-right:1px solid #dce5ec;border-radius:5px;color:#345166}
+#floatingTools #editModeToggle.active{color:#245481;background:#dceaf5}
+#floatingTools button:nth-child(4),#floatingTools button:nth-child(7){border-left:0;border-radius:4px}
+#floatingTools button:nth-child(5),#floatingTools button:nth-child(8){border-left:1px solid #e1e7ec;border-radius:0}
+.viewMode .richText{cursor:text;user-select:text;-webkit-user-select:text;caret-color:transparent}
+.viewMode .editableTitle{cursor:text;caret-color:transparent}
+.viewMode .mathPalette,.viewMode .insertPlus,.viewMode .emptyFigureAdd,.viewMode .resizeHandle,.viewMode .visualHandle,.viewMode .createBlockButton{display:none!important}
+.viewMode .visualCard.selectedObject:not(.part-text),.viewMode .selectedImage{outline:1px solid #b9cbd8}
+.viewMode math-field::part(virtual-keyboard-toggle){display:none!important}
+/* Native fullscreen and immersive fallback share the same full header. */
+#fullscreenToggle{display:grid;place-items:center;min-width:34px;flex:none}
+#fullscreenToggle[aria-pressed="true"]{background:#e6edf5;color:#245481}
+@media(max-width:760px){
+    header #fullscreenToggle{order:-1}
+    header #drawer{order:-2}
+}
+@media(max-width:480px){
+    header{grid-template-columns:repeat(6,minmax(0,1fr))}
+    header nav{grid-area:1/4/2/6}
+    header #fullscreenToggle{grid-area:1/6}
+    header #shortcutSettings{grid-area:2/5}
+    header #installApp{grid-area:2/6}
+}
+#installApp[hidden],#revealFullscreenHeader[hidden]{display:none!important}
+body{--header-height:58px;--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px);height:100dvh;padding:var(--safe-top) env(safe-area-inset-right,0px) var(--safe-bottom) env(safe-area-inset-left,0px);overflow:hidden}
+header{height:var(--header-height)}
+#layout{height:calc(100dvh - var(--header-height) - var(--safe-top) - var(--safe-bottom))}
+body.fullscreenHeaderHidden{--header-height:0px}
+body.fullscreenHeaderHidden header{display:none}
+.trashRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #e6ebef;overflow-wrap:anywhere}.trashRow>div{min-width:0}.trashRow button{flex:none}
+.blockOverviewActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.blockNetwork{margin-top:24px;padding-top:14px;border-top:1px solid #e6ebef}.blockNetwork h2{font-size:17px;margin:0 0 8px}.blockNetwork .graph{margin:8px 0 12px}.networkJumpHighlight{outline:2px solid #5c91c4!important;outline-offset:4px;border-radius:5px;background-color:#edf5ff!important;transition:background-color .2s}
+#revealFullscreenHeader{position:fixed;top:calc(var(--safe-top) + 3px);right:calc(env(safe-area-inset-right,0px) + 8px);z-index:12;width:32px;height:29px;padding:0;line-height:1;font-size:19px;opacity:.72;touch-action:manipulation}
+@media(max-width:760px){
+    body{--header-height:54px}
+    aside{top:calc(var(--header-height) + var(--safe-top));bottom:var(--safe-bottom);left:env(safe-area-inset-left,0px)}
+    #overlay.show{inset:calc(var(--header-height) + var(--safe-top)) 0 var(--safe-bottom)}
+}
+@media(max-width:480px){
+    body{--header-height:86px}
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "id": "demo-start",
+    "title": "Example thesis",
+    "parent": null,
+    "level": 1,
+    "number": "",
+    "file": "thesis/demo-start.md",
+    "source": "",
+    "order": 0
+  },
+  {
+    "id": "demo-method",
+    "title": "Example method",
+    "parent": "demo-start",
+    "level": 2,
+    "number": "",
+    "file": "thesis/demo-method.md",
+    "source": "",
+    "order": 1
+  }
+]
