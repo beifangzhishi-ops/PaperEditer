@@ -144,12 +144,12 @@ function visualImageUpload(file,done){
         const result=await api('/api/upload',{data});done?.(result.url,file.name||'图片');return {url:result.url,name:file.name||'图片'}
     }catch(e){showToast(e.message)}})()
 }
-function visualPick(onSelect,embed=false){
-    const existing=dialog.open,d=existing?$('dialogBody'):showDialog(embed?'嵌入知识块':'选择引用对象');
+function visualPick(onSelect){
+    const existing=dialog.open,d=existing?$('dialogBody'):showDialog('选择引用对象');
     const container=el('div','visualPicker'),q=el('input'),list=el('div','visualPickList');q.placeholder='搜索标题、公式、编号';
     container.append(q,list,btn('取消',()=>{if(existing)container.remove();else dialog.close()}));d.append(container);
-    function draw(){list.replaceChildren();const needle=q.value.toLowerCase();for(const t of [...targets.values()].filter(t=>(!embed||t.kind==='node'&&spaceOf(t.id)==='blocks')&&((t.title||'')+' '+t.id+' '+t.number).toLowerCase().includes(needle)).slice(0,80)){
-        list.append(btn((t.kind==='equation'?'式 ':t.kind==='figure'?'图 ':t.kind==='table'?'表 ':'')+(t.number||'')+' '+(t.title||t.id),()=>{onSelect(embed?'[[embed:'+t.id+']]':refToken(t));if(existing)container.remove();else dialog.close()}))
+    function draw(){list.replaceChildren();const needle=q.value.toLowerCase();for(const t of [...targets.values()].filter(t=>((t.title||'')+' '+t.id+' '+t.number).toLowerCase().includes(needle)).slice(0,80)){
+        list.append(btn((t.kind==='equation'?'式 ':t.kind==='figure'?'图 ':t.kind==='table'?'表 ':'')+(t.number||'')+' '+(t.title||t.id),()=>{onSelect(refToken(t));if(existing)container.remove();else dialog.close()}))
     }}q.addEventListener('input',draw);draw();q.focus()
 }
 function visualDocument(raw,onUpdate,owner=null,pi=null){
@@ -464,11 +464,6 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function add(p,after=selectedPart){
         let i=parts.indexOf(after);parts.splice(i<0?parts.length:i+1,0,p);selectedPart=p;draw();flush();const card=[...body.children].find(e=>e._part===p);card?.scrollIntoView({block:'nearest'});card?.querySelector('[contenteditable=true],math-field,input')?.focus()
     }
-    function addStructured(kind,initial=''){
-        const id=(kind==='equation'?'eq-':kind==='figure'?'fig-':'tab-')+uid();
-        let data=initial||(kind==='equation'?'':kind==='figure'?'图题\n\n':'表题\n\n| 项目 | 数值 |\n| --- | --- |\n|  |  |');
-        const p={kind,id,flags:'',body:data,raw:':::'+kind+' '+id+'\n'+data+'\n:::'};add(p)
-    }
     function insertPaste(text,after){
         const ids=new Set(parts.flatMap(p=>[p.id,...(p.kind==='figure'?[...p.raw.matchAll(figureImagePattern())].map((m,i)=>figureImageId(m[3],p.id,i)):[])].filter(Boolean)));
         const collision=[...text.matchAll(objectPattern())].some(m=>ids.has(m[2])||(m[1]==='figure'&&[...m[4].matchAll(figureImagePattern())].some((img,i)=>ids.has(figureImageId(img[3],m[2],i)))));
@@ -514,12 +509,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()
     }
     function insertMenu(){return [
-        ['插入正文',()=>add({kind:'text',raw:''})],
-        ['插入编号公式',()=>addStructured('equation')],
-        ['插入行内公式',()=>{if(!focused||!focused.isConnected){add({kind:'text',raw:'$x$'});return}const f=visualMath('',false,()=>focused?.dispatchEvent(new Event('input',{bubbles:true})));f.dataset.inline='1';insertInline(f)}],
-        ['插入图片',()=>chooseImages()],['插入空图对象',()=>addStructured('figure')],['插入表格',()=>addStructured('table')],
-        ['插入交叉引用',()=>visualPick(s=>{const m=[...s.matchAll(refPattern())][0];if(m)insertInline(visualRef(m[1],m[2]))})],
-        ['嵌入知识块',()=>visualPick(s=>add({kind:'text',raw:s}),true)]
+        ['插入交叉引用',()=>visualPick(s=>{const m=[...s.matchAll(refPattern())][0];if(m)insertInline(visualRef(m[1],m[2]))})]
     ]}
     root._contentInsertMenu=e=>{
         const cards=[...body.children],clicked=e.target.closest('.visualCard'),area=e.target.closest('.richText');

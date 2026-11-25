@@ -124,9 +124,18 @@ async function checkCleanBody(p,mobile=false){
     await summary.locator('.headingNumber').click();assert.equal(await summary.locator('.childCollapsedTitle').innerText(),'1.1 Updated method');
     await summary.locator('.childCollapsedTitle').click();
     const area=child.locator('.richText').first();
-    await contextAt(p,area);assert(await menu(p,'插入编号公式').isEnabled());await menu(p,'插入空图对象').click();
-    assert.equal(await child.locator('.emptyFigureAdd').last().innerText(),'添加图片');
-    assert(await p.evaluate(()=>find('demo-method').body.includes(':::figure')));
+    await contextAt(p,area);
+    assert.deepEqual(await p.locator('#menu button').allTextContents(),['剪切','复制','粘贴','插入交叉引用','新建批注/知识块','插入批注/知识块']);
+    await menu(p,'插入交叉引用').click();
+    await p.locator('#dialog .visualPickList button').filter({hasText:'Example annotation'}).click();
+    assert(await p.evaluate(()=>find('demo-method').body.includes('[[ref:demo-note]]')));
+    await area.evaluate(a=>{
+        a.focus();const t=a.querySelector('p').firstChild,r=document.createRange();r.setStart(t,1);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r);
+        const b=r.getBoundingClientRect(),e=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:b.left,clientY:b.top+2});e.useCurrentSelection=true;a.dispatchEvent(e)
+    });
+    await menu(p,'插入批注/知识块').click();
+    await p.locator('#dialog .visualPickList').getByRole('button',{name:'Independent note',exact:true}).click();
+    assert(await p.evaluate(()=>find('demo-method').body.includes('[[embed:demo-free]]')));
 }
 async function checkNetwork(p){
     await p.evaluate(()=>select('demo-note'));
