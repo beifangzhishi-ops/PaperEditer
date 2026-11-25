@@ -639,6 +639,9 @@ function simpleContextMenu(e,explicit){
         else{checkpoint();owner.body=owner.body.trimEnd()+'\n\n[[embed:'+id+']]\n';change(true)}
     }):null;
     const result=editorClipboardMenu(e);
+    // Insertion lives in the context menu, not a persistent button in the text.
+    const insertDoc=e.target.closest('.visualDocument')||(prose?doc:null);
+    if(!e.preview&&insertDoc?._contentInsertMenu)result.push(...insertDoc._contentInsertMenu(e));
     if(prose||objectBinding){
         result.push(['新建批注/知识块',()=>newAnnotation(binding,e)]);
         result.push(['插入批注/知识块',()=>annotationDialog(binding,attach,objectBinding?.targetId||owner?.id,e)]);
@@ -1020,8 +1023,8 @@ function blockOverview(page){
     const cards=el('div','cards');for(const n of db.blocks){const c=el('article','blockcard');c.append(el('h3','',n.title),el('div','small',n.body.replace(/:::[^\n]*/g,'').slice(0,100)||'空白块'),el('div','small',related(n.id).length+' 个关联'));c.addEventListener('click',()=>select(n.id));context(c,()=>nodeMenu(n),()=>resolve(n.id));cards.append(c)}page.append(cards)
 }
 function renderChild(n,host,pi){
-    const d=el('details','child');d.dataset.sectionId=n.id;const s=el('summary','',label(n));d.append(s);
-    function populate(){if(d.open&&!d.dataset.loaded){d.dataset.loaded='1';const b=el('div','childbody');editor(n,b,pi);for(const x of children(spaceOf(n.id),n.id))renderChild(x,b,pi);d.append(b)}}
+    const d=el('details','child');d.dataset.sectionId=n.id;const s=el('summary',''),collapsedTitle=el('span','childCollapsedTitle',label(n));s.append(collapsedTitle);d.append(s);
+    function populate(){if(d.open&&!d.dataset.loaded){d.dataset.loaded='1';const b=el('div','childbody');editor(n,b,pi,s);for(const x of children(spaceOf(n.id),n.id))renderChild(x,b,pi);d.append(b)}}
     const foldKey='section:'+n.id,initialPageKey=pageFoldKey(pi);
     d._populate=populate;
     d.open=!pageFoldState(pi).has(foldKey);populate();

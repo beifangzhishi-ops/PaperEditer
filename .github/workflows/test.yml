@@ -29,3 +29,5 @@ jobs:
       - run: python -m unittest test_server
       - name: Browser regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs
+      - name: Clean document UI regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --clean-body-only

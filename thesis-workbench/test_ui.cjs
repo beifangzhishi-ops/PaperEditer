@@ -42,6 +42,25 @@ async function fixture(browser,mobile=false,shared=null){
 }
 const menu=(p,name)=>p.locator('#menu').getByRole('button',{name,exact:true});
 async function contextAt(p,loc){await loc.click({button:'right'});await p.locator('#menu').waitFor({state:'visible'})}
+async function checkCleanBody(p,mobile=false){
+    await p.evaluate(()=>select('demo-start'));
+    const child=p.locator('details.child[data-section-id="demo-method"]'),summary=child.locator(':scope > summary'),title=summary.locator('.editableTitle');
+    assert.equal(await child.locator(':scope > .childbody > .editableHeading').count(),0);
+    assert.equal(await title.inputValue(),'Example method');
+    assert(await title.isVisible());assert(!(await summary.locator('.childCollapsedTitle').isVisible()));
+    assert.equal(await p.locator('.visualDocument .insertPlus,.visualDocument .visualBottom').count(),0);
+    if(mobile){await summary.locator('.headingNumber').tap()}else{await summary.locator('.headingNumber').click()}
+    await p.waitForFunction(()=>!document.querySelector('details.child').open);
+    assert(await summary.locator('.childCollapsedTitle').isVisible());assert(!(await title.isVisible()));
+    if(mobile){await summary.locator('.childCollapsedTitle').tap();await p.locator('#editModeToggle').tap()}else await summary.locator('.childCollapsedTitle').click();
+    await title.fill('Updated method');assert(await child.evaluate(d=>d.open));
+    await summary.locator('.headingNumber').click();assert.equal(await summary.locator('.childCollapsedTitle').innerText(),'1.1 Updated method');
+    await summary.locator('.childCollapsedTitle').click();
+    const area=child.locator('.richText').first();
+    await contextAt(p,area);assert(await menu(p,'插入编号公式').isEnabled());await menu(p,'插入空图对象').click();
+    assert.equal(await child.locator('.emptyFigureAdd').last().innerText(),'添加图片');
+    assert(await p.evaluate(()=>find('demo-method').body.includes(':::figure')));
+}
 async function checkNetwork(p){
     await p.evaluate(()=>select('demo-note'));
     await p.locator('#nav .navrow.selected button').last().click();
@@ -156,6 +175,11 @@ async function run(){
             assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop and mobile path input, UNC forwarding, shared history and reading, invalid path preserves document');return;
         }
         const {p,context,errors}=await fixture(browser);
+        if(process.argv.includes('--clean-body-only')){
+            await checkCleanBody(p);assert.deepEqual(errors,[]);await context.close();
+            const mobile=await fixture(browser,true);await checkCleanBody(mobile.p,true);assert.deepEqual(mobile.errors,[]);await mobile.context.close();
+            console.log('PASS: one child heading, collapse/rename, context insertion, no inline plus controls (desktop/mobile)');return
+        }
         if(process.argv.includes('--trash-refs-only')){await checkTrashReferences(p);assert.deepEqual(errors,[]);await context.close();console.log('PASS: trash cross-reference cleanup and restore');return}
         if(process.argv.includes('--network-only')){await checkNetwork(p);assert.deepEqual(errors,[]);await context.close();console.log('PASS: block menu, relation network, note jumps and highlight');return}
         if(!process.argv.includes('--fullscreen-only')){
