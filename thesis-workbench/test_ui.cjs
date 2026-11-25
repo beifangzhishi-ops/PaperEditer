@@ -16,7 +16,7 @@ async function fixture(browser,mobile=false,shared=null){
     p.on('dialog',d=>{errors.push('Unexpected dialog: '+d.message());d.accept()});
     await p.route(origin+'/**',async r=>{
         const u=new URL(r.request().url()),name=u.pathname;
-        if(name==='/api/state')return r.fulfill({json:shared?{...data.state,workspace:shared.workspace,readingPosition:shared.reading[shared.workspace.id]||null}:data.state});
+        if(name==='/api/state')return r.fulfill({json:shared?{...(shared.state||data.state),workspace:shared.workspace,readingPosition:shared.reading[shared.workspace.id]||null}:data.state});
         if(name==='/api/reading'){
             if(shared)shared.reading[r.request().headers()['x-paperediter-workspace']]=r.request().postDataJSON();
             return r.fulfill({json:{ok:true}})
@@ -148,10 +148,47 @@ async function checkNewlineDeletion(browser,mobile){
     await reset('Alpha\n\n:::equation keep-eq\nx^2\n:::\n\nOmega\n');await caret(1,true);await del('Delete');assert((await raw()).includes(':::equation keep-eq'));
     assert.deepEqual(errors,[]);await context.close();
 }
+async function checkTreeReturn(browser,mobile){
+    const state=JSON.parse(JSON.stringify(data.state));
+    state.thesis.find(n=>n.id==='demo-method').body=Array.from({length:80},(_,i)=>'Reading paragraph '+i+' with enough text to scroll.').join('\n\n');
+    const workspace={id:'tree-return',name:'example.paper'},shared={workspace,reading:{},recent:[workspace],state};
+    const first=await fixture(browser,mobile,shared),p=first.p;
+    const clickTab=async(page,id)=>mobile?page.locator(id).tap():page.locator(id).click();
+    const scroll=()=>document.querySelector('.pane.activepane').scrollTop;
+    await p.evaluate(()=>select('demo-method'));
+    await p.evaluate(()=>{document.querySelector('.pane.activepane').scrollTop=1100});
+    const top=await p.evaluate(scroll);assert(top>500);
+    await clickTab(p,'#blockTab');
+    await p.waitForFunction(()=>view==='blocks'&&panes[active].id===null);
+    await p.evaluate(()=>select('demo-note'));
+    await clickTab(p,'#treeTab');
+    await p.waitForFunction(()=>panes[active].id==='demo-method'&&Math.abs(document.querySelector('.pane.activepane').scrollTop-1100)<30);
+    await p.waitForTimeout(1800);
+    assert(Math.abs(await p.evaluate(scroll)-top)<30);
+    // A switch away immediately after restoration must not overwrite the saved anchor.
+    await clickTab(p,'#blockTab');
+    await p.waitForTimeout(650);
+    assert.equal(shared.reading[workspace.id].panes[0].thesisReading.id,'demo-method');
+    const second=await fixture(browser,!mobile,shared);
+    await second.p.locator('#treeTab').click();
+    await second.p.waitForFunction(()=>panes[active].id==='demo-method'&&document.querySelector('.pane.activepane').scrollTop>500);
+    await second.p.waitForTimeout(1800);
+    assert.equal(await second.p.evaluate(()=>panes[active].id),'demo-method');
+    // Explicit network navigation must still take precedence over the remembered chapter.
+    await clickTab(p,'#blockTab');await p.evaluate(()=>select('demo-note'));
+    await p.locator('.blockNetwork [data-network-id="demo-start"]').click();
+    await p.waitForFunction(()=>panes[active].id==='demo-start'&&dialog.open);
+    await p.evaluate(()=>closeWorkbenchDialog());
+    await clickTab(p,'#blockTab');await clickTab(p,'#treeTab');
+    assert.equal(await p.evaluate(()=>panes[active].id),'demo-start');
+    assert.deepEqual(first.errors,[]);assert.deepEqual(second.errors,[]);
+    await first.context.close();await second.context.close();
+}
 async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--workspace-only')){

@@ -56,7 +56,14 @@ let readingReady=false,readingRestored=false,readingInteracted=false,readingTime
 function readPosition(){
     try{return JSON.parse(localStorage.getItem(workspaceStorageKey(READING_KEY))||'null')}catch{return null}
 }
-function positionSnapshot(){return {view,active,open:[...open],panes:panes.map(p=>({id:p.id,reading:p.reading||null})),pageFolds:pageFoldStates}}
+function panePosition(p){return {id:p.id,reading:p.reading||null}}
+function thesisPosition(p){return p?.id&&db.thesis.some(n=>n.id===p.id)?panePosition(p):null}
+function positionSnapshot(){return {view,active,open:[...open],panes:panes.map(p=>({...panePosition(p),thesisReading:thesisPosition(p.thesisReading)})),pageFolds:pageFoldStates}}
+function replacePane(pi,id,object=null){
+    const previous=panes[pi],old=paneBox.children[pi];
+    if(old&&old._readingPane===previous)capturePane(old);
+    panes[pi]={id,edit:false,object,thesisReading:thesisPosition({id})?null:thesisPosition(previous)||thesisPosition(previous?.thesisReading)};
+}
 function flushReading(){
     clearTimeout(readingTimer);
     const pending=readingPending;readingPending=null;
@@ -226,7 +233,7 @@ async function load(force=false){
             if(r?.pageFolds&&typeof r.pageFolds==='object')pageFoldStates=r.pageFolds;
             if(r&&Array.isArray(r.panes)&&r.panes.length){
                 view=r.view==='blocks'?'blocks':'thesis';
-                panes=r.panes.slice(0,2).map(p=>({id:typeof p.id==='string'&&find(p.id)?p.id:null,edit:false,reading:p.reading||null}));
+                panes=r.panes.slice(0,2).map(p=>({id:typeof p.id==='string'&&find(p.id)?p.id:null,edit:false,reading:p.reading||null,thesisReading:thesisPosition(p.thesisReading)}));
                 active=Math.max(0,Math.min(panes.length-1,Number(r.active)||0));
                 open=new Set(Array.isArray(r.open)?r.open.filter(id=>find(id)):[]);
             }
@@ -243,11 +250,23 @@ async function load(force=false){
     }catch(e){readingReady=false;db=null;currentWorkspace=null;readingRestored=false;nav.replaceChildren();$('sideTools').replaceChildren();$('workspaceName').textContent='PaperEditer';for(const id of ['treeTab','blockTab','dual','newNode','search'])$(id).disabled=true;status('未打开文件');paneBox.replaceChildren(el('p','empty',e.message));console.error(e)}
 }
 function mobileClose(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
-function setView(v){captureReading();view=v;$('treeTab').classList.toggle('active',v==='thesis');$('blockTab').classList.toggle('active',v==='blocks');search='';$('search').value='';const id=v==='thesis'?(find(panes[active].id)&&spaceOf(panes[active].id)==='thesis'?panes[active].id:db.thesis.find(n=>n.id==='chap:introduction')?.id||db.thesis[0]?.id):null;if(panes[active].id!==id)panes[active]={id,edit:false};renderNav();renderPanes()}
+function setView(v){
+    captureReading();
+    view=v;$('treeTab').classList.toggle('active',v==='thesis');$('blockTab').classList.toggle('active',v==='blocks');search='';$('search').value='';
+    const p=panes[active];
+    if(v==='thesis'){
+        if(!thesisPosition(p)){
+            const saved=thesisPosition(p.thesisReading);
+            panes[active]=saved?{...saved,edit:false}:{id:db.thesis.find(n=>n.id==='chap:introduction')?.id||db.thesis[0]?.id||null,edit:false};
+            if(panes[active].id)ancestors(find(panes[active].id)).forEach(id=>open.add(id));
+        }
+    }else if(p.id!==null)replacePane(active,null);
+    renderNav();renderPanes()
+}
 function select(id,pi=active,object=null){
     if(!find(id))return;
     if(pi>=panes.length)panes.push({id:null,edit:false});
-    panes[pi]={id,edit:false,object};active=pi;view=spaceOf(id);
+    replacePane(pi,id,object);active=pi;view=spaceOf(id);
     $('treeTab').classList.toggle('active',view==='thesis');$('blockTab').classList.toggle('active',view==='blocks');
     ancestors(find(id)).forEach(x=>open.add(x));mobileClose();renderNav();renderPanes();
     if(object)setTimeout(()=>{const p=paneBox.children[pi];const t=[...p.querySelectorAll('[data-object]')].find(e=>e.dataset.object===object);if(t){let a=t.parentElement;while(a&&a!==p){if(a.tagName==='DETAILS')a.open=true;a=a.parentElement}t.classList.add('highlight');t.scrollIntoView({block:'center',behavior:'smooth'});setTimeout(()=>t.classList.remove('highlight'),2500)}},80);
@@ -685,7 +704,7 @@ function renderNav(){
     $('newNode').title=view==='blocks'?'新建知识块':'新建章节';
     const list=db[view];
     const query=search.trim().toLowerCase();
-    if(view==='blocks')nav.append(btn('块网总览',()=>{panes[active]={id:null,edit:false};renderPanes();mobileClose()},'navlabel'));
+    if(view==='blocks')nav.append(btn('块网总览',()=>{replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
     function add(n,depth,hit=false){
         const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));
         row.style.paddingLeft=Math.min(depth,8)*12+'px';row.draggable=true;
@@ -1063,7 +1082,7 @@ function renderPanes(){
 $('treeTab').onclick=()=>setView('thesis');$('blockTab').onclick=()=>setView('blocks');
 $('drawer').onclick=()=>{$('sidebar').classList.toggle('open');$('overlay').classList.toggle('show')};$('overlay').onclick=mobileClose;
 $('search').oninput=e=>{search=e.target.value;renderNav()};$('newNode').onclick=()=>newNode(view);
-$('dual').onclick=()=>{if(panes.length===1){panes.push({id:panes[0].id,edit:false});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
+$('dual').onclick=()=>{if(panes.length===1){panes.push({id:panes[0].id,edit:false,thesisReading:thesisPosition(panes[0].thesisReading)});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
 $('refresh').onclick=()=>{if(dialog._commitNote)closeWorkbenchDialog();load()};$('closeDialog').onclick=()=>closeWorkbenchDialog();
 $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
