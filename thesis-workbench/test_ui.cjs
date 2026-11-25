@@ -42,6 +42,43 @@ async function fixture(browser,mobile=false,shared=null){
 }
 const menu=(p,name)=>p.locator('#menu').getByRole('button',{name,exact:true});
 async function contextAt(p,loc){await loc.click({button:'right'});await p.locator('#menu').waitFor({state:'visible'})}
+async function checkTreeMenuDrag(p){
+    await p.evaluate(()=>select('demo-start'));
+    const row=p.locator('#nav .navrow').first();
+    await row.locator('button').last().click();
+    assert.deepEqual(await p.locator('#menu button').allTextContents(),['新建同级','新建子','删除']);
+    await menu(p,'新建同级').click();
+    const sibling=await p.evaluate(()=>panes[active].id);
+    assert(await p.evaluate(id=>find(id).title===''&&find(id).body===''&&find(id).parent===null&&!dialog.open&&children('thesis',null).at(-1).id===id,sibling));
+    await contextAt(p,p.locator('#nav .navrow.selected'));
+    assert.deepEqual(await p.locator('#menu button').allTextContents(),['新建同级','新建子','删除']);
+    await menu(p,'新建子').click();
+    const child=await p.evaluate(()=>panes[active].id);
+    assert(await p.evaluate(([id,parent])=>find(id).parent===parent&&find(id).title===''&&find(id).body===''&&!dialog.open,[child,sibling]));
+    await p.locator('.pane .editableTitle').first().fill('Temporary child');
+    assert.equal(await p.evaluate(id=>find(id).title,child),'Temporary child');
+    const drag=async (pos,hold,leave=false)=>{
+        await p.evaluate(([id,pos])=>{
+            select(id);const source=document.querySelector('#nav .navrow.selected'),target=document.querySelector('#nav .navrow');
+            const r=target.getBoundingClientRect(),dt=new DataTransfer();window.treeDrag={source,target,dt,y:r.top+r.height*pos};
+            source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dt}));
+            target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt,clientY:window.treeDrag.y}));
+        },[sibling,pos]);
+        if(hold)await p.waitForFunction(()=>document.querySelector('.drop-inside'));
+        if(leave)await p.evaluate(()=>{const {target,dt,y}=window.treeDrag;target.dispatchEvent(new DragEvent('dragleave',{bubbles:true,dataTransfer:dt}));target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt,clientY:y}))});
+        await p.evaluate(()=>{const {target,dt,y}=window.treeDrag;target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt,clientY:y}))});
+    };
+    await drag(.4,false);assert(await p.evaluate(id=>find(id).parent===null&&children('thesis',null)[0].id===id,sibling));
+    await p.evaluate(id=>moveTo(id,'demo-start','after'),sibling);
+    await drag(.6,true,true);assert.equal(await p.evaluate(id=>find(id).parent,sibling),null);
+    await drag(.6,true);assert.equal(await p.evaluate(id=>find(id).parent,sibling),'demo-start');
+    await p.evaluate(id=>select(id),sibling);
+    await p.locator('#nav .navrow.selected button').last().click();
+    await p.evaluate(()=>window.confirm=()=>true);
+    await menu(p,'删除').click();
+    assert(await p.evaluate(([a,b])=>!find(a)&&!find(b)&&!!find('demo-start'),[sibling,child]));
+    await p.evaluate(()=>undo(false));assert(await p.evaluate(([a,b])=>!!find(a)&&!!find(b),[sibling,child]));
+}
 async function checkCleanBody(p,mobile=false){
     await p.evaluate(()=>select('demo-start'));
     const child=p.locator('details.child[data-section-id="demo-method"]'),summary=child.locator(':scope > summary'),title=summary.locator('.editableTitle');
@@ -244,6 +281,7 @@ async function run(){
             assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop and mobile path input, UNC forwarding, shared history and reading, invalid path preserves document');return;
         }
         const {p,context,errors}=await fixture(browser);
+        if(process.argv.includes('--tree-menu-only')){await checkTreeMenuDrag(p);assert.deepEqual(errors,[]);await context.close();console.log('PASS: tree menu, blank creation, reorder, nesting delay/reset, subtree deletion and undo');return}
         if(process.argv.includes('--clean-body-only')){
             await checkCleanBody(p);assert.deepEqual(errors,[]);await context.close();
             const mobile=await fixture(browser,true);await checkCleanBody(mobile.p,true);assert.deepEqual(mobile.errors,[]);await mobile.context.close();

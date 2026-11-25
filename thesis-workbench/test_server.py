@@ -44,6 +44,19 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "[]")
         self.assertFalse((self.data / "blocks.json").exists())
 
+    def test_blank_thesis_node_round_trip(self):
+        server.initialize_data()
+        package=pack(self.data,Path(self.tmp.name)/'blank.paper')
+        with patch.object(server,'PACKAGE',package):
+            s=server.state()
+            s['thesis'].append(dict(id='blank',title='',body='',parent='demo-start',level=2,order=1,file='thesis/blank.md'))
+            self.assertEqual(server.save(s)[0],200)
+        with patch.object(server,'PACKAGE',Package(package.filename)):
+            s=server.state()
+            self.assertEqual((s['thesis'][-1]['title'],s['thesis'][-1]['body']),('',''))
+            s['thesis'][-1]['title']='Filled title'
+            self.assertEqual(server.save(s)[0],200)
+
     def test_invalid_path(self):
         server.initialize_data()
         with self.assertRaises(ValueError):

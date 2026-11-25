@@ -6,3 +6,5 @@
 .workspacePathForm button{flex:none;white-space:nowrap}
 .workspaceRecent{display:flex!important;flex-direction:column;align-items:flex-start!important;text-align:left;gap:4px;white-space:normal!important;max-width:100%;min-width:0}
 .workspaceRecent span{overflow-wrap:anywhere;word-break:break-word;max-width:100%}
+
+.navrow.drop-before{box-shadow:inset 0 2px #5689b7}.navrow.drop-after{box-shadow:inset 0 -2px #5689b7}.navrow.drop-inside{outline:2px solid #5689b7;background:#e7edf3}

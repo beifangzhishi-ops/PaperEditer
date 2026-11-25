@@ -735,7 +735,7 @@ function editor(n,host,pi,summary=null){
     if(!isBlock)heading.append(title);else heading.append(el('div','spacer'));
     heading.append(btn('⋯',e=>menuAt(e,sectionMenu()),'sectionMore'));context(heading,sectionMenu,()=>resolve(n.id),isBlock);
     const doc=visualDocument(n.body,s=>{if(s===n.body)return;checkpoint();n.body=s;if(isBlock)n.title=blockLabel(s);change(false);if(isBlock)renderNav();for(const card of doc.root.querySelectorAll('.visualCard')){const p=card._part;if(p?.id){const label=card.querySelector('.visualNum');if(label)label.textContent=resolve(p.id)?.number||''}}},n.id,pi);
-    title.addEventListener('input',()=>{if(!editingEnabled)return;const t=title.value.trim()||n.title;if(t===n.title)return;checkpoint();n.title=t;change(false);renderNav();if(summary)summary.querySelector('.childCollapsedTitle').textContent=label(n)});
+    title.addEventListener('input',()=>{if(!editingEnabled)return;const t=title.value.trim();if(t===n.title)return;checkpoint();n.title=t;change(false);renderNav();if(summary)summary.querySelector('.childCollapsedTitle').textContent=label(n)});
     doc.root._sectionMenu=sectionMenu;
     if(summary){summary.append(heading);title.addEventListener('click',e=>e.stopPropagation());refreshObjectAnnotations(heading)}else host.append(heading);
     host.append(doc.root);refreshObjectAnnotations(host)
@@ -832,14 +832,6 @@ function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
         };
         d.append(doc.root);setupNoteResize(d);requestAnimationFrame(()=>doc.root.querySelector('.richText')?.focus());return
     }
-    const d=showDialog(options.annotation?'新建批注/知识块':space==='blocks'?'新建知识块':'新建章节',options);
-    if(options.annotation)d.append(el('p','small',options.binding?.mode==='selection'?'绑定选中文本开头':options.binding?.mode==='caret'?'绑定当前光标':'独立知识块（不绑定正文）'));
-    const name=el('input');name.placeholder='输入标题';name.value=title;name.style.width='100%';
-    const doc=visualDocument(remapCopiedObjects(body),()=>{},null);
-    d.append(name,doc.root,btn('创建',()=>{if(!name.value.trim()){name.focus();return}checkpoint();const id=(space==='blocks'?'block-':'sec-')+uid();
-        const n={id,title:name.value.trim(),parent,level:parent?ancestors(find(parent)).length+2:1,number:'',file:space+'/'+id+'.md',source:'',order:db[space].length,body:remapCopiedObjects(doc.getValue())};
-        if(options.binding)n.annotation={owner:options.binding.owner.id,mode:options.binding.mode,quote:options.binding.quote};
-        db[space].push(n);normalizeOrder(space);dialog.close();change(false);if(onCreated){onCreated(id);renderNav()}else{select(id);panes[active].edit=true;renderPanes()}
-    }));setTimeout(()=>name.focus(),30)
+    createEmptyThesis(parent)
 };
 
