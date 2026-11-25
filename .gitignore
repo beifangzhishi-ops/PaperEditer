@@ -1,0 +1,50 @@
+# Public repository: allowlist source files only.
+/*
+!/.gitignore
+!/README.md
+!/SECURITY.md
+!/thesis-workbench/
+/thesis-workbench/*
+!/thesis-workbench/README.md
+!/thesis-workbench/AGENTS.md
+!/thesis-workbench/app.js
+!/thesis-workbench/visual.js
+!/thesis-workbench/index.html
+!/thesis-workbench/manifest.webmanifest
+!/thesis-workbench/app-icon-192.png
+!/thesis-workbench/app-icon-512.png
+!/thesis-workbench/style.css
+!/thesis-workbench/visual.css
+!/thesis-workbench/server.py
+!/thesis-workbench/start.pyw
+!/thesis-workbench/import_thesis.py
+!/thesis-workbench/package.json
+!/thesis-workbench/package-lock.json
+!/thesis-workbench/requirements.txt
+!/thesis-workbench/requirements-import.txt
+!/thesis-workbench/test_server.py
+!/thesis-workbench/test_ui.cjs
+!/thesis-workbench/workspace.py
+!/thesis-workbench/example.paper
+# All private data, original figures, screenshots, logs, local configuration,
+# dependencies and existing project-specific QA scripts stay local.
+
+# Synthetic public example only; real workspaces remain ignored.
+!/thesis-workbench/example-data/
+/thesis-workbench/example-data/*
+!/thesis-workbench/example-data/assets.json
+!/thesis-workbench/example-data/blocks.json
+!/thesis-workbench/example-data/import-report.json
+!/thesis-workbench/example-data/original_labels.json
+!/thesis-workbench/example-data/outline.json
+!/thesis-workbench/example-data/assets/
+/thesis-workbench/example-data/assets/*
+!/thesis-workbench/example-data/assets/demo.png
+!/thesis-workbench/example-data/blocks/
+/thesis-workbench/example-data/blocks/*
+!/thesis-workbench/example-data/blocks/demo-free.md
+!/thesis-workbench/example-data/blocks/demo-note.md
+!/thesis-workbench/example-data/thesis/
+/thesis-workbench/example-data/thesis/*
+!/thesis-workbench/example-data/thesis/demo-start.md
+!/thesis-workbench/example-data/thesis/demo-method.md

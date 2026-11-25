@@ -1,0 +1,52 @@
+[
+  {
+    "id": "demo-note",
+    "title": "Example annotation",
+    "parent": null,
+    "level": 1,
+    "number": "",
+    "file": "blocks/demo-note.md",
+    "source": "",
+    "order": 0,
+    "annotation": {
+      "owner": "demo-start",
+      "mode": "selection",
+      "quote": "A fictional example",
+      "floatOffset": {
+        "x": 14,
+        "y": 8
+      }
+    },
+    "objectBindings": [
+      {
+        "targetId": "demo-eq",
+        "floatOffset": {
+          "x": 14,
+          "y": 8
+        }
+      }
+    ]
+  },
+  {
+    "id": "demo-free",
+    "title": "Independent note",
+    "parent": null,
+    "level": 1,
+    "number": "",
+    "file": "blocks/demo-free.md",
+    "source": "",
+    "order": 1,
+    "freePlacements": [
+      {
+        "id": "demo-placement",
+        "pageId": "demo-start",
+        "x": 0.05,
+        "y": 230,
+        "floatOffset": {
+          "x": 14,
+          "y": 8
+        }
+      }
+    ]
+  }
+]

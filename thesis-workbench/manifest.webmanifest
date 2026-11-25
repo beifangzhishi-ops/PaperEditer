@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "PaperEditer",
+  "short_name": "PaperEditer",
+  "description": "论文阅读、编辑、批注和知识块工作台",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#ffffff",
+  "icons": [
+    {"src": "/app-icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/app-icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
