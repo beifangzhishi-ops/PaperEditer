@@ -1,4 +1,4 @@
-# 博论工作台：Agent 读取约定
+# PaperEditer：Agent 读取约定
 
 两个独立空间。默认 data/outline.json 是正式论文树索引，data/thesis/ 下每节一个 Markdown 文件；data/blocks.json 是独立知识块索引，data/blocks/ 下每块一个 Markdown 文件，初始为空。实际数据目录可通过 PAPEREDITER_DATA_DIR 配置。工程模式下，workspace.local.json 指向实际 .paper 文本索引；其 files 映射将逻辑路径解析为 .paper 同目录下的实际相对路径，objects 记录对象路径与定位信息。先确认活动工作区，再读取普通文件；可使用 workspace.py list/unpack/refresh。修改时优先调用应用保存接口并检查 revision；直接编辑普通文件后用 refresh 更新派生对象索引。不得将知识块当作正式论文正文。original/ 是首次导入的 TeX 片段。只在用户要求时同步，不自动覆盖 TeX 或知识块。用户数据、导入源、原始图片和历史快照均不得提交到公开仓库。
 

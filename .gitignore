@@ -3,6 +3,13 @@
 !/.gitignore
 !/README.md
 !/SECURITY.md
+!/CONTRIBUTING.md
+!/.gitattributes
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/test.yml
 !/thesis-workbench/
 /thesis-workbench/*
 !/thesis-workbench/README.md
