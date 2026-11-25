@@ -423,6 +423,11 @@ function installToolHint(button){
         clearTimeout(hintTimer);const fired=press.fired;press=null;
         if(fired){suppressClick=true;hintDismiss=setTimeout(hideToolHint,1400)}
         else if(type!=='pointerup'){suppressClick=true;hideToolHint()}
+        else if(['剪切','复制','粘贴'].includes(button.dataset.tool)&&button.getAttribute('aria-disabled')!=='true'&&[...document.querySelectorAll('.visualDocument')].some(d=>d._mixedRange?.())){
+            // Chromium may suppress the compatibility click after dragging
+            // a touch selection. Execute the short tap once on pointerup.
+            button.click();suppressClick=true
+        }
     });
     button.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation()});
     button.addEventListener('click',e=>{

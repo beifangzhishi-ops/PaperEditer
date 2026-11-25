@@ -182,35 +182,41 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     const compare=(a,b)=>collapsed(a).compareBoundaryPoints(Range.START_TO_START,collapsed(b));
     const cardOf=n=>(n.nodeType===1?n:n.parentElement)?.closest('.visualCard');
     function rangeOf(a,b){const r=collapsed(a);if(compare(a,b)<=0)r.setEnd(b.node,b.offset);else r.setStart(b.node,b.offset);return r}
-    function selectedPieces(r){
+    function selectedPieces(r,serialize=false){
         if(!r||r.collapsed||!body.contains(r.startContainer)||!body.contains(r.endContainer))return [];
         return cards().flatMap(card=>{
             const bounds=document.createRange();bounds.selectNode(card);
             if(r.compareBoundaryPoints(Range.END_TO_START,bounds)>=0||r.compareBoundaryPoints(Range.START_TO_END,bounds)<=0)return [];
             const p=card._part;
-            if(p.kind!=='text')return [{card,p,raw:card._clipboardRaw?.()||p.raw}];
+            if(p.kind!=='text')return [serialize?{card,p,raw:card._clipboardRaw?.()||p.raw}:{card,p}];
             const area=card.querySelector('.richText'),whole=document.createRange();whole.selectNodeContents(area);
             const local=whole.cloneRange();
             if(area.contains(r.startContainer))local.setStart(r.startContainer,r.startOffset);
             if(area.contains(r.endContainer))local.setEnd(r.endContainer,r.endOffset);
             if(local.collapsed)return [];
+            if(!serialize)return [{card,p,local}];
             const before=whole.cloneRange(),after=whole.cloneRange();before.setEnd(local.startContainer,local.startOffset);after.setStart(local.endContainer,local.endOffset);
             const md=x=>{const h=el('div');h.append(x.cloneContents());return richMarkdown(h,true)};
             return [{card,p,local,raw:md(local),before:md(before),after:md(after)}]
         })
     }
     function nativeRange(){const s=getSelection();return s?.rangeCount&&body.contains(s.anchorNode)&&body.contains(s.focusNode)?s.getRangeAt(0):null}
-    function activeMixed(){if(mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer))return mixed;const r=nativeRange();return r&&selectedPieces(r).length>1?r:null}
+    function activeMixed(){
+        if(mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer))return mixed;
+        const r=nativeRange();return r&&!r.collapsed&&cardOf(r.startContainer)!==cardOf(r.endContainer)?r:null
+    }
     root._mixedRange=activeMixed;
     const handles=[el('span','rangeHandle rangeStart'),el('span','rangeHandle rangeEnd')];
     for(const h of handles){h.hidden=true;root.append(h);h.setAttribute('aria-hidden','true')}
-    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;if(window.CSS?.highlights)CSS.highlights.delete('paper-range')}
+    let ownsHighlight=false;
+    function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');ownsHighlight=false}}
+    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearHighlight()}
     root._clearMixed=clearMixed;
     function syncRange(){
-        const r=activeMixed()||nativeRange(),pieces=selectedPieces(r),cross=!!activeMixed();
+        const cross=activeMixed(),r=cross||nativeRange(),pieces=selectedPieces(r);
         for(const c of cards())c.classList.toggle('rangeSelected',cross&&pieces.some(x=>x.card===c&&!x.local));
-        if(cross&&window.CSS?.highlights&&window.Highlight)CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));
-        if(!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length){for(const h of handles)h.hidden=true;return}
+        if(cross&&window.CSS?.highlights&&window.Highlight){CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));ownsHighlight=true}else clearHighlight();
+        if(!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length||(!cross&&!pieces[0].local)){for(const h of handles)h.hidden=true;return}
         for(let i=0;i<2;i++){
             const piece=i?pieces.at(-1):pieces[0],rr=piece.local?.cloneRange();if(rr)rr.collapse(!i);
             const b=rr?caretBounds(rr):piece.card.getBoundingClientRect(),h=handles[i];
@@ -221,11 +227,16 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root._syncRange=syncRange;
     function setRange(a,b){
         anchorPoint=a;focusPoint=b;const r=rangeOf(a,b);clearObject();mixed=r;
-        const s=getSelection();root.focus({preventScroll:true});try{s.setBaseAndExtent(a.node,a.offset,b.node,b.offset)}catch{}
+        const s=getSelection();root.focus({preventScroll:true});
+        // The logical range and CSS highlight are authoritative. Keeping a
+        // native selection across independent hosts makes mobile Chromium
+        // intercept the next toolbar tap to dismiss its native selection UI.
+        if(window.CSS?.highlights&&window.Highlight)s.removeAllRanges();
+        else try{s.setBaseAndExtent(a.node,a.offset,b.node,b.offset)}catch{}
         syncRange();scheduleToolbarUpdate()
     }
     function pointAt(x,y,fixed){
-        let card=document.elementFromPoint(x,y)?.closest('.visualCard');
+        let card=document.elementsFromPoint(x,y).map(n=>n.closest('.visualCard')).find(c=>c?.parentElement===body);
         if(!card||card.parentElement!==body)card=cards().filter(c=>c.getClientRects().length).sort((a,b)=>{const d=c=>{const r=c.getBoundingClientRect();return Math.max(r.top-y,y-r.bottom,0)};return d(a)-d(b)})[0];
         if(!card)return null;
         if(card._part.kind!=='text')return edge(card,compare(fixed,edge(card,false))<=0);
@@ -236,16 +247,31 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function selectionAnchor(){const s=getSelection();return anchorPoint||(s?.anchorNode&&body.contains(s.anchorNode)?point(s.anchorNode,s.anchorOffset):null)}
     root.addEventListener('pointerdown',e=>{
         if(e.target.closest('.rangeHandle'))return;
-        if(e.button===0&&e.shiftKey){const a=selectionAnchor(),b=a&&pointAt(e.clientX,e.clientY,a);if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node))){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}}
+        if(e.button===0&&e.shiftKey){
+            let a=selectionAnchor();
+            if(!a&&selectedObject){const c=cards().find(c=>c._part===selectedObject);if(c)a=edge(c,e.clientY<c.getBoundingClientRect().top)}
+            const b=a&&pointAt(e.clientX,e.clientY,a);
+            if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node))){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}
+        }
         if(e.button===0){clearMixed()}
     },true);
     root.addEventListener('click',e=>{if(e.shiftKey&&activeMixed()){e.preventDefault();e.stopImmediatePropagation()}},true);
     for(let i=0;i<2;i++)handles[i].addEventListener('pointerdown',e=>{
         const r=activeMixed()||nativeRange();if(!r)return;
-        e.preventDefault();e.stopPropagation();dragging=true;const h=handles[i],fixed=i?point(r.startContainer,r.startOffset):point(r.endContainer,r.endOffset);h.setPointerCapture(e.pointerId);
-        const move=ev=>{const b=pointAt(ev.clientX,ev.clientY-10,fixed);if(b)setRange(fixed,b)};
-        const end=()=>{dragging=false;h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);syncRange()};
-        h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
+        e.preventDefault();e.stopPropagation();dragging=true;$('menu').hidden=true;const h=handles[i],fixed=i?point(r.startContainer,r.startOffset):point(r.endContainer,r.endOffset);h.setPointerCapture(e.pointerId);
+        const scroller=root.closest('.blankNoteDialog .visualDocument,.pane')||root;
+        let latest=null,frame=0;
+        const update=()=>{if(!latest)return;const b=pointAt(latest.x,latest.y-10,fixed);if(b)setRange(fixed,b)};
+        const autoscroll=()=>{
+            frame=0;if(!dragging||!latest)return;
+            const rect=scroller.getBoundingClientRect(),top=Math.max(rect.top,0),bottom=Math.min(rect.bottom,innerHeight),margin=40;
+            const delta=latest.y<top+margin?-Math.min(20,(top+margin-latest.y)/3):latest.y>bottom-margin?Math.min(20,(latest.y-bottom+margin)/3):0;
+            if(delta){const before=scroller.scrollTop;scroller.scrollTop+=delta;if(scroller.scrollTop!==before)update()}
+            frame=requestAnimationFrame(autoscroll)
+        };
+        const move=ev=>{latest={x:ev.clientX,y:ev.clientY};update();if(!frame)frame=requestAnimationFrame(autoscroll)};
+        const end=()=>{dragging=false;cancelAnimationFrame(frame);h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);h.removeEventListener('lostpointercapture',end);syncRange()};
+        h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end);h.addEventListener('lostpointercapture',end)
     });
     root._prepareTouchRange=e=>{
         if(!e.target.closest('.part-text .richText')||activeMixed()||nativeRange()?.collapsed===false)return;
@@ -255,14 +281,20 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const word=segments.find(x=>x.index<=r.startOffset&&x.index+x.segment.length>r.startOffset&&x.isWordLike);if(!word)return;
         const s=getSelection();s.setBaseAndExtent(n,word.index,n,word.index+word.segment.length);syncRange()
     };
-    function mixedClipboard(r,cut){const pieces=selectedPieces(r),raw=pieces.map(x=>x.raw).filter(x=>x.trim()).join('\n\n');return cut?raw:remapCopiedObjects(raw,owner,true)}
+    function mixedClipboard(r,cut){const pieces=selectedPieces(r,true),raw=pieces.map(x=>x.raw).filter(x=>x.trim()).join('\n\n');return cut?raw:remapCopiedObjects(raw,owner,true)}
     function replaceMixed(r,text=''){
         if(!editingEnabled||!root.isConnected)return;
-        const pieces=selectedPieces(r);if(!pieces.length)return;
+        const pieces=selectedPieces(r,true);if(!pieces.length)return;
         const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
-        const replacement=[];if(first.before?.trim())replacement.push({kind:'text',raw:first.before});
-        if(text.trim())replacement.push(...visualParts(remapCopiedObjects(text,owner)));
-        if(last.after?.trim())replacement.push({kind:'text',raw:last.after});
+        const replacement=text.trim()?visualParts(remapCopiedObjects(text,owner)):[];
+        if(first.before?.trim()){
+            if(replacement[0]?.kind==='text')replacement[0].raw=first.before+replacement[0].raw;
+            else replacement.unshift({kind:'text',raw:first.before})
+        }
+        if(last.after?.trim()){
+            if(replacement.at(-1)?.kind==='text')replacement.at(-1).raw+=last.after;
+            else replacement.push({kind:'text',raw:last.after})
+        }
         parts.splice(i,j-i+1,...replacement);if(!parts.length)parts=[{kind:'text',raw:''}];
         selectedPart=parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();flush();const dest=cards().find(c=>c._part===selectedPart)?.querySelector('.part-text .richText');if(dest)placeIn(dest);else root.focus({preventScroll:true})
     }
@@ -276,8 +308,24 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root.addEventListener('keydown',e=>{
         if(e.isComposing||e.keyCode===229)return;
         const r=activeMixed();
+        if(r&&(e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&['c','x','v'].includes(e.key.toLowerCase())){
+            e.preventDefault();e.stopImmediatePropagation();
+            const key=e.key.toLowerCase(),items=mixedMenu(r);
+            if(key==='c')items[1][1]();else if(editingEnabled)items[key==='x'?0:2][1]();
+            return
+        }
         if(r&&['Delete','Backspace'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();if(editingEnabled)replaceMixed(r);return}
         if(r&&e.key==='Escape'){clearMixed();getSelection()?.removeAllRanges();return}
+        if(r&&!e.shiftKey&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)){
+            e.preventDefault();e.stopImmediatePropagation();const forward=['ArrowRight','ArrowDown','End'].includes(e.key),p=forward?point(r.endContainer,r.endOffset):point(r.startContainer,r.startOffset),card=cardOf(p.node),area=card?.querySelector('.part-text .richText');
+            clearMixed();const s=getSelection();
+            if(area?.contains(p.node)){if(editingEnabled)area.focus({preventScroll:true});s.collapse(p.node,p.offset)}
+            else if(card?._part.kind!=='text'&&card){selectObject(card._part,card);root.focus({preventScroll:true})}
+            else if(p.node===body){const c=cards()[forward?p.offset-1:p.offset];if(c?._part.kind==='text')placeIn(c.querySelector('.richText'),forward);else if(c){selectObject(c._part,c);root.focus({preventScroll:true})}}
+            return
+        }
+        if(r&&editingEnabled&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&e.key.length===1){e.preventDefault();e.stopImmediatePropagation();replaceMixed(r,e.key);return}
+        if(!r&&e.composedPath().some(n=>n.tagName==='MATH-FIELD'))return;
         if(!e.shiftKey||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)||e.ctrlKey||e.altKey||e.metaKey)return;
         const a=selectionAnchor(),s=getSelection(),b=focusPoint||(s?.focusNode&&body.contains(s.focusNode)?point(s.focusNode,s.focusOffset):null);if(!a||!b)return;
         const forward=['ArrowRight','ArrowDown'].includes(e.key),vertical=['ArrowUp','ArrowDown'].includes(e.key),card=cardOf(b.node),list=cards();let next;
