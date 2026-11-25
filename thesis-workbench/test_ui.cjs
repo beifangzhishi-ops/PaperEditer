@@ -76,8 +76,9 @@ async function checkTrashReferences(p){
 }
 async function checkMixedRange(browser,mobile){
     const {p,context,errors}=await fixture(browser,mobile);
-    await p.evaluate(()=>{find('demo-start').body='Alpha start\n\n:::equation range-eq\nx^2\n:::\n\n:::figure range-fig\nA figure\n\n![Swatches](/assets/demo.png "wb-id:range-sub")\n:::\n\nOmega end\n';select('demo-start')});
-    const first=p.locator('.pane .part-text .richText').first(),last=p.locator('.pane .part-text .richText').last();
+    await p.evaluate(()=>{find('demo-start').body='Alpha start\n\n:::equation range-eq\nx^2\n:::\n\n:::figure range-fig\nA figure\n\n![Swatches](/assets/demo.png "wb-id:range-sub wb-width:20")\n:::\n\nOmega end\n';select('demo-start')});
+    const doc=p.locator('.pane .visualDocument').first();
+    const first=doc.locator('.part-text .richText').first(),last=doc.locator('.part-text .richText').last();
     const textPoint=async(loc,offset)=>loc.evaluate((a,i)=>{const n=a.querySelector('p').firstChild,r=document.createRange();r.setStart(n,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},offset);
     if(mobile){
         const cdp=await context.newCDPSession(p),start=await textPoint(first,2);
@@ -93,7 +94,7 @@ async function checkMixedRange(browser,mobile){
         await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
     }else{
         await first.evaluate(a=>{a.focus();const n=a.querySelector('p').firstChild;getSelection().collapse(n,6)});
-        const dest=await textPoint(last,5);await p.keyboard.down('Shift');await p.mouse.click(dest.x,dest.y);await p.keyboard.up('Shift');
+        await last.scrollIntoViewIfNeeded();const dest=await textPoint(last,5);await p.keyboard.down('Shift');await p.mouse.click(dest.x,dest.y);await p.keyboard.up('Shift');
     }
     await p.waitForFunction(()=>document.querySelectorAll('.rangeSelected').length===2);
     const copy=await p.evaluate(async()=>{const d=document.querySelector('.pane .visualDocument');await d._clipboardMenu({target:d,useCurrentSelection:true})[1][1]();return localClipboard});
