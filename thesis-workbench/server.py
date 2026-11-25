@@ -119,7 +119,7 @@ def check(nodes,space):
     for n in nodes:
         if not re.fullmatch(r'[\w:.-]{1,160}',n.get('id','')) or n['id'] in ids:raise ValueError('Duplicate or invalid ID')
         ids.add(n['id'])
-        if not isinstance(n.get('title'),str) or not n['title'].strip() or len(n['title'])>500:raise ValueError('Invalid title')
+        if not isinstance(n.get('title'),str) or (space!='thesis' and not n['title'].strip()) or len(n['title'])>500:raise ValueError('Invalid title')
         if not isinstance(n.get('body'),str) or len(n['body'])>3000000:raise ValueError('Invalid body')
         p=path(n,space)
         if p in files:raise ValueError('Duplicate path')

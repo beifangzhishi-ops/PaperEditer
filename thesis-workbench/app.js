@@ -695,8 +695,54 @@ function newAnnotation(binding,e){
 function refToken(t){return '[['+(t.kind==='equation'?'eqref':'ref')+':'+(t.actualId||t.id)+']]'}
 function refMenu(t){return [['复制交叉引用',()=>copy(refToken(t))],['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],['查看关联网',()=>relationDialog(t.owner,t.id)]]}
 function nodeMenu(n){if(spaceOf(n.id)==='blocks')return [['复制交叉引用',()=>copy(refToken(resolve(n.id)))]];return [...refMenu(resolve(n.id)),['复制正文（含公式源码）',()=>copy(n.body)],['复制为新知识块',()=>createBlockFrom(n.body,n.title,n.id)],['新建子节点',()=>newNode(spaceOf(n.id),n.id)],['上移',()=>moveRelative(n,-1)],['下移',()=>moveRelative(n,1)],['缩进',()=>indent(n)],['取消缩进',()=>outdent(n)],['合并至上一节点',()=>mergePrev(n)],['删除节点',()=>deleteNode(n)]]}
+function createEmptyThesis(parent=null,after=null){
+    if(!requireEditMode())return;
+    checkpoint();const id='sec-'+uid(),n={id,title:'',parent,level:1,number:'',file:'thesis/'+id+'.md',source:'',order:db.thesis.length,body:''};
+    const list=db.thesis;
+    if(after){const sibling=find(after),last=descendants('thesis',after).at(-1)||sibling;list.splice(list.indexOf(last)+1,0,n)}else list.push(n);
+    normalizeOrder('thesis');change(false);select(id);
+}
+function treeNodeMenu(n){return [['新建同级目录',()=>createEmptyThesis(n.parent||null,n.id)],['新建子目录',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)]]}
+const TREE_NEST_DELAY=600;
+let treeDrop=null;
+function clearTreeDrop(){
+    if(!treeDrop)return;
+    clearTimeout(treeDrop.timer);clearTreeDropPaint(treeDrop);treeDrop=null
+}
+function updateTreeDrop(row,n,e){
+    const source=find(dragging);
+    if(!editingEnabled||!source||source.id===n.id||spaceOf(source.id)!==spaceOf(n.id)||ancestors(n).includes(source.id)){clearTreeDrop();return null}
+    const rect=row.getBoundingClientRect(),pos=(e.clientY-rect.top)/rect.height;
+    const center=pos>=.25&&pos<=.75,side=pos<.5?'before':'after';
+    if(!treeDrop||treeDrop.row!==row||treeDrop.center!==center){
+        clearTreeDrop();const state={row,node:n,space:view,center,where:side,ready:center&&view==='blocks',timer:null};treeDrop=state;
+        if(center&&!state.ready)state.timer=setTimeout(()=>{if(treeDrop===state&&dragging&&row.isConnected){state.ready=true;state.where='inside';paintTreeDrop(state)}},TREE_NEST_DELAY)
+    }
+    treeDrop.where=treeDrop.ready?'inside':side;paintTreeDrop(treeDrop);return treeDrop.where
+}
+function clearTreeDropPaint(state){
+    if(!state.marker)return;
+    state.marker.classList.remove('drop-before','drop-after','drop-inside');state.marker.style.removeProperty('--drop-indent');state.marker=null
+}
+function paintTreeDrop(state){
+    let marker=state.row;
+    // Inserting after an expanded node means after its entire visible subtree,
+    // at the target's level, not between the parent and its first child.
+    if(state.space==='thesis'&&state.where==='after'&&!search.trim()){
+        for(let next=state.row.nextElementSibling;next?.dataset.nodeId;next=next.nextElementSibling){
+            const node=find(next.dataset.nodeId),chain=ancestors(node);
+            if(!chain.includes(state.node.id))break;
+            if(node.id!==dragging&&!chain.includes(dragging))marker=next;
+        }
+    }
+    const indent=state.row.style.paddingLeft||'0px';
+    if(state.marker===marker&&state.paintedWhere===state.where)return;
+    clearTreeDropPaint(state);state.marker=marker;state.paintedWhere=state.where;
+    marker.style.setProperty('--drop-indent',indent);marker.classList.add('drop-'+state.where)
+}
 function renderNav(){
     if(!db)return;
+    clearTreeDrop();
     nav.replaceChildren();
     const branches=db[view].filter(n=>children(view,n.id).length).map(n=>n.id);
     const collapsed=branches.every(id=>!open.has(id));
@@ -712,18 +758,18 @@ function renderNav(){
     if(view==='blocks')nav.append(btn('块网总览',()=>{replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
     function add(n,depth,hit=false){
         const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));
-        row.style.paddingLeft=Math.min(depth,8)*12+'px';row.draggable=true;
+        row.style.paddingLeft=Math.min(depth,8)*12+'px';row.dataset.nodeId=n.id;row.draggable=true;
         const kids=children(view,n.id);
         const toggle=btn(kids.length?(open.has(n.id)?'▾':'▸'):'·',()=>{if(open.has(n.id))open.delete(n.id);else open.add(n.id);renderNav()});
-        const rowMenu=()=>view==='blocks'?[...nodeMenu(n),['删除',()=>deleteNode(n)]]:nodeMenu(n);
+        const rowMenu=()=>view==='blocks'?[...nodeMenu(n),['删除',()=>deleteNode(n)]]:treeNodeMenu(n);
         const t=el('span','navlabel',label(n));row.append(toggle,t,btn('⋯',e=>menuAt(e,rowMenu())));
         if(hit){const excerpt=n.body.toLowerCase().indexOf(query);if(excerpt>=0){const sub=el('span','searchhit',n.body.slice(Math.max(0,excerpt-14),excerpt+40));t.append(sub)}}
-        row.addEventListener('click',()=>select(n.id));context(row,rowMenu,()=>resolve(n.id),view==='blocks');
-        row.addEventListener('dragstart',e=>{dragging=n.id;e.dataTransfer.setData('text/plain',n.id);row.classList.add('dragging')});
-        row.addEventListener('dragend',()=>{dragging=null;row.classList.remove('dragging')});
-        row.addEventListener('dragover',e=>{if(dragging&&dragging!==n.id){e.preventDefault();row.classList.add('drop')}});
-        row.addEventListener('dragleave',()=>row.classList.remove('drop'));
-        row.addEventListener('drop',e=>{e.preventDefault();row.classList.remove('drop');const rect=row.getBoundingClientRect();const pos=(e.clientY-rect.top)/rect.height;moveTo(dragging,n.id,pos<.25?'before':pos>.75?'after':'inside');dragging=null});
+        row.addEventListener('click',()=>select(n.id));context(row,rowMenu,()=>resolve(n.id),true);
+        row.addEventListener('dragstart',e=>{if(!editingEnabled){e.preventDefault();return}clearTreeDrop();dragging=n.id;e.dataTransfer.setData('text/plain',n.id);row.classList.add('dragging')});
+        row.addEventListener('dragend',()=>{clearTreeDrop();dragging=null;row.classList.remove('dragging')});
+        row.addEventListener('dragover',e=>{if(updateTreeDrop(row,n,e))e.preventDefault()});
+        row.addEventListener('dragleave',e=>{if(treeDrop?.row===row&&!row.contains(e.relatedTarget))clearTreeDrop()});
+        row.addEventListener('drop',e=>{e.preventDefault();const where=updateTreeDrop(row,n,e),id=dragging;clearTreeDrop();dragging=null;if(where)moveTo(id,n.id,where)});
         nav.append(row);if(!hit&&open.has(n.id))for(const child of kids)add(child,depth+1);
     }
     if(query){for(const n of list.filter(n=>(n.title+' '+n.body).toLowerCase().includes(query)))add(n,0,true)}
