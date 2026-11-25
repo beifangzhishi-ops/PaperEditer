@@ -1,11 +1,11 @@
-// Isolated browser regression tests: example.paper is read only, saves are mocked.
+// Isolated browser regression tests: example.json is read only, saves are mocked.
 const {chromium}=require('playwright-core');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const {execFileSync}=require('node:child_process');
 const data=JSON.parse(execFileSync('python',['-c',
-    "import server,json,base64;from workspace import Package;server.PACKAGE=Package('example.paper');s=server.state();s.update(workspace={'id':'test','name':'example.paper'},originalLabels={},importReport={});print(json.dumps({'state':s,'image':base64.b64encode(server.PACKAGE.read('assets/demo.png')).decode()}))"
+    "import server,json,base64;from workspace import Package;server.PACKAGE=Package('example.json');s=server.state();s.update(workspace={'id':'test','name':'example.json'},originalLabels={},importReport={});print(json.dumps({'state':s,'image':base64.b64encode(server.PACKAGE.read('assets/demo.png')).decode()}))"
 ],{cwd:__dirname,encoding:'utf8'}));
 const origin='http://127.0.0.1:18761';
 async function fixture(browser,mobile=false,shared=null){
@@ -24,7 +24,7 @@ async function fixture(browser,mobile=false,shared=null){
         if(shared&&name==='/api/workspaces')return r.fulfill({json:{files:shared.recent.map(x=>({...x,active:x.id===shared.workspace.id})),current:shared.workspace}});
         if(shared&&name==='/api/workspaces/open'){
             const filename=r.request().postDataJSON().path;shared.requested=filename;
-            if(filename.endsWith('missing.paper'))return r.fulfill({status:400,json:{error:'文件不存在'}});
+            if(filename.endsWith('missing.json'))return r.fulfill({status:400,json:{error:'文件不存在'}});
             shared.workspace={id:filename,name:filename.split(/[\\/]/).pop(),path:filename};shared.recent=[shared.workspace,...shared.recent.filter(x=>x.path!==filename)];
             return r.fulfill({json:shared.workspace})
         }
@@ -250,7 +250,7 @@ async function checkNewlineDeletion(browser,mobile){
 async function checkTreeReturn(browser,mobile){
     const state=JSON.parse(JSON.stringify(data.state));
     state.thesis.find(n=>n.id==='demo-method').body=Array.from({length:80},(_,i)=>'Reading paragraph '+i+' with enough text to scroll.').join('\n\n');
-    const workspace={id:'tree-return',name:'example.paper'},shared={workspace,reading:{},recent:[workspace],state};
+    const workspace={id:'tree-return',name:'example.json'},shared={workspace,reading:{},recent:[workspace],state};
     const first=await fixture(browser,mobile,shared),p=first.p;
     const clickTab=async(page,id)=>mobile?page.locator(id).tap():page.locator(id).click();
     const scroll=()=>document.querySelector('.pane.activepane').scrollTop;
@@ -291,23 +291,23 @@ async function run(){
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--workspace-only')){
-            const initial='C:\\Projects\\example.paper',network='\\\\server\\share\\network.paper';
-            const shared={workspace:{id:initial,name:'example.paper',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
+            const initial='C:\\Projects\\example.json',network='\\\\server\\share\\network.json';
+            const shared={workspace:{id:initial,name:'example.json',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
             const desktop=await fixture(browser,false,shared);
             await desktop.p.locator('#openWorkspace').click();
             await desktop.p.getByRole('textbox',{name:'服务器文件路径'}).fill(network);
             await desktop.p.locator('.workspacePathForm button').click();
-            await desktop.p.waitForFunction(()=>currentWorkspace?.name==='network.paper');assert.equal(shared.requested,network);
+            await desktop.p.waitForFunction(()=>currentWorkspace?.name==='network.json');assert.equal(shared.requested,network);
             await desktop.p.locator('#blockTab').click();
             await desktop.p.waitForTimeout(650);assert.equal(shared.reading[network].view,'blocks');
             const mobile=await fixture(browser,true,shared);
             assert.equal(await mobile.p.evaluate(()=>view),'blocks');
             await mobile.p.locator('#openWorkspace').tap();
-            await mobile.p.getByRole('textbox',{name:'服务器文件路径'}).fill('C:\\Projects\\missing.paper');
+            await mobile.p.getByRole('textbox',{name:'服务器文件路径'}).fill('C:\\Projects\\missing.json');
             await mobile.p.locator('.workspacePathForm button').tap();
-            await mobile.p.getByText('文件不存在',{exact:true}).waitFor();assert.equal(await mobile.p.evaluate(()=>currentWorkspace.name),'network.paper');
-            await mobile.p.locator('.workspaceRecent').filter({hasText:'example.paper'}).tap();
-            await mobile.p.waitForFunction(()=>currentWorkspace?.name==='example.paper');assert.equal(shared.requested,initial);
+            await mobile.p.getByText('文件不存在',{exact:true}).waitFor();assert.equal(await mobile.p.evaluate(()=>currentWorkspace.name),'network.json');
+            await mobile.p.locator('.workspaceRecent').filter({hasText:'example.json'}).tap();
+            await mobile.p.waitForFunction(()=>currentWorkspace?.name==='example.json');assert.equal(shared.requested,initial);
             assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop and mobile path input, UNC forwarding, shared history and reading, invalid path preserves document');return;
         }
         const {p,context,errors}=await fixture(browser);

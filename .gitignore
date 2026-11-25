@@ -33,7 +33,7 @@
 !/thesis-workbench/test_server.py
 !/thesis-workbench/test_ui.cjs
 !/thesis-workbench/workspace.py
-!/thesis-workbench/example.paper
+!/thesis-workbench/example.json
 # All private data, original figures, screenshots, logs, local configuration,
 # dependencies and existing project-specific QA scripts stay local.
 

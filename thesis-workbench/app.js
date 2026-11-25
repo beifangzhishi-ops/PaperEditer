@@ -1139,8 +1139,8 @@ $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
     if(dialog._commitNote)closeWorkbenchDialog();
     const d=showDialog('打开文件');
-    d.append(el('p','small','输入服务器上的 .paper 文件绝对路径，支持本地磁盘和 UNC 网络共享路径。直接编辑原文件。'));
-    const form=el('form','workspacePathForm'),input=el('input','workspacePath');input.type='text';input.required=true;input.autocomplete='off';input.autocapitalize='off';input.spellcheck=false;input.placeholder='C:\\项目\\文件.paper 或 \\\\服务器\\共享\\文件.paper';input.setAttribute('aria-label','服务器文件路径');
+    d.append(el('p','small','输入服务器上的 .json 文件绝对路径，支持本地磁盘和 UNC 网络共享路径。直接编辑原文件。'));
+    const form=el('form','workspacePathForm'),input=el('input','workspacePath');input.type='text';input.required=true;input.autocomplete='off';input.autocapitalize='off';input.spellcheck=false;input.placeholder='C:\\项目\\文件.json 或 \\\\服务器\\共享\\文件.json';input.setAttribute('aria-label','服务器文件路径');
     const submit=el('button','','打开');submit.type='submit';form.append(input,submit);d.append(form);
     const message=el('p','small');d.append(message,el('h3','','最近打开'));
     const list=el('div','visualPickList');d.append(list);

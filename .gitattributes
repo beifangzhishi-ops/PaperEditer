@@ -6,7 +6,6 @@
 *.css text eol=lf
 *.html text eol=lf
 *.json text eol=lf
-*.paper text eol=lf
 *.webmanifest text eol=lf
 *.md text eol=lf
 *.yml text eol=lf

@@ -5,7 +5,7 @@ PaperEditer 的 Git 仓库仅维护编辑器本身及虚构示例，不管理实
 ## 开发流程
 
 1. 参考 [安装说明](README.md) 安装依赖。默认直接在 `main` 开发；只有用户明确要求分支开发时，才创建独立分支及 Git worktree，或继续指定的已有分支。每次提交保持范围单一。完整规则见 [AGENTS.md](AGENTS.md)。
-2. 使用 `thesis-workbench/example.paper` 的副本及对应 `example-data/` 复现问题，不使用真实论文作为测试夹具。
+2. 使用 `thesis-workbench/example.json` 的副本及对应 `example-data/` 复现问题，不使用真实论文作为测试夹具。
 3. 在 `thesis-workbench/` 中运行 `python -m unittest test_server` 和 `node test_ui.cjs`。浏览器路径可通过 `PAPEREDITER_CHROME_PATH` 指定；在非 Windows 系统上请指定已安装浏览器的可执行文件路径。
 4. 提交前检查 `git diff --cached`、`git status --short`，确认修改与测试数据可以公开。新增源码或测试夹具时，按需更新 `.gitignore` 中的精确白名单，不要强制添加被忽略的文件。
 5. 测试通过、完整提交且工作区干净后，记录测试结果。直接在 `main` 开发无需合并；明确要求的独立分支在完成提交的消息正文添加 `Ready-for-merge: yes` 并等待用户合并指令，未完成的分支不参与发布。合并后须验证受影响功能，再重启服务并检查健康状态（仅文档改动无需重启），随后检查公开范围并推送 `main` 至现有 GitHub Public 仓库，核对远端提交。没有可合并分支时不重启；此前已验证但未推送的 `main` 提交可补推。不强制推送。
@@ -16,4 +16,4 @@ PaperEditer 的 Git 仓库仅维护编辑器本身及虚构示例，不管理实
 
 ## 仓库范围
 
-不提交用户 `.paper` 文件、正文、原图、备份、运行时配置、缓存、日志、依赖安装目录或本地部署脚本。新增公开示例必须完全虚构。仓库未附带项目级许可证。
+不提交用户 `.json` 文件、正文、原图、备份、运行时配置、缓存、日志、依赖安装目录或本地部署脚本。新增公开示例必须完全虚构。仓库未附带项目级许可证。

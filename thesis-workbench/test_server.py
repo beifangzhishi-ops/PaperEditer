@@ -46,7 +46,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_blank_thesis_node_round_trip(self):
         server.initialize_data()
-        package=pack(self.data,Path(self.tmp.name)/'blank.paper')
+        package=pack(self.data,Path(self.tmp.name)/'blank.json')
         with patch.object(server,'PACKAGE',package):
             s=server.state()
             s['thesis'].append(dict(id='blank',title='',body='',parent='demo-start',level=2,order=1,file='thesis/blank.md'))
@@ -64,7 +64,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_trash_persists_in_paper_and_restores(self):
         server.initialize_data()
-        package=pack(self.data,Path(self.tmp.name)/"trash.paper")
+        package=pack(self.data,Path(self.tmp.name)/"trash.json")
         with patch.object(server,"PACKAGE",package):
             s=server.state()
             n=dict(id='note',title='Note',parent=None,level=1,order=0,file='blocks/note.md',body='Content')
@@ -85,7 +85,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_package_save_and_round_trip(self):
         server.initialize_data()
         original=server.state()
-        package=pack(self.data,Path(self.tmp.name)/"example.paper")
+        package=pack(self.data,Path(self.tmp.name)/"example.json")
         self.assertEqual(package.manifest(),{
             f.relative_to(self.data).as_posix():__import__('hashlib').sha256(f.read_bytes()).hexdigest()
             for f in self.data.rglob("*") if f.is_file()
@@ -110,7 +110,7 @@ class WorkspaceTests(unittest.TestCase):
         root=Path(self.tmp.name)
         external=root/"existing.md"
         external.write_text("Existing text",encoding="utf-8")
-        p=pack(self.data,root/"test.paper")
+        p=pack(self.data,root/"test.json")
         p.reference("blocks/existing.md",external)
         self.assertEqual(p.read("blocks/existing.md"),b"Existing text")
         with self.assertRaises(RuntimeError):
@@ -139,7 +139,7 @@ class WorkspaceTests(unittest.TestCase):
             db.execute("PRAGMA application_id=1346458693")
             db.execute("CREATE TABLE entries(name TEXT PRIMARY KEY,data BLOB NOT NULL)")
             db.executemany("INSERT INTO entries VALUES (?,?)",rows.items())
-        p=migrate(legacy,root/"new.paper")
+        p=migrate(legacy,root/"new.json")
         self.assertEqual(p.manifest(),{k:hashlib.sha256(v).hexdigest() for k,v in rows.items()})
         index=json.loads(p.filename.read_text(encoding="utf-8"))
         self.assertEqual(index["files"]["assets/a.png"],"existing.png")
@@ -151,10 +151,10 @@ class WorkspaceTests(unittest.TestCase):
         server.initialize_data()
         root=Path(self.tmp.name)
         first=pack(self.data,root/"first.paper")
-        second=pack(self.data,root/"second.paper")
+        second=pack(self.data,root/"second.json")
         with patch.object(server,"PACKAGE",first),patch.object(server,"CONFIG",root/"settings.json"),patch.object(server,"WORKSPACE_ERROR",None):
             result=server.open_workspace(str(second.filename))
-            self.assertEqual(result["name"],"second.paper")
+            self.assertEqual(result["name"],"second.json")
             self.assertEqual(server.load(root/"settings.json")["workspace"],str(second.filename))
             self.assertEqual([x['path'] for x in server.workspace_catalog()['files']],[str(second.filename)])
             position={'view':'thesis','active':0,'open':[],'panes':[{'id':'demo-start','reading':{'top':120}}]}
@@ -163,8 +163,12 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.open_workspace("../first.paper")
             with self.assertRaises(FileNotFoundError):
-                server.open_workspace(str(root/"missing.paper"))
-            self.assertEqual(server.workspace_info()["name"],"second.paper")
+                server.open_workspace(str(root/"missing.json"))
+            invalid=root/"invalid.json"
+            invalid.write_text("{}",encoding="utf-8")
+            with self.assertRaises(ValueError):
+                server.open_workspace(str(invalid))
+            self.assertEqual(server.workspace_info()["name"],"second.json")
             server.open_workspace(str(first.filename))
             self.assertIsNone(server.reading_position())
             server.open_workspace(str(second.filename))

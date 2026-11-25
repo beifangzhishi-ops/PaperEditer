@@ -1,4 +1,4 @@
-"""UTF-8 .paper project index with direct relative file references."""
+"""UTF-8 .json project index with direct relative file references."""
 import argparse
 import contextlib
 import copy

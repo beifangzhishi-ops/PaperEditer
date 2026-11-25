@@ -15,11 +15,11 @@ def settings_save(settings):
     settings.pop('roots',None)
     dump(CONFIG,settings)
 def workspace_path(filename):
-    if not isinstance(filename,str):raise ValueError('请输入 .paper 文件绝对路径')
+    if not isinstance(filename,str):raise ValueError('请输入 .json 文件绝对路径')
     filename=filename.strip()
     if len(filename)>1 and filename[0]==filename[-1]=='"':filename=filename[1:-1]
     p=Path(filename)
-    if not p.is_absolute() or p.suffix.lower()!='.paper' or filename.startswith(('\\\\?\\','\\\\.\\')):raise ValueError('请输入有效的 .paper 文件绝对路径')
+    if not p.is_absolute() or filename.startswith(('\\\\?\\','\\\\.\\')):raise ValueError('请输入有效的 .json 文件绝对路径')
     return p.resolve()
 def workspace_info():
     if PACKAGE is None:return {'id':'directory','name':'示例工作区'}
@@ -276,7 +276,7 @@ if __name__=='__main__':
         except Exception:
             PACKAGE=None;WORKSPACE_ERROR='上次打开的工作区无法读取，请重新选择文件。'
     elif 'PAPEREDITER_DATA_DIR' in os.environ:initialize_data()
-    else:WORKSPACE_ERROR='尚未打开文档，请输入服务器上的 .paper 文件路径。'
+    else:WORKSPACE_ERROR='尚未打开文档，请输入服务器上的 .json 文件路径。'
     port=int(os.environ.get('PAPEREDITER_PORT','8191'))
     print(f'PaperEditer 127.0.0.1:{port}',flush=True)
     WorkbenchServer(('127.0.0.1',port),Handler).serve_forever()
