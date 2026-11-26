@@ -170,7 +170,7 @@ async function checkCleanBody(p,mobile=false){
     await summary.locator('.childCollapsedTitle').click();
     const area=child.locator('.richText').first();
     await contextAt(p,area);
-    assert.deepEqual(await p.locator('#menu button').allTextContents(),['剪切','复制','粘贴','插入交叉引用','新建批注']);
+    assert.deepEqual(await p.locator('#menu button').allTextContents(),['剪切','复制','粘贴','添加公式','添加独立公式','插入交叉引用','新建批注']);
     await menu(p,'插入交叉引用').click();
     assert.equal(await p.locator('#dialog .visualPickList button').filter({hasText:'Example annotation'}).count(),0);
     await p.locator('#dialog .visualPickList button').filter({hasText:'Example measurements'}).click();
@@ -468,6 +468,45 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--math-only')){
+            const {p,context,errors}=await fixture(browser);
+            await p.evaluate(()=>select('demo-start'));
+            const area=p.locator('.pane .part-text .richText').first();
+            await area.click();
+            await p.evaluate(()=>{const a=document.activeElement,r=document.createRange();r.selectNodeContents(a);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r)});
+            const count=await area.locator('math-field').count();
+            await p.keyboard.press('Alt+Equal');
+            assert.equal(await area.locator('math-field').count(),count+1);
+            const field=area.locator('math-field').last();
+            await p.locator('.mathPalette').waitFor({state:'visible'});
+            await p.keyboard.press('a');await p.keyboard.press('Slash');await p.keyboard.press('b');
+            assert.match(await field.evaluate(f=>f.value),/\\frac\{a\}\{b\}/);
+            await p.keyboard.press('ArrowRight');
+            await p.keyboard.press('ArrowRight');
+            await p.waitForFunction(()=>document.activeElement?.classList.contains('richText'));
+            await p.keyboard.type(' after');
+            assert.match(await p.evaluate(()=>find('demo-start').body),/after/);
+            await contextAt(p,area);
+            await menu(p,'添加独立公式').click();
+            const eq=p.locator('.pane .part-equation:not([data-object="demo-eq"])');
+            const eqField=eq.locator('math-field');
+            await p.locator('.mathPalette').getByRole('button',{name:'根号',exact:true}).click();
+            await p.keyboard.type('x');
+            assert.equal(await eqField.evaluate(f=>f.value),'\\sqrt{x}');
+            await p.keyboard.press('Escape');
+            assert.equal(await eq.evaluate(c=>c.classList.contains('selectedObject')),true);
+            await p.keyboard.press('Delete');
+            assert.equal(await eq.count(),0);
+            assert.equal(await p.locator('.pane .part-equation').count(),1);
+            assert.deepEqual(errors,[]);await context.close();
+            const mobile=await fixture(browser,true);
+            await mobile.p.evaluate(()=>{select('demo-start');if(!editingEnabled)toggleEditMode()});
+            await mobile.p.locator('.pane .part-text math-field').first().tap();
+            await mobile.p.locator('.mathPalette').waitFor({state:'visible'});
+            await mobile.p.waitForFunction(()=>window.mathVirtualKeyboard.visible);
+            assert.deepEqual(mobile.errors,[]);await mobile.context.close();
+            console.log('PASS: formula shortcut, native fraction, move-out, shared formula palette, object selection/delete and mobile keyboard');return
+        }
         if(process.argv.includes('--annotation-selection-only')){
             await checkAnnotationSelection(browser,false);await checkAnnotationSelection(browser,true);
             console.log('PASS: single-location annotations, label and window selection, copy/cut/paste/delete, desktop/mobile');return
@@ -938,7 +977,7 @@ async function run(){
         await q.waitForTimeout(550);
         await q.locator('#shortcutSettings').tap();
         await tools.waitFor({state:'hidden'});
-        assert.equal(await q.locator('.shortcutRow').count(),9);
+        assert.equal(await q.locator('.shortcutRow').count(),10);
         const copyShortcut=q.getByRole('textbox',{name:'复制快捷键',exact:true});
         await copyShortcut.focus();await copyShortcut.press('Control+Alt+B');
         assert.equal(await copyShortcut.inputValue(),'Ctrl+Alt+B');

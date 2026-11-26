@@ -688,7 +688,7 @@ function menuAt(e,items){
     m.style.maxHeight=Math.max(60,h-8)+'px';const x=e.clientX??15,y=e.clientY??70;m.style.left=Math.max(ox+4,Math.min(x,ox+w-m.offsetWidth-5))+'px';m.style.top=Math.max(oy+4,Math.min(y,oy+h-m.offsetHeight-5))+'px';
 }
 let localClipboard=null, localClipboardPreferred=false, touchMenuAt=0;
-const isActionSurface=e=>!!e?.closest?.('#menu,#floatingTools,#headerActions');
+const isActionSurface=e=>!!e?.closest?.('#menu,#floatingTools,#headerActions,.mathPalette,.ML__keyboard');
 async function writeEditorClipboard(value){
     localClipboard=value;
     try{await navigator.clipboard.writeText(value);localClipboardPreferred=false;return true}catch{localClipboardPreferred=true;showToast('已保存到编辑器剪贴板');return true}
@@ -1663,11 +1663,12 @@ const defaultShortcuts={
     [MODE_TOOL]:combo('e',true),
     '剪切':combo('x'),'复制':combo('c'),'粘贴':combo('v'),
     '新建批注':combo('f'),
+    '添加公式':{ctrl:false,alt:true,shift:false,key:'='},
     '复制交叉引用':combo('r',true),'撤销':combo('z'),'重做':combo('y'),
     '显示/隐藏工具栏':combo('t',true)
 };
 function shortcutLabel(s){return s?[s.ctrl?'Ctrl':'',s.alt?'Alt':'',s.shift?'Shift':'',s.key.toUpperCase()].filter(Boolean).join('+'):'未设置'}
-function validShortcut(s){return s===null||!!(s&&typeof s.key==='string'&&/^[a-z0-9]$/.test(s.key)&&['ctrl','alt','shift'].every(k=>typeof s[k]==='boolean')&&(s.ctrl||s.alt))}
+function validShortcut(s){return s===null||!!(s&&typeof s.key==='string'&&/^[a-z0-9=]$/.test(s.key)&&['ctrl','alt','shift'].every(k=>typeof s[k]==='boolean')&&(s.ctrl||s.alt))}
 let toolShortcuts=(()=>{
     const result=clone(defaultShortcuts);
     try{
@@ -1733,7 +1734,7 @@ function shortcutSettings(){
             const mod=el('select'),key=el('select');
             mod.setAttribute('aria-label',label+'修饰键');key.setAttribute('aria-label',label+'按键');
             for(const [v,t] of modifiers)mod.append(new Option(t,v));
-            for(const k of 'abcdefghijklmnopqrstuvwxyz0123456789')key.append(new Option(k.toUpperCase(),k));
+            for(const k of 'abcdefghijklmnopqrstuvwxyz0123456789=')key.append(new Option(k.toUpperCase(),k));
             function sync(){const v=values[label];input.value=shortcutLabel(v);mod.value=modValue(v);key.value=v?.key||'a'}
             function applySelect(){set(label,{ctrl:mod.value.includes('c'),alt:mod.value.includes('a'),shift:mod.value.includes('s'),key:key.value});sync()}
             mod.onchange=applySelect;key.onchange=applySelect;
@@ -1774,6 +1775,10 @@ document.addEventListener('keydown',e=>{
     let label=Object.keys(toolShortcuts).find(k=>matches(toolShortcuts[k]));
     if(!label&&shortcutLabel(toolShortcuts['重做'])==='Ctrl+Y'&&(e.ctrlKey||e.metaKey)&&e.shiftKey&&!e.altKey&&key==='z')label='重做';
     if(!label)return;
+    if(label==='添加公式'){
+        if(e.target.closest?.('input,textarea,select,math-field')||dialog.open&&!dialog.querySelector('.visualDocument')||(!dialog.open&&panes[active]?.history))return;
+        e.preventDefault();e.stopImmediatePropagation();if(!e.repeat)toolbarAction(label);return
+    }
     if(label===MODE_TOOL){
         if(dialog.open&&!dialog.querySelector('.visualDocument'))return;
         e.preventDefault();e.stopImmediatePropagation();if(!e.repeat)toggleEditMode();return

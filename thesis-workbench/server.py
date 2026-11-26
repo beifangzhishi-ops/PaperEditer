@@ -16,7 +16,7 @@ def settings_load():
 def settings_save(settings):
     settings.pop('roots',None)
     dump(CONFIG,settings)
-SHORTCUT_TOOLS={'切换查看/编辑模式','剪切','复制','粘贴','新建批注','复制交叉引用','撤销','重做','显示/隐藏工具栏'}
+SHORTCUT_TOOLS={'切换查看/编辑模式','剪切','复制','粘贴','新建批注','添加公式','复制交叉引用','撤销','重做','显示/隐藏工具栏'}
 def shortcut_settings(settings):
     values=settings.get('toolShortcuts')
     if isinstance(values,dict):
@@ -31,7 +31,7 @@ def save_shortcuts(payload):
     seen=set()
     for value in values.values():
         if value is None:continue
-        if not isinstance(value,dict) or set(value)!={'ctrl','alt','shift','key'} or any(type(value[k]) is not bool for k in ('ctrl','alt','shift')) or not isinstance(value['key'],str) or not re.fullmatch(r'[a-z0-9]',value['key']) or not (value['ctrl'] or value['alt']):raise ValueError('Invalid shortcut')
+        if not isinstance(value,dict) or set(value)!={'ctrl','alt','shift','key'} or any(type(value[k]) is not bool for k in ('ctrl','alt','shift')) or not isinstance(value['key'],str) or not re.fullmatch(r'[a-z0-9=]',value['key']) or not (value['ctrl'] or value['alt']):raise ValueError('Invalid shortcut')
         combo=(value['ctrl'],value['alt'],value['shift'],value['key'])
         if combo in seen or (combo[:3]==(True,False,False) and combo[3] in 'srwtln'):raise ValueError('Duplicate or reserved shortcut')
         seen.add(combo)

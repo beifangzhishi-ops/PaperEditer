@@ -113,6 +113,7 @@ class WorkspaceTests(unittest.TestCase):
                     self.assertEqual(request(),(200,empty))
                     values=dict.fromkeys(server.SHORTCUT_TOOLS)
                     values['复制']={'ctrl':True,'alt':True,'shift':False,'key':'b'}
+                    values['添加公式']={'ctrl':False,'alt':True,'shift':False,'key':'='}
                     code,first=request({'revision':None,'shortcuts':values});self.assertEqual(code,200)
                     self.assertEqual(request(workspace='b'),(200,first))
                     self.assertEqual(server.shortcut_settings(server.settings_load()),first)

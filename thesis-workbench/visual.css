@@ -70,6 +70,13 @@
 .rangeHandle::after{content:'';display:block;width:16px;height:16px;background:#315fc6;border-radius:50%;margin:0 auto;border:1px solid white}
 .rangeHandle[hidden]{display:none}
 .viewMode math-field::part(virtual-keyboard-toggle){display:none!important}
+/* A single formula toolbar, shared by inline and numbered formula fields.
+   It lives outside editable content and never becomes part of the document. */
+.mathPalette{display:flex;position:fixed;z-index:10010;box-sizing:border-box;flex-wrap:nowrap;overflow-x:auto;max-height:68px;margin:0;padding:5px;gap:4px;background:#fff;border:1px solid #b9cbd9;border-radius:8px;box-shadow:0 3px 14px #20395024;align-items:center;touch-action:pan-x}
+.mathPalette button{flex:none;min-width:32px;min-height:32px;padding:3px 7px;font-size:17px;line-height:1.2;white-space:nowrap}
+.visualMath:not(.displayMath):focus-within{outline:1px solid #b4c9d9;outline-offset:2px;background:#fafcfe;min-width:20px!important}
+.inlineMathAtom{display:inline-block;vertical-align:baseline;white-space:nowrap;max-width:100%}
+@media(max-width:760px){.mathPalette{width:calc(100vw - 16px);max-height:55px}.mathPalette button{min-height:36px;min-width:36px}}
 /* Native fullscreen and immersive fallback share the same full header. */
 #fullscreenToggle{display:grid;place-items:center;min-width:34px;flex:none}
 #fullscreenToggle[aria-pressed="true"]{background:#e6edf5;color:#245481}
