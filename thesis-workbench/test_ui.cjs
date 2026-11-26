@@ -400,7 +400,7 @@ async function checkAnnotationImages(browser,mobile){
     const activate=async loc=>mobile?loc.tap():loc.click();
     const note=p.locator('.pane .inlineAnnotation[data-token="[[embed:demo-note]]"]').first();
     const images=p.locator('#dialog .visualImages img');
-    await activate(note);if(await p.evaluate(()=>editingEnabled))await activate(note);await images.first().waitFor();assert.equal(await images.count(),2);
+    await activate(note);await images.first().waitFor();assert.equal(await images.count(),2);
     await activate(images.first());
     await p.waitForFunction(()=>document.querySelector('#dialog .selectedImage img')?.alt==='Legacy image');
     assert.equal(await p.locator('#dialog .selectedImage .resizeHandle').count(),4);
@@ -424,7 +424,7 @@ async function checkAnnotationImages(browser,mobile){
     assert.equal(await menu(p,'复制交叉引用').count(),1);
     await menu(p,'复制').click();
     await p.waitForFunction(id=>localClipboard?.startsWith(':::subfigure')&&!localClipboard.includes(id),formalSub.id);
-    await activate(note);if(await p.evaluate(()=>editingEnabled))await activate(note);await images.first().waitFor();
+    await activate(note);await images.first().waitFor();
     await contextAt(p,p.locator('#dialog .part-text .richText').first());await menu(p,'粘贴').click();
     await p.waitForFunction(()=>document.querySelectorAll('#dialog .visualImages img').length===3);
     await activate(images.first());await p.waitForFunction(()=>!!document.querySelector('#dialog .selectedImage'));
@@ -443,8 +443,8 @@ async function checkAnnotationSelection(browser,mobile){
     await p.evaluate(()=>select('demo-start'));
     const marker=id=>p.locator('.pane .inlineAnnotation[data-note-id="'+id+'"]').first();
     const original=marker('demo-note');
-    const selected=async loc=>{await click(loc);await p.waitForFunction(()=>!!document.querySelector('.selectedNoteLabel'));assert.equal(await p.locator('#dialog').isVisible(),false)};
-    const paste=async()=>{const area=p.locator('.pane .part-text .richText').nth(1);await area.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);const data=new DataTransfer();data.setData('text/plain',localClipboard);a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})};
+    const selected=async loc=>{await click(loc);await p.waitForFunction(()=>!!document.querySelector('.selectedNoteLabel'));assert.equal(await p.locator('#dialog').isVisible(),true);assert.equal(await loc.getAttribute('aria-pressed'),'true');assert.equal(await p.locator('#dialog .noteWindowHandle').getAttribute('aria-pressed'),'true');assert.equal(await p.evaluate(()=>document.activeElement.matches('.noteWindowHandle')),true)};
+    const paste=async()=>{await p.evaluate(()=>closeWorkbenchDialog());const area=p.locator('.pane .part-text .richText').nth(1);await area.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);const data=new DataTransfer();data.setData('text/plain',localClipboard);a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})};
     await selected(original);await p.keyboard.press('Control+C');await p.waitForFunction(()=>localClipboard?.startsWith(ANNOTATION_CLIPBOARD));
     await paste();await p.waitForFunction(()=>db.blocks.length===3);
     const duplicate=await p.evaluate(()=>db.blocks.find(n=>!['demo-note','demo-free'].includes(n.id)).id);
@@ -452,15 +452,15 @@ async function checkAnnotationSelection(browser,mobile){
     await p.evaluate(()=>undo(false));await p.waitForFunction(()=>db.blocks.length===2);
     await selected(original);await p.keyboard.press('Control+X');await p.waitForFunction(()=>!annotationLocations(find('demo-note')).length);
     await paste();await p.waitForFunction(()=>annotationLocations(find('demo-note')).length===1);assert.equal(await p.evaluate(()=>db.blocks.length),2);
-    await selected(original);await click(original);await p.locator('#dialog .richText').first().waitFor({state:'visible'});
+    await selected(original);await p.locator('#dialog .richText').first().waitFor({state:'visible'});
     const handle=p.locator('#dialog .noteWindowHandle');await click(handle);await p.waitForFunction(()=>document.querySelector('#dialog .noteWindowHandle.selectedNoteLabel'));
     await p.keyboard.press('Control+C');await p.waitForFunction(()=>annotationClipboardValue(localClipboard)?.id==='demo-note');
-    await click(p.locator('#dialog .richText').first());assert.equal(await handle.evaluate(e=>e.classList.contains('selectedNoteLabel')),false);
+    await click(p.locator('#dialog .richText').first());assert.equal(await handle.evaluate(e=>e.classList.contains('selectedNoteLabel')),false);assert.equal(await original.getAttribute('aria-pressed'),'false');await p.keyboard.press('Backspace');assert(await p.evaluate(()=>!!find('demo-note')));
     await click(handle);await p.waitForFunction(()=>document.querySelector('#dialog .noteWindowHandle.selectedNoteLabel'));
     await p.keyboard.press('Delete');await p.waitForFunction(()=>!find('demo-note')&&db.trash.length===1&&!dialog.open);
     await p.evaluate(()=>{const n={...clone(find('demo-free')),id:'test-object-note',file:'blocks/test-object-note.md',title:'Object note',body:'Object note',parent:null,order:db.blocks.length};clearAnnotationPlacement(n);n.objectBindings=[{targetId:'demo-eq'}];db.blocks.push(n);change(true)});
     const object=p.locator('.objectNoteMarker[data-note-id="test-object-note"]');await selected(object);await p.keyboard.press('Delete');await p.waitForFunction(()=>!find('test-object-note'));
-    const free=p.locator('.freeNoteMarker[data-note-id="demo-free"]');await selected(free);await p.keyboard.press('Delete');await p.waitForFunction(()=>!find('demo-free'));
+    const free=p.locator('.freeNoteMarker[data-note-id="demo-free"]');await selected(free);await p.keyboard.press('Backspace');await p.waitForFunction(()=>!find('demo-free'));
     await p.evaluate(()=>setView('blocks'));assert.equal(await p.locator('.pane h1').innerText(),'批注一览');assert.equal(await p.locator('.graph,.blockNetwork').count(),0);
     assert.equal(await p.evaluate(()=>db.trash.length),3);assert.deepEqual(errors,[]);await context.close();
 }
@@ -581,6 +581,24 @@ async function run(){
                 await p.evaluate(()=>closeWorkbenchDialog());
                 await p.waitForFunction(quote=>[...(CSS.highlights.get('paper-annotation')||[])].some(r=>r.toString()===quote),quote);
                 assert(await p.evaluate(quote=>db.blocks.some(n=>n.annotation?.owner==='demo-start'&&n.annotation.quote===quote),quote));
+                await p.waitForFunction(()=>textAnnotationRanges.length>0);
+                const noteId=await p.evaluate(()=>textAnnotationRanges[0].chip.dataset.noteId);
+                const point=await p.evaluate(()=>{const r=textAnnotationRanges[0].range.getClientRects()[0];return {x:r.left+r.width/2,y:r.top+r.height/2}});
+                if(isMobile)await p.touchscreen.tap(point.x,point.y);else await p.mouse.click(point.x,point.y);
+                await p.waitForFunction(id=>dialog.open&&selectedNoteId===id&&dialog._noteId===id,noteId);
+                assert.equal(await p.evaluate(()=>CSS.highlights.get('paper-annotation-selected')?.size),1);
+                assert.equal(await p.locator('.pane .inlineAnnotation[data-note-id="'+noteId+'"]').getAttribute('aria-pressed'),'true');
+                const edit=p.locator('#dialog .richText').first();
+                if(isMobile)await edit.tap();else await edit.click();
+                await p.waitForFunction(()=>!selectedNoteId&&!CSS.highlights.has('paper-annotation-selected'));
+                await edit.fill('Edited annotation');await p.keyboard.press('Backspace');
+                assert(await p.evaluate(id=>!!find(id),noteId));
+                const handle=p.locator('#dialog .noteWindowHandle');
+                if(isMobile)await handle.tap();else await handle.click();
+                await p.waitForFunction(id=>selectedNoteId===id,noteId);
+                await p.keyboard.press(isMobile?'Backspace':'Delete');
+                await p.waitForFunction(id=>!find(id)&&!dialog.open&&!CSS.highlights.get('paper-annotation')?.size,noteId);
+                assert.equal(await p.evaluate(()=>find('demo-start').body),original);
                 assert.deepEqual(errors,[]);await context.close();
             }
             console.log('PASS: selected text annotation highlights, rerender and undo on desktop/mobile');return
@@ -696,7 +714,6 @@ async function run(){
         await p.waitForFunction(()=>!find('demo-start').body.includes('wb-id:demo-subfig'));
         await contextAt(p,p.locator('[data-object="demo-fig"] .partLabel'));await menu(p,'粘贴').click();
         await p.waitForFunction(()=>find('demo-start').body.includes('wb-id:demo-subfig'));
-        await p.locator('.pane .inlineAnnotation').first().click();
         await p.locator('.pane .inlineAnnotation').first().click();
         await contextAt(p,p.locator('#dialog .richText').first());
         await menu(p,'删除批注').click();

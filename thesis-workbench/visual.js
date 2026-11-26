@@ -46,18 +46,34 @@ function mathPanel(field){
 }
 // A note marker is a selectable reference, not an editable text character.
 const noteLabelSelector='.inlineAnnotation,.objectNoteMarker,.freeNoteMarker,.noteWindowHandle';
+let selectedNoteId=null;
+let textAnnotationRanges=[];
+function syncNoteSelection(){
+    for(const chip of document.querySelectorAll(noteLabelSelector)){
+        const selected=!!selectedNoteId&&chip.dataset.noteId===selectedNoteId;
+        chip.classList.toggle('selectedNoteLabel',selected);
+        chip.setAttribute('aria-pressed',String(selected));
+    }
+    if(globalThis.CSS?.highlights&&typeof Highlight!=='undefined'){
+        const ranges=textAnnotationRanges.filter(x=>x.chip.isConnected&&x.chip.dataset.noteId===selectedNoteId).map(x=>x.range);
+        if(ranges.length){const h=new Highlight(...ranges);h.priority=1;CSS.highlights.set('paper-annotation-selected',h)}
+        else CSS.highlights.delete('paper-annotation-selected');
+    }
+}
 function clearNoteLabel(){
-    document.querySelectorAll('.selectedNoteLabel').forEach(chip=>{chip.classList.remove('selectedNoteLabel');chip.setAttribute('aria-pressed','false')});
+    if(!selectedNoteId)return;
+    selectedNoteId=null;syncNoteSelection();scheduleToolbarUpdate();
 }
 function selectNoteLabel(chip){
-    clearNoteLabel();
+    if(!chip?.isConnected)return;
     for(const root of document.querySelectorAll('.visualDocument')){root._clearObject?.();root._clearMixed?.()}
-    chip.classList.add('selectedNoteLabel');chip.setAttribute('aria-pressed','true');
-    chip.focus({preventScroll:true});getSelection()?.removeAllRanges();scheduleToolbarUpdate();
+    selectedNoteId=chip.dataset.noteId;syncNoteSelection();
+    const handle=dialog.open&&dialog._noteId===selectedNoteId&&dialog.querySelector('.noteWindowHandle');
+    (handle||chip).focus({preventScroll:true});getSelection()?.removeAllRanges();scheduleToolbarUpdate();
 }
 function noteLabelMenu(chip){
     const id=chip.dataset.noteId,n=find(id);if(!n)return [];
-    const detach=()=>{if(!chip.isConnected||!requireEditMode())return;clearNoteLabel();chip._detachNote?.()};
+    const detach=()=>{if(!chip.isConnected||!requireEditMode())return;clearNoteLabel();if(dialog.open&&dialog._noteId===id&&!chip.matches('.noteWindowHandle'))closeWorkbenchDialog();chip._detachNote?.()};
     return [['剪切',async()=>{if(chip._detachNote&&requireEditMode()){await writeEditorClipboard(annotationClipboard(n,true));detach()}},!chip._detachNote],['复制',()=>writeEditorClipboard(annotationClipboard(n))],
         ['打开批注',()=>chip._openNote?.()],
         ['删除批注',()=>{if(!requireEditMode())return;clearNoteLabel();if(dialog.open)closeWorkbenchDialog();deleteNode(find(id))}],
@@ -65,24 +81,28 @@ function noteLabelMenu(chip){
 }
 function setupNoteLabel(chip,id,open,detach,windowHandle=false){
     chip.dataset.noteId=id;chip.tabIndex=0;chip.setAttribute('role','button');chip.setAttribute('aria-pressed','false');
-    chip.title=windowHandle?'单击选中批注，拖动移动窗口':'单击选中，再次点击打开批注（查看模式直接打开）';
-    chip._openNote=()=>{clearNoteLabel();const r=chip.getBoundingClientRect();open({clientX:r.left,clientY:r.bottom})};
+    chip.title=windowHandle?'\u70b9\u51fb\u9009\u4e2d\u6279\u6ce8':'\u6253\u5f00\u5e76\u9009\u4e2d\u6279\u6ce8';
+    chip._openNote=()=>{const r=chip.getBoundingClientRect();open({clientX:r.left,clientY:r.bottom});if(!windowHandle){const handle=dialog.querySelector('.noteWindowHandle');if(handle)selectNoteLabel(handle)}};
     chip._detachNote=detach;
-    let wasSelected=false;
-    chip.addEventListener('pointerdown',e=>{wasSelected=chip.classList.contains('selectedNoteLabel');if(e.button===0&&e.pointerType!=='touch')e.preventDefault()});
-    chip.addEventListener('pointercancel',()=>{wasSelected=false});
-    chip.addEventListener('click',e=>{e.stopPropagation();const reopen=wasSelected||chip.classList.contains('selectedNoteLabel');wasSelected=false;if(windowHandle)selectNoteLabel(chip);else if(!editingEnabled||reopen){clearNoteLabel();open(e)}else selectNoteLabel(chip)});
+    chip.addEventListener('pointerdown',e=>{if(e.button===0&&e.pointerType!=='touch')e.preventDefault()});
+    chip.addEventListener('click',e=>{e.stopPropagation();if(windowHandle)selectNoteLabel(chip);else chip._openNote()});
     chip.addEventListener('keydown',e=>{
         if(e.defaultPrevented||e.isComposing||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return;
         if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();chip._openNote();return}
         if(e.key==='Escape'){clearNoteLabel();scheduleToolbarUpdate();return}
-        if(e.key==='Delete'&&chip.classList.contains('selectedNoteLabel')){e.preventDefault();e.stopPropagation();if(editingEnabled&&!e.repeat)noteLabelMenu(chip).find(x=>x[0]==='删除批注')?.[1]()}
+        if(['Delete','Backspace'].includes(e.key)&&chip.classList.contains('selectedNoteLabel')){e.preventDefault();e.stopPropagation();if(editingEnabled&&!e.repeat)deleteNode(find(id))}
     });
     context(chip,()=>{selectNoteLabel(chip);return noteLabelMenu(chip)},()=>resolve(id),true);
 }
 document.addEventListener('pointerdown',e=>{if(!isActionSurface(e.target)&&!e.target.closest('.selectedNoteLabel'))clearNoteLabel()},true);
 document.addEventListener('focusin',e=>{if(!isActionSurface(e.target)&&!e.target.closest('.selectedNoteLabel'))clearNoteLabel()},true);
 document.addEventListener('click',e=>{if(dialog.open&&(e.target===dialog||e.target===$('dialogBody'))){const handle=dialog.querySelector('.noteWindowHandle');if(handle)selectNoteLabel(handle)}});
+document.addEventListener('click',e=>{
+    if(e.defaultPrevented||e.button!==0||e.shiftKey||e.ctrlKey||e.metaKey||e.altKey||!e.target.closest('.pane .richText')||e.target.closest('[data-token],math-field,a,img,button'))return;
+    if(!getSelection()?.isCollapsed||e.target.closest('.visualDocument')?._mixedRange?.())return;
+    const hit=textAnnotationRanges.find(({chip,range})=>chip.isConnected&&chip.closest('.richText')===e.target.closest('.richText')&&[...range.getClientRects()].some(r=>e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom));
+    if(hit){e.preventDefault();hit.chip._openNote?.()}
+});
 function visualRef(kind,id,allowRefs=true){
     const chip=el('span','visualRef');chip.contentEditable='false';chip.dataset.token='[['+kind+':'+id+']]';
     if(kind==='embed'){const n=find(id);chip.textContent='※';chip.classList.add('inlineAnnotation');chip.setAttribute('aria-label','批注');chip.title='批注不存在';if(n)setupNoteLabel(chip,id,e=>{const current=find(id);if(current)openAnnotationNote(current,chip,e)},()=>{
@@ -918,6 +938,7 @@ function refreshTextAnnotations(){
         textHighlightFrame=0;
         if(!globalThis.CSS?.highlights||typeof Highlight==='undefined')return;
         const ranges=[];
+        textAnnotationRanges=[];
         for(const chip of paneBox.querySelectorAll('.richText .inlineAnnotation')){
             const owner=chip.closest('.visualDocument')?._owner,id=chip.dataset.token?.slice(8,-2),note=find(id);
             if(!owner||!note)continue;
@@ -932,13 +953,13 @@ function refreshTextAnnotations(){
                 if(chip.contains(n)||!(chip.compareDocumentPosition(n)&Node.DOCUMENT_POSITION_FOLLOWING))continue;
                 if(length+n.length>=quote.length){
                     range.setEnd(n,quote.length-length);
-                    if(range.toString()===quote)ranges.push(range);
+                    if(range.toString()===quote){ranges.push(range);textAnnotationRanges.push({chip,range})}
                     break;
                 }
                 length+=n.length;
             }
         }
-        const highlight=new Highlight(...ranges);highlight.priority=-1;CSS.highlights.set('paper-annotation',highlight);
+        const highlight=new Highlight(...ranges);highlight.priority=-1;CSS.highlights.set('paper-annotation',highlight);syncNoteSelection();
     });
 }
 function refreshObjectAnnotations(scope=document){
@@ -987,6 +1008,7 @@ function refreshFreeNotes(){
     }
 }
 function openAnnotationNote(n,chip,e,objectBinding=null,freePlacement=null){
+    if(dialog.open&&dialog._noteId===n.id)return;
     const owner=chip.closest('.visualDocument')?._owner,pane=chip.closest('.pane');
     const anchorRect=()=>{
         if(freePlacement)return freeNoteAnchor(freePlacement,pane);
@@ -1007,7 +1029,7 @@ function openAnnotationNote(n,chip,e,objectBinding=null,freePlacement=null){
     d.append(doc.root);setupNoteResize(d,n.floatSize,size=>{if(editingEnabled){n.floatSize=size;change(false)}});
     const handle=d.querySelector('h2');handle.classList.add('noteWindowHandle');handle.setAttribute('aria-label','选中批注浮窗');
     setupNoteLabel(handle,n.id,()=>{doc.root.querySelector('.richText,math-field')?.focus({preventScroll:true})},chip._detachNote?()=>{closeWorkbenchDialog();if(chip.isConnected)chip._detachNote()}:null,true);
-    requestAnimationFrame(()=>{if(editingEnabled&&!handle.classList.contains('selectedNoteLabel'))doc.root.querySelector('.richText')?.focus({preventScroll:true});scheduleToolbarUpdate()});
+    selectNoteLabel(handle);
 }
 function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
     if(!requireEditMode())return;
