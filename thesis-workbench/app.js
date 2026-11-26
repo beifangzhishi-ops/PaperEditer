@@ -1667,12 +1667,15 @@ const defaultShortcuts={
     '显示/隐藏工具栏':combo('t',true)
 };
 function shortcutLabel(s){return s?[s.ctrl?'Ctrl':'',s.alt?'Alt':'',s.shift?'Shift':'',s.key.toUpperCase()].filter(Boolean).join('+'):'未设置'}
-function validShortcut(s){return s===null||!!(s&&/^[a-z0-9]$/.test(s.key)&&(s.ctrl||s.alt))}
+function validShortcut(s){return s===null||!!(s&&typeof s.key==='string'&&/^[a-z0-9]$/.test(s.key)&&['ctrl','alt','shift'].every(k=>typeof s[k]==='boolean')&&(s.ctrl||s.alt))}
 let toolShortcuts=(()=>{
     const result=clone(defaultShortcuts);
     try{
         const saved=JSON.parse(localStorage.getItem(SHORTCUT_KEY));
-        if(saved){for(const label of Object.keys(result))if(Object.hasOwn(saved,label)&&validShortcut(saved[label]))result[label]=saved[label]}
+        if(saved){
+            if(!Object.hasOwn(saved,'新建批注')&&Object.hasOwn(saved,'新建批注/知识块'))saved['新建批注']=saved['新建批注/知识块'];
+            for(const label of Object.keys(result))if(Object.hasOwn(saved,label)&&validShortcut(saved[label]))result[label]=saved[label]
+        }
         else{
             const old=JSON.parse(localStorage.getItem('wb:new-note-shortcut:v1'));
             if(old&&validShortcut(old)&&!Object.entries(result).some(([label,s])=>label!=='新建批注'&&shortcutLabel(s)===shortcutLabel(old)))result['新建批注']=old
@@ -1680,6 +1683,28 @@ let toolShortcuts=(()=>{
     }catch{}
     return result
 })();
+// The server owns the shared settings. Only a previously customized browser
+// may seed an empty server; a revision check prevents competing migrations.
+let shortcutRevision=null,shortcutRefresh=null,shortcutSaving=false;
+let legacyShortcuts=syncEqual(toolShortcuts,defaultShortcuts)?null:clone(toolShortcuts);
+function applySharedShortcuts(result){
+    shortcutRevision=result.revision;
+    toolShortcuts=clone(defaultShortcuts);for(const label of Object.keys(toolShortcuts))if(result.shortcuts&&Object.hasOwn(result.shortcuts,label)&&validShortcut(result.shortcuts[label]))toolShortcuts[label]=result.shortcuts[label];updateShortcutHints();
+    if(result.shortcuts)legacyShortcuts=null;
+}
+function syncShortcuts(){
+    if(shortcutSaving)return Promise.resolve();
+    if(shortcutRefresh)return shortcutRefresh;
+    shortcutRefresh=(async()=>{
+        let result=await api('/api/shortcuts');
+        if(result.shortcuts===null&&legacyShortcuts){
+            try{result=await api('/api/shortcuts',{revision:null,shortcuts:legacyShortcuts})}
+            catch(e){if(e.status!==409)throw e;result=await api('/api/shortcuts')}
+        }
+        applySharedShortcuts(result);
+    })().catch(e=>console.warn('Shortcut sync:',e)).finally(()=>{shortcutRefresh=null});
+    return shortcutRefresh;
+}
 function updateShortcutHints(){
     for(const b of $('floatingTools').querySelectorAll('[data-tool]')){
         const label=b.dataset.tool,s=toolShortcuts[label];b.dataset.shortcutHint=s?' ('+shortcutLabel(s)+')':'';
@@ -1690,8 +1715,8 @@ function updateShortcutHints(){
     toggle.dataset.shortcutHint=toolbarShortcutText
 }
 function shortcutSettings(){
-    const d=showDialog('快捷键设置');let values=clone(toolShortcuts);
-    const desc=el('p','small','点击组合键输入框后按键，或使用下拉框选择；清除可禁用该工具的自定义快捷键。浏览器原生剪贴快捷键仍可使用。');
+    const d=showDialog('快捷键设置');let values=clone(toolShortcuts);const revision=shortcutRevision;
+    const desc=el('p','small','快捷键由服务端统一保存，所有设备和文档共享。点击组合键输入框后按键，或使用下拉框选择；清除可禁用该工具的自定义快捷键。浏览器原生剪贴快捷键仍可使用。');
     const list=el('div','shortcutList'),msg=el('p','small','Ctrl+F 默认替代浏览器查找。系统保留的快捷键可能无法使用。');
     const modifiers=[['c','Ctrl'],['a','Alt'],['ca','Ctrl+Alt'],['cs','Ctrl+Shift'],['as','Alt+Shift'],['cas','Ctrl+Alt+Shift']];
     const modValue=v=>v?[v.ctrl?'c':'',v.alt?'a':'',v.shift?'s':''].join(''):'c';
@@ -1723,7 +1748,23 @@ function shortcutSettings(){
         }
     }
     draw();
-    const row=el('div','edittools');row.append(btn('恢复默认',()=>{values=clone(defaultShortcuts);draw();msg.textContent='已恢复默认，保存后生效。'}),btn('保存',()=>{toolShortcuts=clone(values);try{localStorage.setItem(SHORTCUT_KEY,JSON.stringify(values))}catch{}dialog.close();updateShortcutHints();showToast('快捷键已保存')}));
+    const row=el('div','edittools');
+    const reset=btn('恢复默认',()=>{values=clone(defaultShortcuts);draw();msg.textContent='已恢复默认，保存后生效。'});
+    const saveButton=btn('保存',async()=>{
+        if(shortcutSaving)return;
+        shortcutSaving=true;saveButton.disabled=true;reset.disabled=true;
+        for(const control of list.querySelectorAll('input,select,button'))control.disabled=true;
+        const snapshot=clone(values);
+        try{
+            await shortcutRefresh;
+            const result=await api('/api/shortcuts',{revision,shortcuts:snapshot});
+            applySharedShortcuts(result);
+            if(list.isConnected&&dialog.open)dialog.close();
+            showToast('快捷键已保存至所有设备');
+        }catch(e){msg.textContent='保存失败：'+e.message}
+        finally{shortcutSaving=false;saveButton.disabled=false;reset.disabled=false;for(const control of list.querySelectorAll('input,select,button'))control.disabled=false;syncShortcuts()}
+    });
+    row.append(reset,saveButton);
     d.append(desc,list,msg,row)
 }
 updateShortcutHints();
@@ -1904,6 +1945,9 @@ syncInstallButton();
 window.addEventListener('pagehide',()=>{captureReading();flushReading()});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){captureReading();flushReading();readingInteracted=false}else syncNow()});
 window.addEventListener('focus',()=>syncNow());
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncShortcuts()});
+window.addEventListener('focus',()=>syncShortcuts());
+setInterval(()=>{if(!document.hidden)syncShortcuts()},1500);
 document.addEventListener('focusout',()=>setTimeout(()=>syncNow(),0),true);
 setInterval(()=>syncNow(),1500);
 window.addEventListener('beforeunload',e=>{captureReading();flushReading();if(dirty){e.preventDefault();e.returnValue=''}});
@@ -1916,5 +1960,6 @@ document.addEventListener('DOMContentLoaded',async()=>{
     // MathLive registers its element asynchronously on some browsers. Do not
     // prevent ordinary text editing while the formula component is loading.
     await Promise.race([customElements.whenDefined('math-field'),new Promise(resolve=>setTimeout(resolve,2500))]);
+    await syncShortcuts();
     load();
 });
