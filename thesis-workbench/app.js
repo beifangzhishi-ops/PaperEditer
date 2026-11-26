@@ -471,13 +471,6 @@ async function showParagraphHistory(owner,index,raw){
     const id=db.paragraphs?.[owner]?.[index]?.id;
     showHistory(id||owner);
 }
-function historyText(value){
-    if(value==null)return '（对象不存在）';
-    if(typeof value==='string')return value;
-    if(Array.isArray(value.thesis))return ['thesis','blocks'].map(space=>space+'\n'+value[space].map(n=>historyText(n)).join('\n\n')).join('\n\n')+'\n\n回收站\n'+JSON.stringify(value.trash||[],null,2);
-    if(typeof value.body==='string'){const {body,...meta}=value;return JSON.stringify(meta,null,2)+'\n\n'+body}
-    return JSON.stringify(value,null,2);
-}
 function historyMarkdown(raw,host){
     if(!raw?.trim())return;
     const tokens=[];
@@ -707,11 +700,12 @@ async function showHistory(objectId=null){
         function rename(){
             const input=el('input','historyRename');input.value=entry.tag?.name||new Date(entry.time).toLocaleString();input.maxLength=200;input.setAttribute('aria-label','版本名称');
             name.replaceWith(input);input.focus();input.select();
+            for(const type of ['contextmenu','pointerdown'])input.addEventListener(type,e=>e.stopPropagation());
             input.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();const value=input.value.trim();if(value)setName(value);else showToast('请输入版本名称')}else if(e.key==='Escape'){e.preventDefault();input.replaceWith(name)}};
             input.onblur=()=>{if(input.isConnected)input.replaceWith(name)};
         }
-        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['复制历史内容',async()=>{try{const past=await api(historyURL('/api/history/item',{id:entry.id}));if(valid())copy(historyText(historicalValue(past,objectId)))}catch(e){if(valid())showToast(e.message)}}],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
-        r.addEventListener('contextmenu',e=>{if(e.target.matches('input'))return;e.preventDefault();e.stopPropagation();menuAt(e,menu())});
+        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['复制版本 ID',()=>copy(entry.id)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
+        context(r,menu,null,true);
         r.append(btn('⋯',e=>menuAt(e,menu()),'historyMore'));if(entry.tag)r.classList.add('named');return r;
     }
     function draw(){
@@ -725,7 +719,9 @@ async function showHistory(objectId=null){
             else{
                 if(!group||!last||Math.abs(new Date(last.time)-new Date(entry.time))>5*60*1000){
                     group=el('details','historyGroup');group.dataset.group=entry.id;group.open=opened.has(entry.id);
-                    const summary=el('summary');group.append(summary);group._summary=summary;group._count=0;group._first=entry.time;list.append(group);
+                    const summary=el('summary'),versions=group;group.append(summary);group._summary=summary;group._count=0;group._first=entry.time;list.append(group);
+                    context(summary,()=>[[versions.open?'折叠版本组':'展开版本组',()=>{versions.open=!versions.open}]],null,true);
+                    versions.addEventListener('toggle',()=>{expand.textContent=[...list.querySelectorAll('details.historyGroup')].every(x=>x.open)?'全部折叠':'全部展开'});
                 }
                 group.append(row(entry));group._count++;group._summary.textContent=clock(entry.time)+'–'+clock(group._first)+' · '+group._count+' 个自动版本';
             }
@@ -854,7 +850,7 @@ let floatingToolsEnabled=(()=>{try{const stored=localStorage.getItem(FLOATING_TO
 // A fresh mobile page opens for reading. Editing always requires an explicit switch.
 let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
-const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看历史版本','查看差异','设置版本名称','清除版本名称']);
+const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看历史版本','查看差异','复制版本 ID','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
 function modeMenuItems(items){
     return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
 }
@@ -1797,7 +1793,7 @@ async function openWorkspaceDialog(){
     }catch(e){message.textContent=e.message}
 }
 $('openWorkspace').onclick=openWorkspaceDialog;
-context(dialog,()=>[]);
+context(dialog,e=>dialog.querySelector('.historyList')?[]:simpleContextMenu(e),null,true);
 dialog.addEventListener('close',()=>{if(!dialog.open){clearNoteLabel();hideFloatingTools();$('menu').hidden=true;dialog._noteId=null}});
 $('headerActions').onclick=toggleFloatingTools;
 initFloatingTools();
