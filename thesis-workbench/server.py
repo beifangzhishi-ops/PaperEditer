@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
 import json, hashlib, mimetypes, uuid, os, threading, re, datetime, base64, traceback, contextlib
 from workspace import Package
-from document import Document, content, object_value
+from document import Document, content, object_value, create_document, EXAMPLE_IMAGE
 from merge import merge_content
 ROOT=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('PAPEREDITER_DATA_DIR',str(ROOT/'data'))).expanduser().resolve()
@@ -54,6 +54,28 @@ def open_workspace(filename):
         PACKAGE,WORKSPACE_ERROR=previous,previous_error
         raise
     return workspace_info()
+def new_workspace(filename):
+    p=workspace_path(filename)
+    create_document(p,validate_document_state)
+    return open_workspace(str(p))
+def example_workspace():
+    # Keep the tracked, portable fixture pristine. The editable example and
+    # its private history live in an ignored local directory.
+    directory=CONFIG.parent/'example-workspace'
+    directory.mkdir(exist_ok=True)
+    p=directory/'example.json'
+    if not p.exists():
+        template=Package(ROOT/'example.json')
+        with template.transaction():
+            initial={space:[dict(n,body=template.read(n['file']).decode('utf-8').replace('/assets/demo.png','/assets/'+EXAMPLE_IMAGE)) for n in json.loads(template.read(index))] for space,index in [('thesis','outline.json'),('blocks','blocks.json')]}
+        start,method=initial['thesis']
+        start['title']='示例：正文与对象'
+        start['body']=start['body'].replace('Synthetic color swatches','示例图：可复制整图或子图').replace('\n:::\n\n:::table','\n\n![Second swatch](/assets/'+EXAMPLE_IMAGE+' "wb-id:demo-subfig-2")\n:::\n\n:::table')
+        method['title']='示例：引用与知识块'
+        method['body']+='\n\n普通段落，**粗体**、*斜体*，行内公式 $a^2+b^2=c^2$。\n\n章节 [[ref:demo-start]]，公式 [[eqref:demo-eq]]，图 [[ref:demo-fig]]，子图 [[ref:demo-subfig]]，表 [[ref:demo-table]]，知识块 [[ref:demo-note]]，文献 [[cite:example2026]]。\n\n[[embed:demo-independent]]\n'
+        initial['blocks'].append(dict(id='demo-independent',title='独立知识块示例',parent=None,level=1,number='',file='blocks/demo-independent.md',source='',order=2,body='独立知识块：可复制正文，也可在本文件中嵌入或引用。'))
+        create_document(p,validate_document_state,initial)
+    return open_workspace(str(p))
 def reading_position():
     return settings_load().get('reading',{}).get(workspace_info()['id'])
 def save_reading(position):
@@ -270,6 +292,10 @@ class Handler(BaseHTTPRequestHandler):
             payload=json.loads(self.rfile.read(n))
             if self.path=='/api/workspaces/open':
                 with LOCK:return self.respond(200,open_workspace(payload['path']))
+            if self.path=='/api/workspaces/new':
+                with LOCK:return self.respond(200,new_workspace(payload['path']))
+            if self.path=='/api/workspaces/example':
+                with LOCK:return self.respond(200,example_workspace())
             if self.path=='/api/reading':
                 with LOCK:
                     if WORKSPACE_ERROR or self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']:return self.respond(409,{'error':'工作区已切换，请刷新。'})

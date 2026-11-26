@@ -27,6 +27,18 @@ async function fixture(browser,mobile=false,shared=null){
             return r.fulfill({json:{ok:true}})
         }
         if(shared&&name==='/api/workspaces')return r.fulfill({json:{files:shared.recent.map(x=>({...x,active:x.id===shared.workspace.id})),current:shared.workspace}});
+        if(shared&&name==='/api/workspaces/new'){
+            const filename=r.request().postDataJSON().path;shared.requestedNew=filename;
+            if(shared.recent.some(x=>x.path===filename))return r.fulfill({status:400,json:{error:'文件已存在'}});
+            shared.workspace={id:filename,name:filename.split(/[\\/]/).pop(),path:filename,history:true};shared.recent=[shared.workspace,...shared.recent];
+            shared.state={...data.state,thesis:[],blocks:[],trash:[],revision:'blank'};
+            return r.fulfill({json:shared.workspace})
+        }
+        if(shared&&name==='/api/workspaces/example'){
+            shared.exampleCalls=(shared.exampleCalls||0)+1;
+            shared.workspace={id:'built-in-example',name:'example.json',path:'built-in-example',history:true};shared.recent=[shared.workspace,...shared.recent.filter(x=>x.id!=='built-in-example')];shared.state=structuredClone(data.state);
+            return r.fulfill({json:shared.workspace})
+        }
         if(shared&&name==='/api/workspaces/open'){
             const filename=r.request().postDataJSON().path;shared.requested=filename;
             if(filename.endsWith('missing.json'))return r.fulfill({status:400,json:{error:'文件不存在'}});
@@ -445,6 +457,25 @@ async function run(){
             await mobile.p.locator('.workspaceRecent').filter({hasText:'example.json'}).tap();
             await mobile.p.waitForFunction(()=>currentWorkspace?.name==='example.json');assert.equal(shared.requested,initial);
             assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop and mobile path input, UNC forwarding, shared history and reading, invalid path preserves document');return;
+        }
+        if(process.argv.includes('--new-workspace-only')){
+            for(const mobile of [false,true]){
+                const initial='C:\\Projects\\existing.json',target='C:\\Projects\\new.json';
+                const shared={workspace:{id:initial,name:'existing.json',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
+                const {p,context,errors}=await fixture(browser,mobile,shared);
+                await p.locator('#openWorkspace').click();
+                await p.getByRole('button',{name:'新建文件',exact:true}).click();assert.equal(shared.requestedNew,undefined);
+                await p.getByRole('textbox',{name:'服务器文件路径'}).fill(initial);
+                await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.getByText('文件已存在',{exact:true}).waitFor();
+                assert.equal(await p.evaluate(()=>currentWorkspace.name),'existing.json');
+                await p.getByRole('textbox',{name:'服务器文件路径'}).fill(target);
+                await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.waitForFunction(()=>currentWorkspace?.name==='new.json'&&db.thesis.length===0&&db.blocks.length===0);
+                assert.equal(shared.requestedNew,target);
+                await p.locator('#openWorkspace').click();await p.getByRole('button',{name:'打开示例文件',exact:true}).click();
+                await p.waitForFunction(()=>currentWorkspace?.id==='built-in-example'&&db.thesis.length===2);
+                assert.equal(shared.exampleCalls,1);assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: desktop/mobile required new path, collision preserves current document, blank creation and one-click example');return;
         }
         const {p,context,errors}=await fixture(browser);
         if(process.argv.includes('--section-menu-only')){await checkSectionMenu(p);assert.deepEqual(errors,[]);await context.close();console.log('PASS: heading and collapsed child menus, blank creation and subtree deletion');return}

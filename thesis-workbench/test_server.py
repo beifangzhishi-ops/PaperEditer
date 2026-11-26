@@ -23,6 +23,48 @@ class WorkspaceTests(unittest.TestCase):
         self.context.start()
         self.addCleanup(self.context.stop)
 
+    def test_create_and_open_builtin_example(self):
+        from document import EXAMPLE_IMAGE, EXAMPLE_IMAGE_PATH, objects, revision
+        root=Path(self.tmp.name)
+        template=server.ROOT/'example.json'
+        original=template.read_bytes()
+        with patch.object(server,'CONFIG',root/'settings.json'), patch.object(server,'PACKAGE',None), patch.object(server,'WORKSPACE_ERROR',None):
+            new=root/'blank.json'
+            info=server.new_workspace(str(new))
+            self.assertEqual(info['path'],str(new))
+            self.assertEqual(server.state()['thesis'],[])
+            self.assertEqual(server.state()['blocks'],[])
+            self.assertEqual(server.state()['trash'],[])
+            self.assertEqual(server.PACKAGE.history_list()['total'],1)
+            before=new.read_bytes()
+            for invalid in (str(new),'relative.json',str(root/'missing'/'new.json'),str(root/'bad.txt')):
+                with self.assertRaises((ValueError,FileExistsError,FileNotFoundError)):
+                    server.new_workspace(invalid)
+                self.assertEqual(server.workspace_info(),info)
+            self.assertEqual(new.read_bytes(),before)
+            orphan=root/'orphan.json'
+            orphan.with_name(orphan.name+'.history.git').mkdir()
+            with self.assertRaises(FileExistsError):server.new_workspace(str(orphan))
+            self.assertFalse(orphan.exists())
+            example=server.example_workspace()
+            self.assertNotEqual(example['id'],info['id'])
+            sample=server.state()
+            self.assertEqual({x['kind'] for x in objects(sample)}, {'section','block','paragraph','equation','figure','table'})
+            self.assertIn('wb-id:demo-subfig-2',sample['thesis'][0]['body'])
+            self.assertIn('[[embed:demo-independent]]',sample['thesis'][1]['body'])
+            self.assertTrue(any(n.get('objectBindings') for n in sample['blocks']))
+            self.assertTrue(any(n.get('annotation') for n in sample['blocks']))
+            self.assertTrue(any(n.get('freePlacements') for n in sample['blocks']))
+            self.assertEqual(server.PACKAGE.asset(EXAMPLE_IMAGE),EXAMPLE_IMAGE_PATH.read_bytes())
+            self.assertEqual(server.example_workspace(),example)
+            self.assertEqual(template.read_bytes(),original)
+            server.open_workspace(str(new))
+            state=server.state();state['thesis']=[dict(id='copied',title='',body=sample['thesis'][0]['body'],parent=None,level=1,order=0,file='thesis/copied.md')]
+            self.assertEqual(server.PACKAGE.asset(EXAMPLE_IMAGE),EXAMPLE_IMAGE_PATH.read_bytes())
+            self.assertEqual(server.save(state)[0],200)
+            self.assertEqual(json.loads(new.read_bytes())['assets'][EXAMPLE_IMAGE],str(EXAMPLE_IMAGE_PATH.resolve()))
+            self.assertEqual(server.workspace_catalog()['files'][0]['path'],str(new))
+
     def test_initialization_and_save(self):
         server.initialize_data()
         state = server.state()

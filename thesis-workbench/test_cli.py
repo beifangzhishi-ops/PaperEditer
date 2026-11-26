@@ -78,6 +78,20 @@ class CLITests(unittest.TestCase):
         (self.cwd / "changes 中文.json").write_bytes(raw)
         return self.run_cli("edit", "--file", "changes 中文.json", "-m", message, success=success, offline=offline)
 
+    def test_new_example_and_offline_creation(self):
+        target=self.root/'new document.json'
+        new=self.run_cli('new',str(target),explicit=False)
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],new['id'])
+        self.assertEqual(self.run_cli('list',explicit=False)['items'],[])
+        self.run_cli('new',str(target),explicit=False,success=False)
+        self.run_cli('new',explicit=False,success=False)
+        example=self.run_cli('example',explicit=False)
+        self.assertNotEqual(example['id'],new['id'])
+        self.assertTrue(self.run_cli('list',explicit=False)['items'])
+        offline=self.run_cli('new',str(self.root/'offline.json'),explicit=False,offline=True)
+        self.assertNotEqual(offline['id'],example['id'])
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],example['id'])
+
     def test_full_online_and_offline_workflow(self):
         for args in ([], ["--help"], ["edit", "--help"], ["restore", "--help"]):
             p = subprocess.run(["paperedit", *args], cwd=self.cwd, env=self.env, capture_output=True, timeout=30)

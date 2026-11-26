@@ -25,6 +25,49 @@ ASSET = re.compile(r"[\w.-]+")
 TAG = re.compile(r"[0-9a-f]{32}")
 REF = re.compile(r"\[\[(ref|eqref|embed|cite):([^\]\n]+)\]\]")
 
+# A portable, reserved resource for the built-in example. Ordinary user
+# assets remain document-local; never fall back to other users' files.
+EXAMPLE_IMAGE = "paperediter-example-swatches.png"
+EXAMPLE_IMAGE_PATH = Path(__file__).resolve().parent / "example-data" / "assets" / "demo.png"
+
+
+def register_example_resource(doc):
+    if EXAMPLE_IMAGE not in doc["assets"] and any(
+        "/assets/" + EXAMPLE_IMAGE in n["body"] for space in SPACES for n in doc[space]
+    ):
+        doc["assets"][EXAMPLE_IMAGE] = str(EXAMPLE_IMAGE_PATH.resolve())
+
+
+def create_document(filename, validator, initial=None):
+    filename = Path(filename)
+    if not filename.is_absolute() or filename.suffix.lower() != ".json":
+        raise ValueError("Specify an absolute .json file path")
+    filename = filename.resolve()
+    if not filename.parent.is_dir():
+        raise FileNotFoundError("Parent directory does not exist")
+    history = filename.with_name(filename.name + ".history.git")
+    if filename.exists() or history.exists():
+        raise FileExistsError("Document or history already exists")
+    with file_lock(filename.with_name(filename.name + ".lock")):
+        if filename.exists() or history.exists():
+            raise FileExistsError("Document or history already exists")
+        doc = dict(format="paperediter", version=VERSION, id=uuid.uuid4().hex,
+                   thesis=[], blocks=[], trash=[], originalLabels={}, importReport={},
+                   assets={}, sources={}, uploadDirectory=str(filename.with_name(filename.stem + "-assets")))
+        if initial is not None:
+            for key in (*SPACES, "trash", "originalLabels", "importReport", "assets", "sources"):
+                if key in initial:
+                    doc[key] = copy.deepcopy(initial[key])
+        register_example_resource(doc)
+        doc["paragraphs"] = rebuild(None, doc)
+        check_document(doc, validator)
+        with filename.open("xb") as f:
+            f.write(json_bytes(doc))
+            f.flush()
+            os.fsync(f.fileno())
+        readonly(filename)
+    return Document(filename, validator)
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -671,6 +714,7 @@ class Document:
                 for i, n in enumerate(next_doc[space]):
                     n["order"] = i
             next_doc["paragraphs"] = rebuild(doc, next_doc)
+            register_example_resource(next_doc)
             check_document(next_doc, self.validator)
             reject_encoding_loss(doc, next_doc)
             if doc != next_doc:
@@ -700,6 +744,7 @@ class Document:
                         if doc[key] != base[key] and local[key] != doc[key]:
                             return 409, {"error": "Concurrent resource registration conflict"}
                         next_doc[key] = local[key]
+            register_example_resource(next_doc)
             check_document(next_doc, self.validator)
             reject_encoding_loss(doc, next_doc)
             if next_doc != doc:
@@ -775,6 +820,8 @@ class Document:
     def asset(self, name):
         with self.transaction() as doc:
             path = doc["assets"].get(name)
+            if not path and name == EXAMPLE_IMAGE:
+                path = EXAMPLE_IMAGE_PATH
             if not path:
                 raise FileNotFoundError(name)
             return Path(path).read_bytes()

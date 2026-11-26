@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 import server
-from document import Document, objects, object_value, revision, recover_document
+from document import Document, objects, object_value, revision, recover_document, create_document
 
 
 class APIError(RuntimeError):
@@ -132,6 +132,9 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("open", help="Explicitly change active web workspace")
     p.add_argument("path")
+    p = sub.add_parser("new", help="Create a blank document at an absolute .json path and open it")
+    p.add_argument("path")
+    sub.add_parser("example", help="Open the built-in editable example workspace")
     sub.add_parser("status", help="Show current workspace, revision and history head")
     p = sub.add_parser("list", help="List sections, blocks, paragraphs and objects")
     p.add_argument("--space", choices=["thesis", "blocks"])
@@ -168,10 +171,16 @@ def main():
         parser.print_help()
         return
     args = parser.parse_args()
-    if args.command == "open":
+    if args.command in ("open", "new", "example"):
+        if args.offline:
+            if args.command != "new":
+                raise ValueError("Opening a web workspace requires the service")
+            doc = create_document(server.workspace_path(args.path), server.validate_document_state)
+            emit(dict(id=doc.id, path=str(doc.filename), name=doc.filename.name, history=True))
+            return
         c = object.__new__(Client)
         c.url, c.info = args.url.rstrip("/"), None
-        emit(c.request("/api/workspaces/open", {"path": args.path}))
+        emit(c.request("/api/workspaces/" + args.command, {} if args.command == "example" else {"path": args.path}))
         return
     if args.command == "recover":
         if not args.workspace:

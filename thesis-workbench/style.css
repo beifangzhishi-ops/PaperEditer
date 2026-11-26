@@ -4,6 +4,7 @@
 .workspacePathForm{display:flex;gap:8px;align-items:center;margin:12px 0}
 .workspacePathForm .workspacePath{flex:1;min-width:0;width:100%;font-size:16px;padding:8px;box-sizing:border-box}
 .workspacePathForm button{flex:none;white-space:nowrap}
+.workspaceFileActions{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .workspaceRecent{display:flex!important;flex-direction:column;align-items:flex-start!important;text-align:left;gap:4px;white-space:normal!important;max-width:100%;min-width:0}
 .workspaceRecent span{overflow-wrap:anywhere;word-break:break-word;max-width:100%}
 
