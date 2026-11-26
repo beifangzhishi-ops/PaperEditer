@@ -554,6 +554,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function objectRaw(p){p.raw=':::'+p.kind+' '+p.id+(p.flags?' '+p.flags:'')+'\n'+p.body+'\n:::';flush()}
     function draw(){
         clearMixed();body.replaceChildren();focused=null;selection=null;selectedObject=null;
+        let paragraphIndex=0;
         for(const p of parts){
             const card=el('section','visualCard');card._part=p;card.addEventListener('pointerdown',e=>{selectedPart=p;if(e.button===0&&!e.target.closest('.richText,math-field,button,input,textarea,select,.resizeHandle,.visualRef')){selectObject(p,card);if(p.kind!=='text'&&!e.target.closest('summary'))root.focus({preventScroll:true})}else if(e.button===0&&!e.target.closest('.resizeHandle'))clearObject()});
             card._selectImage=wrap=>{selectedPart=selectedObject=p;for(const c of body.children)c.classList.remove('selectedObject');document.querySelectorAll('.selectedImage').forEach(x=>{if(x!==wrap)x.classList.remove('selectedImage')});getSelection()?.removeAllRanges();root.focus({preventScroll:true});wrap.classList.add('selectedImage')};
@@ -562,6 +563,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             const head=el('div','visualCardHead'),handle=el('span','visualHandle','⠿');handle.draggable=true;handle.title='拖动调整顺序';
             const title=p.kind==='text'?'正文':p.kind==='embed'?'知识块':p.kind==='equation'?'公式':p.kind==='figure'?'图片':'表格';
             if(p.id||p.ref)card.dataset.object=p.id||p.ref;card.classList.add('part-'+p.kind);
+            if(p.kind==='text')card.dataset.paragraphIndex=paragraphIndex++;
             head.append(handle,el('span','small partLabel',p.kind==='text'?'':title),el('div','spacer'));
             if(p.id){const t=resolve(p.id);head.append(el('span','visualNum small',t?.number||''))}
             const content=el('div','visualCardContent');

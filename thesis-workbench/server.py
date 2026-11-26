@@ -3,6 +3,8 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
 import json, hashlib, mimetypes, uuid, os, threading, re, datetime, base64, traceback, contextlib
 from workspace import Package
+from document import Document, content, object_value
+from merge import merge_content
 ROOT=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('PAPEREDITER_DATA_DIR',str(ROOT/'data'))).expanduser().resolve()
 PACKAGE=None
@@ -23,7 +25,7 @@ def workspace_path(filename):
     return p.resolve()
 def workspace_info():
     if PACKAGE is None:return {'id':'directory','name':'示例工作区'}
-    return {'id':sha(str(PACKAGE.filename))[:24],'name':PACKAGE.filename.name,'path':str(PACKAGE.filename)}
+    return {'id':PACKAGE.id if isinstance(PACKAGE,Document) else sha(str(PACKAGE.filename))[:24],'name':PACKAGE.filename.name,'path':str(PACKAGE.filename),'history':isinstance(PACKAGE,Document)}
 def workspace_catalog():
     settings=settings_load();files=[]
     for filename in settings.get('recent',[]):
@@ -37,12 +39,16 @@ def record_workspace(p):
 def open_workspace(filename):
     global PACKAGE,WORKSPACE_ERROR
     p=workspace_path(filename)
-    candidate=Package(p)
+    candidate=Document(p,validate_document_state)
     previous,previous_error=PACKAGE,WORKSPACE_ERROR
     try:
         PACKAGE=candidate
         initialize_data();state()
         record_workspace(p)
+        settings=settings_load()
+        old_key=sha(str(p))[:24]
+        if old_key in settings.get('reading',{}) and candidate.id not in settings['reading']:
+            settings['reading'][candidate.id]=settings['reading'][old_key];settings_save(settings)
         WORKSPACE_ERROR=None
     except BaseException:
         PACKAGE,WORKSPACE_ERROR=previous,previous_error
@@ -79,6 +85,7 @@ def atomic(p,s):
 def dump(p,o): atomic(p,json.dumps(o,ensure_ascii=False,indent=2)+'\n')
 def initialize_data():
     """Initialize a new workspace only; never overwrite an existing one."""
+    if isinstance(PACKAGE,Document):return
     required=['outline.json','blocks.json','original_labels.json','import-report.json']
     if PACKAGE is not None:
         if not all(exists(DATA/name) for name in required):raise RuntimeError('Incomplete workspace package')
@@ -106,6 +113,7 @@ def path(n,space):
     if p.parent!=(DATA/space).resolve() or p.suffix!='.md':raise ValueError('Invalid path')
     return p
 def state():
+    if isinstance(PACKAGE,Document):return PACKAGE.state()
     with workspace_tx():
         out={}
         for space in ['thesis','blocks']:
@@ -131,14 +139,10 @@ def check(nodes,space):
             if par not in byid or par in seen:raise ValueError('Invalid parent/cycle')
             seen.add(par);par=byid[par].get('parent')
     return ids
-def save(payload):
-    with LOCK,workspace_tx(True):
-        old=state()
-        if old['revision']!=payload.get('revision'):
-            return 409,{'error':'其他网页或 Agent 已修改文件。请复制当前草稿，刷新后合并。'}
+def validate_document_state(payload):
         active_ids=check(payload['thesis'],'thesis');block_ids=check(payload['blocks'],'blocks')
         if active_ids&block_ids:raise ValueError('Duplicate cross-space ID')
-        trash=payload.get('trash',old['trash'])
+        trash=payload.get('trash',[])
         if not isinstance(trash,list) or len(trash)>4000:raise ValueError('Invalid trash')
         seen=active_ids|block_ids;entry_ids=set()
         for entry in trash:
@@ -153,6 +157,19 @@ def save(payload):
             if not isinstance(anchors,list) or any(not isinstance(a,dict) or not all(isinstance(a.get(k),str) for k in ('owner','left','right','token')) or type(a.get('at')) is not int or a['at']<len(a['left']) or not re.fullmatch(r'(?:\[\[(?:ref|eqref|embed):[^\]\n]+\]\])+',a['token']) for a in anchors):raise ValueError('Invalid trash anchors')
             bindings=entry.get('bindings',[])
             if not isinstance(bindings,list) or any(not isinstance(b,dict) or not isinstance(b.get('owner'),str) or b.get('field') not in ('annotation','objectBindings','freePlacements') or not isinstance(b.get('values'),list) or not b['values'] or any(not isinstance(v,dict) for v in b['values']) or (b['field']=='annotation' and len(b['values'])!=1) for b in bindings):raise ValueError('Invalid trash bindings')
+
+def save(payload):
+    with LOCK:
+        if isinstance(PACKAGE,Document):return PACKAGE.save(payload)
+        return save_legacy(payload)
+
+def save_legacy(payload):
+    with LOCK,workspace_tx(True):
+        old=state()
+        if old['revision']!=payload.get('revision'):
+            return 409,{'error':'其他网页或 Agent 已修改文件。请复制当前草稿，刷新后合并。'}
+        trash=payload.get('trash',old['trash'])
+        validate_document_state({**payload,'trash':trash})
         for space in ['thesis','blocks']:
             prior={n['id']:n for n in old[space]}
             for n in payload[space]:
@@ -201,20 +218,37 @@ class Handler(BaseHTTPRequestHandler):
                     s=state();q=parse_qs(u.query)
                     if q.get('since')==[s['revision']] and q.get('workspace')==[workspace_info()['id']]:
                         return self.respond(200,{'unchanged':True,'revision':s['revision'],'workspace':workspace_info()})
-                    s['originalLabels']=load(DATA/'original_labels.json');s['importReport']=load(DATA/'import-report.json')
+                    if isinstance(PACKAGE,Document):
+                        s['originalLabels']=PACKAGE.local.doc['originalLabels'];s['importReport']=PACKAGE.local.doc['importReport']
+                    else:
+                        s['originalLabels']=load(DATA/'original_labels.json');s['importReport']=load(DATA/'import-report.json')
                     s['workspace']=workspace_info()
                     s['readingPosition']=reading_position()
                 return self.respond(200,s)
             if p=='/api/history':
-                with LOCK:return self.respond(200,[f.stem for f in sorted(glob_data(DATA/'history','*.json'),reverse=True)][:150])
+                with LOCK:
+                    if isinstance(PACKAGE,Document):
+                        q=parse_qs(u.query)
+                        if q.get('workspace')!=[workspace_info()['id']]:return self.respond(409,{'error':'工作区已切换'})
+                        return self.respond(200,PACKAGE.history_list(max(0,int(q.get('offset',['0'])[0])),min(200,max(1,int(q.get('limit',['100'])[0]))),q.get('object',[None])[0]))
+                    return self.respond(200,[f.stem for f in sorted(glob_data(DATA/'history','*.json'),reverse=True)][:150])
             if p=='/api/history/item':
                 key=parse_qs(u.query).get('id',[''])[0]
                 if not re.fullmatch(r'[\w.+-]+',key):raise ValueError('Invalid history ID')
-                with LOCK:return self.respond(200,load(DATA/'history'/(key+'.json')))
+                with LOCK:
+                    if isinstance(PACKAGE,Document):
+                        if parse_qs(u.query).get('workspace')!=[workspace_info()['id']]:return self.respond(409,{'error':'工作区已切换'})
+                        return self.respond(200,PACKAGE.history_item(key))
+                    return self.respond(200,load(DATA/'history'/(key+'.json')))
             if p.startswith('/assets/'):
                 with LOCK:
                     if PACKAGE is not None:
                         name=p[len('/assets/'):]
+                        if isinstance(PACKAGE,Document):
+                            if not re.fullmatch(r'[\w.-]+',name):return self.respond(404,{'error':'Not found'})
+                            try:data=PACKAGE.asset(name)
+                            except FileNotFoundError:return self.respond(404,{'error':'Not found'})
+                            return self.respond(200,data,mimetypes.guess_type(name)[0] or 'application/octet-stream')
                         if not re.fullmatch(r'[\w.-]+',name) or not PACKAGE.exists('assets/'+name):return self.respond(404,{'error':'Not found'})
                         return self.respond(200,PACKAGE.read('assets/'+name),mimetypes.guess_type(name)[0] or 'application/octet-stream')
                     return self.file(DATA/p.lstrip('/'),DATA/'assets')
@@ -244,6 +278,17 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     if WORKSPACE_ERROR or (PACKAGE is not None and self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']):return self.respond(409,{'error':'工作区已切换，请先保存草稿并刷新。'})
                     code,result=save(payload);return self.respond(code,result)
+            if self.path in ('/api/history/tag','/api/history/restore','/api/cli/edit','/api/merge'):
+                with LOCK:
+                    if not isinstance(PACKAGE,Document) or WORKSPACE_ERROR or self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']:return self.respond(409,{'error':'工作区已切换或不支持历史'})
+                    if self.path=='/api/merge':
+                        for key in ('base','local','remote'):validate_document_state(payload[key])
+                        return self.respond(200,merge_content(payload['base'],payload['local'],payload['remote'],payload.get('choices')))
+                    if self.path=='/api/history/tag':
+                        return self.respond(200,{'tag':PACKAGE.tag(payload.get('id'),payload.get('name'),payload.get('clear',False),payload.get('revision'))})
+                    if self.path=='/api/history/restore':
+                        code,result=PACKAGE.restore(payload['id'],payload['revision'],payload.get('object'));return self.respond(code,result)
+                    code,result=PACKAGE.edit(payload['operations'],payload['revision'],payload.get('message'));return self.respond(code,result)
             if self.path=='/api/upload':
                 data=base64.b64decode(payload['data'],validate=True)
                 if len(data)>20*1024*1024:raise ValueError('Image too large')
@@ -258,7 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK,workspace_tx(True):
                     if WORKSPACE_ERROR or (PACKAGE is not None and self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']):return self.respond(409,{'error':'工作区已切换，请刷新。'})
                     target=DATA/'assets'/name
-                    if not exists(target):
+                    if isinstance(PACKAGE,Document):PACKAGE.upload(name,data)
+                    elif not exists(target):
                         if PACKAGE is not None:PACKAGE.write(package_name(target),data)
                         else:
                             temp=target.with_suffix('.tmp');temp.write_bytes(data);os.replace(temp,target)
@@ -268,6 +314,20 @@ class Handler(BaseHTTPRequestHandler):
 class WorkbenchServer(ThreadingHTTPServer):
     request_queue_size=128
     daemon_threads=True
+
+def scan_workspaces():
+    # Do not depend on an open browser. Observe the active document while the
+    # service runs; failures are logged without overwriting invalid content.
+    previous_error=None
+    while True:
+        try:
+            with LOCK:
+                if isinstance(PACKAGE,Document):PACKAGE.scan()
+            previous_error=None
+        except Exception as e:
+            if str(e)!=previous_error:
+                previous_error=str(e);print('Document scan:',previous_error,flush=True)
+        threading.Event().wait(2)
 
 if __name__=='__main__':
     settings=settings_load()
@@ -282,5 +342,6 @@ if __name__=='__main__':
     else:WORKSPACE_ERROR='尚未打开文档，请输入服务器上的 .json 文件路径。'
     port=int(os.environ.get('PAPEREDITER_PORT','8191'))
     print(f'PaperEditer 127.0.0.1:{port}',flush=True)
+    threading.Thread(target=scan_workspaces,daemon=True).start()
     WorkbenchServer(('127.0.0.1',port),Handler).serve_forever()
 

@@ -14,7 +14,46 @@ python server.py
 
 默认首次启动不打开任何文档，通过顶部「打开文件」输入 .json 文件绝对路径。可通过 PAPEREDITER_PORT 指定端口；显式设置 PAPEREDITER_DATA_DIR 可启用旧的独立目录模式（用于测试与迁移）。服务仅监听回环地址，不应直接暴露公网。
 
-## JSON 文本工程索引
+## 单文件文档（v3）
+
+新格式将全部可编辑文本、结构和回收站内联在一个 UTF-8 JSON 内，带永久文档 UUID。原 v2 多文件索引在打开时自动迁移：保留原 manifest 的字节备份和旧数据目录，将旧历史导入独立的 `<文档名>.history.git` 裸仓库，校验后才替换入口。旧工具仍可用于 v2/SQLite 导入，不用于 v3 的直接编辑。
+
+图片和原始资源记录绝对路径（服务端视角，包括 UNC），不嵌入二进制；上传目录可用 CLI `upload-directory` 操作指定，默认文档同级的 `<文档名>-assets`。外部资源不改变权限。移动资源可用 `repath` 批量替换绝对路径前缀。移动文档时要将其独立历史仓库一起移动，UUID 不变。备份当前 JSON、历史仓库及必要外部资源。锁文件不存业务数据。Windows 只读属性用于防误操作，不是账户级安全隔离；跨进程锁协调 CLI 和服务，外部绕过权限的修改由扫描检测，非法内容不会被静默覆盖。
+
+需要系统安装 Git。每次有效修改生成一个 Git Commit，不产生空提交；服务每约两秒扫描活动文档和已登记图片，补记外部变化，定期压缩历史。Git 仓库没有远程地址。图片只保存路径和指纹，不恢复历史二进制。网页保存和 Ctrl+S 立即给当前提交添加时间名称（Tag），不弹窗；历史默认折叠连续自动版本，支持右键命名/清除、差异和恢复。普通段落通过文本匹配维护 ID，重复文本、复杂重排等无法唯一判断的修改可能产生新 ID。
+
+### CLI
+
+在本目录执行 `python paperedit.py --help`。默认操作当前文档；指定 `--workspace` 不切换网页。服务关闭可用 `--offline`。所有日常命令输出 JSON。
+
+~~~sh
+python paperedit.py status
+python paperedit.py list --space thesis
+python paperedit.py search "关键词"
+python paperedit.py read OBJECT_ID
+python paperedit.py edit --file changes.json -m "修改说明"
+python paperedit.py history OBJECT_ID
+python paperedit.py diff COMMIT --object OBJECT_ID
+python paperedit.py tag --name "初稿"
+python paperedit.py restore COMMIT --revision REVISION
+~~~
+
+批量编辑文件示例：
+
+~~~json
+{
+  "revision": "read/status 返回的 revision",
+  "operations": [
+    {"op": "update", "id": "demo-start", "body": "修改后的正文"},
+    {"op": "create", "space": "blocks", "id": "note-new", "title": "笔记", "body": "内容"},
+    {"op": "bind", "id": "note-new", "target": "demo-start"}
+  ]
+}
+~~~
+
+支持 `update`、`create`、`move`、`delete`、`bind`、`resource`（name、path、type=image/source）、`upload-directory`（path）、`repath`（old、new）等操作。过期 revision 自动合并不重叠修改，冲突返回 409 和差异，不覆盖数据。损坏或缺失的 v3 文档可用 `python paperedit.py --workspace ABSOLUTE_PATH recover [--version COMMIT]` 显式恢复，保留损坏原件；恢复正常文档请使用 restore。
+
+## 旧 v2 JSON 工程索引（迁移兼容）
 
 .json 是 UTF-8 JSON 文本，包含格式版本、files（逻辑路径到工程相对路径的映射）、objects（对象路径与定位信息），不存储数据库或二进制内容。路径以 .json 所在目录为基准。正文、知识块和批注继续使用 Markdown；公式、表格等对象用所属 Markdown 路径及永久 ID 定位，普通段落用行号定位。图片可直接引用原项目内已有文件。绘图源文件和原始完整 LaTeX 工程独立维护，不自动覆盖。
 

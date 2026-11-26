@@ -1,6 +1,23 @@
-# PaperEditer：Agent 读取约定
+# PaperEditer：Agent 读写约定
 
-两个独立空间。默认 data/outline.json 是正式论文树索引，data/thesis/ 下每节一个 Markdown 文件；data/blocks.json 是独立知识块索引，data/blocks/ 下每块一个 Markdown 文件，初始为空。实际数据目录可通过 PAPEREDITER_DATA_DIR 配置。工程模式下，workspace.local.json 指向实际 .json 文本索引；其 files 映射将逻辑路径解析为 .json 同目录下的实际相对路径，objects 记录对象路径与定位信息。先确认活动工作区，再读取普通文件；可使用 workspace.py list/unpack/refresh。修改时优先调用应用保存接口并检查 revision；直接编辑普通文件后用 refresh 更新派生对象索引。不得将知识块当作正式论文正文。original/ 是首次导入的 TeX 片段。只在用户要求时同步，不自动覆盖 TeX 或知识块。用户数据、导入源、原始图片和历史快照均不得提交到公开仓库。
+正式文档为单个 UTF-8 JSON（格式 v3）。正文、目录、知识块、批注、回收站和稳定对象 ID 在文件内；图片、TeX、PPT 等外部资源使用服务端绝对路径（支持 UNC）。正文 Markdown 不是独立工作文件。旧 v2 格式在打开时迁移，保留原索引备份及原数据目录；不要编辑旧副本。
 
-先按标题/关键词搜索 outline 或 blocks 索引，再读所需文件。对象引用使用 `[[ref:永久ID]]`，公式用 `[[eqref:永久ID]]`，嵌入知识块用 `[[embed:块ID]]`；对象定义用 `:::equation ID`、`:::figure ID`、`:::table ID`，结束行为独立的 `:::`。图表首行是题注。ID 保持稳定，编号由当前树顺序计算；不把显示编号写死。引用及关联从 Markdown 源文件动态建立。公式保留 LaTeX 源码。外部编辑先备份，再原子替换；结构索引与正文路径须一致。应用会检查并发修改；不要在网页正在编辑同一文件时覆盖。
+文档默认只读。Agent 可以读取文档，但修改必须通过 PaperEditer CLI 或 API，禁止直接解除只读后覆盖。CLI 与网页共享校验、并发合并和历史记录。默认目标是服务当前工作区；`--workspace ABSOLUTE_PATH` 可操作其他文档而不切换网页。命令从本目录运行（或使用脚本的绝对路径）：
 
+~~~sh
+python paperedit.py status
+python paperedit.py list --space thesis
+python paperedit.py search "关键词"
+python paperedit.py read OBJECT_ID
+python paperedit.py edit --file changes.json -m "修改说明"
+python paperedit.py history OBJECT_ID
+python paperedit.py diff COMMIT --object OBJECT_ID
+python paperedit.py tag --name "重要版本"
+python paperedit.py restore COMMIT --object OBJECT_ID --revision REVISION
+~~~
+
+edit 批量文件格式：`{"revision":"读取时返回的版本","operations":[{"op":"update","id":"OBJECT_ID","body":"新内容"}]}`。不能用猜测或刷新得到的新 revision 强行覆盖旧草稿；并发冲突时重新读取、合并并提交。每次有效保存自动进入独立本地 Git，不需要额外 commit；tag 只命名版本。历史仓库不设远程，不得推送用户数据。
+
+先搜索、读取必要的对象，再按 ID 编辑。正文段落有持久 ID；公式、图、表采用 `:::equation ID`、`:::figure ID`、`:::table ID`，结束行为独立的 `:::`。引用 `[[ref:ID]]`、`[[eqref:ID]]`、`[[embed:ID]]`。显示编号由目录顺序计算，不写死。知识块不等于正式论文正文。外部 TeX、PPT、图片保持原权限，只有明确要求才修改源文件。图片历史记录路径和指纹，不保存二进制内容。
+
+服务关闭可用 `--offline --workspace ABSOLUTE_PATH` 直接调用同一个跨进程加锁的核心。不要使用旧 workspace.py refresh 操作 v3 文件。损坏文件由 `recover` 命令显式恢复，保留损坏原件。数据、外部资源、历史、备份与锁文件均不得提交到编辑器 Public 仓库。

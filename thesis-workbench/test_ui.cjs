@@ -15,7 +15,7 @@ async function fixture(browser,mobile=false,shared=null){
     function currentState(){return shared?{...(shared.state||data.state),workspace:shared.workspace,readingPosition:shared.reading[shared.workspace.id]||null}:ownState}
     p.setDefaultTimeout(12000);
     p.on('pageerror',e=>errors.push(e.message));
-    p.on('dialog',d=>{if(d.type()!=='beforeunload')errors.push('Unexpected dialog: '+d.message());d.accept()});
+    p.on('dialog',d=>{if(d.type()!=='beforeunload'&&!(shared?.allowRestore&&d.message().startsWith('恢复此')))errors.push('Unexpected dialog: '+d.message());d.accept()});
     await p.route(origin+'/**',async r=>{
         const u=new URL(r.request().url()),name=u.pathname;
         if(name==='/api/state'){
@@ -39,6 +39,18 @@ async function fixture(browser,mobile=false,shared=null){
             const revision='mock-'+(shared?(shared.rev=(shared.rev||0)+1):++rev),next={...state,...payload,revision};
             if(shared)shared.state=next;else ownState=next;
             return r.fulfill({json:{revision}});
+        }
+        if(shared?.history&&name==='/api/history')return r.fulfill({json:{items:shared.history,more:false,total:shared.history.length}});
+        if(shared?.history&&name==='/api/history/item')return r.fulfill({json:shared.versions[u.searchParams.get('id')]});
+        if(shared?.history&&name==='/api/history/tag'){
+            const req=r.request().postDataJSON(),entry=shared.history.find(x=>x.id===req.id)||shared.history[0];
+            shared.tagCalls=(shared.tagCalls||0)+1;
+            if(req.clear)entry.tag=null;else entry.tag={id:'mock-tag',name:req.name||entry.tag?.name||'2026-11-26 10:00:00'};
+            return r.fulfill({json:{tag:entry.tag}});
+        }
+        if(shared?.history&&name==='/api/history/restore'){
+            const req=r.request().postDataJSON();shared.restoreCalls=(shared.restoreCalls||0)+1;
+            shared.state={...shared.versions[req.id],revision:'restore-'+shared.restoreCalls};return r.fulfill({json:{revision:shared.state.revision}});
         }
         if(name==='/assets/demo.png')return r.fulfill({body:Buffer.from(data.image,'base64'),contentType:'image/png'});
         if(name==='/workbench.js')return r.fulfill({body:fs.readFileSync(path.join(__dirname,'app.js'),'utf8')+'\n;\n'+fs.readFileSync(path.join(__dirname,'visual.js'),'utf8'),contentType:'text/javascript'});
@@ -307,6 +319,32 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--history-only')){
+            const workspace={...data.state.workspace,history:true},a={id:'a'.repeat(40),time:'2026-11-26T10:00:00Z',source:'editor',message:'Automatic save',tag:null},b={id:'b'.repeat(40),time:'2026-11-26T09:58:00Z',source:'editor',message:'Automatic save',tag:null},c={id:'c'.repeat(40),time:'2026-11-26T09:55:00Z',source:'agent',message:'Agent edit',tag:{id:'v',name:'Named'}};
+            const past=structuredClone(data.state);past.thesis[0].body='Historical body.';
+            const shared={workspace,state:structuredClone(data.state),reading:{},recent:[],history:[a,b,c],versions:{[a.id]:data.state,[b.id]:past,[c.id]:past},allowRestore:true};
+            const {p,context,errors}=await fixture(browser,false,shared);
+            await p.locator('#saveVersion').click();
+            await p.waitForFunction(()=>document.querySelector('#status').textContent==='已保存版本');
+            assert.equal(shared.tagCalls,1);assert.equal(await p.locator('#dialog').isVisible(),false);
+            await p.locator('#historyButton').click();
+            await p.locator('.historyRow.named').first().waitFor();
+            assert.equal(await p.locator('.historyGroup').count(),1);
+            assert.equal(await p.locator('.historyGroup').evaluate(x=>x.open),false);
+            const row=p.locator('.historyRow').filter({hasText:'Named'});
+            await row.click({button:'right'});await menu(p,'设置版本名称').click();
+            const rename=p.getByRole('textbox',{name:'版本名称'});await rename.fill('Renamed');await rename.press('Enter');
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'查看差异').click();
+            await p.locator('.historyDiff').waitFor();assert((await p.locator('.historyDiff').innerText()).includes('Historical body.'));
+            await p.locator('.historyDetail').getByRole('button',{name:'恢复版本',exact:true}).click();
+            await p.waitForFunction(()=>find('demo-start').body==='Historical body.');
+            assert.equal(shared.restoreCalls,1);assert.deepEqual(errors,[]);await context.close();
+            const mobile=await fixture(browser,true,shared);await mobile.p.locator('#historyButton').tap();
+            await mobile.p.locator('.historyRow.named').first().waitFor();assert(await mobile.p.locator('#saveVersion').isVisible());
+            assert.deepEqual(mobile.errors,[]);await mobile.context.close();
+            console.log('PASS: direct save tag, grouping, inline rename, diff, restore, mobile history');return
+        }
         if(process.argv.includes('--sync-only')){
             const shared={workspace:data.state.workspace,state:structuredClone(data.state),reading:{},recent:[]};
             const desktop=await fixture(browser,false,shared),mobile=await fixture(browser,true,shared),p=desktop.p,q=mobile.p;

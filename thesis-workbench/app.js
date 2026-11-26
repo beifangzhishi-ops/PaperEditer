@@ -292,13 +292,20 @@ function applySynced(remote,merged,preserveEditor=false){
     const local=clone(merged),redraw=!syncEqual(before,local);
     if(redraw&&preserveEditor){for(const space of ['thesis','blocks'])for(let i=0;i<db[space].length;i++){const n=db[space][i],next=local[space][i];if(!syncEqual(n,next)){for(const k of Object.keys(n))if(!Object.hasOwn(next,k))delete n[k];Object.assign(n,next)}}db.trash=local.trash}
     else if(redraw)Object.assign(db,local);
-    Object.assign(db,{revision:remote.revision,originalLabels:remote.originalLabels,importReport:remote.importReport});
+    Object.assign(db,{revision:remote.revision,originalLabels:remote.originalLabels,importReport:remote.importReport,paragraphs:remote.paragraphs});
     dirty=!syncEqual(local,syncBase);conflict=false;syncConflict=null;syncNeeded=false;version++;
     if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshBlockNetworks()}else renderPanes()}
     persistDraft();syncStatus();if(dirty){clearTimeout(timer);timer=setTimeout(save,100)}
 }
-function reconcile(remote,base=syncBase,local=editableSnapshot(),respectFocus=false){
-    const remoteData={thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]},m=mergeSnapshots(base,local,remoteData);
+async function mergePlan(base,local,remote,choices={}){
+    if(!currentWorkspace?.history||syncEqual(local,remote)||syncEqual(base,local)||syncEqual(base,remote))return mergeSnapshots(base,local,remote,choices);
+    return api('/api/merge',{base,local,remote,choices});
+}
+async function reconcile(remote,base=syncBase,local=editableSnapshot(),respectFocus=false){
+    const remoteData={thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]},at=version,workspace=currentWorkspace?.id;
+    const m=await mergePlan(base,local,remoteData);
+    if(workspace!==currentWorkspace?.id)return;
+    if(at!==version){syncNeeded=true;status('有新版本 · 等待同步');return}
     if(m.conflicts.length){conflict=true;dirty=true;syncConflict={remote,base,local};persistDraft();syncStatus();showToast('检测到并发冲突，草稿已保留。点击刷新处理。');return}
     const preserve=respectFocus&&!syncCanApply();
     if(preserve&&!syncCanPreserve(local,m.state)){syncNeeded=true;status('有新版本 · 结束输入后同步');return}
@@ -310,8 +317,15 @@ function showSyncConflict(){
     const {remote,base}=syncConflict,local=editableSnapshot(),server={thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]},choices={};
     const d=showDialog('处理并发修改');d.append(el('p','small','双方草稿均保留。选择每个冲突项的版本，其他不冲突的修改会自动合并。目录或回收站冲突以完整操作为单位。'));
     const backups=el('div','');backups.append(btn('导出本地草稿',()=>downloadSyncDraft('local-draft',local)),btn('导出服务器版本',()=>downloadSyncDraft('server-draft',server)));d.append(backups);
-    const fields=el('div');d.append(fields);const done=btn('确认合并并保存',()=>{const m=mergeSnapshots(base,local,server,choices);if(m.conflicts.length)return;dialog.close();applySynced(remote,m.state)});d.append(done);
-    function draw(){const m=mergeSnapshots(base,local,server,choices);fields.replaceChildren();for(const c of m.conflicts){const row=el('section');row.append(el('h3','',c.label));for(const [side,title] of [['local','本地版本'],['remote','服务器版本']]){const content=el('textarea');content.readOnly=true;content.rows=4;content.value=typeof c[side]==='string'?c[side]:JSON.stringify(c[side],null,2)??'（不存在）';content.style.width='100%';row.append(el('p','small',title),content,btn('采用'+title,()=>{choices[c.key]=side;draw()}))}fields.append(row)}done.disabled=!!m.conflicts.length;if(!m.conflicts.length)fields.append(el('p','','已选择全部冲突项。确认后保存。'))}draw();
+    const fields=el('div');d.append(fields);let plan=null,generation=0;
+    const done=btn('确认合并并保存',()=>{if(!plan||plan.conflicts.length)return;dialog.close();applySynced(remote,plan.state)});d.append(done);
+    async function draw(){
+        const token=++generation;done.disabled=true;fields.replaceChildren(el('p','small','计算合并差异…'));
+        let m;try{m=await mergePlan(base,local,server,choices)}catch(e){if(fields.isConnected)fields.replaceChildren(el('p','muted',e.message),btn('重试',draw));return}
+        if(token!==generation||!fields.isConnected||!dialog.open)return;plan=m;fields.replaceChildren();
+        for(const c of m.conflicts){const row=el('section');row.append(el('h3','',c.label));for(const [side,title] of [['local','本地版本'],['remote','服务器版本']]){const content=el('textarea');content.readOnly=true;content.rows=4;content.value=typeof c[side]==='string'?c[side]:JSON.stringify(c[side],null,2)??'（不存在）';content.style.width='100%';row.append(el('p','small',title),content,btn('采用'+title,()=>{choices[c.key]=side;draw()}))}fields.append(row)}
+        done.disabled=!!m.conflicts.length;if(!m.conflicts.length)fields.append(el('p','','已选择全部冲突项。确认后保存。'))
+    }draw();
 }
 function syncCanApply(){return !dialog.open&&!dragging&&$('menu').hidden&&(!document.activeElement?.closest('.richText,.editableTitle,math-field,textarea')||!editingEnabled)}
 function syncCanPreserve(local,merged){
@@ -334,8 +348,8 @@ async function syncNow(force=false){
         if(syncLoading||workspace!==currentWorkspace?.id)return;
         if(r.workspace?.id!==workspace){workspaceChanged=true;persistDraft();syncStatus();return}
         if(r.unchanged||r.revision===db.revision){syncNeeded=false;return}
-        reconcile(r,syncBase,editableSnapshot(),!force);
-    }catch(e){if(force)showToast(e.message);else console.warn(e)}
+        await reconcile(r,syncBase,editableSnapshot(),!force);
+    }catch(e){if(e.status>=500)status('文档异常 · 草稿保留');if(force)showToast(e.message);else console.warn(e)}
     finally{syncBusy=false;if(dirty&&!conflict&&!workspaceChanged&&!syncNeeded){clearTimeout(timer);timer=setTimeout(save,100)}}
 }
 function checkpoint(){undoStack.push(editableSnapshot());if(undoStack.length>30)undoStack.shift();redoStack=[]}
@@ -361,10 +375,157 @@ async function save(){
     status('保存中');
     try{
         const r=await api('/api/save',snapshot);
-        db.revision=r.revision;syncBase={thesis:snapshot.thesis,blocks:snapshot.blocks,trash:snapshot.trash};
+        db.revision=r.revision;if(r.paragraphs)db.paragraphs=r.paragraphs;syncBase={thesis:snapshot.thesis,blocks:snapshot.blocks,trash:snapshot.trash};
         dirty=v!==version;persistDraft();status(dirty?'待保存':'已保存');
     }catch(e){if(e.status===409){syncNeeded=true;status('等待同步 · 请结束当前输入');persistDraft()}else{status('保存失败 · 草稿保留');showToast(e.message);console.warn(e)}}
     finally{saving=false;if(syncNeeded)syncNow();else if(dirty&&!conflict&&v!==version){clearTimeout(timer);timer=setTimeout(save,850)}}
+}
+let markingVersion=false;
+function updateHistoryControls(){
+    const enabled=!!currentWorkspace?.history&&!!db;
+    $('saveVersion').hidden=!enabled;$('historyButton').hidden=!enabled;
+    document.body.classList.toggle('historyEnabled',enabled);
+}
+async function flushDocument(){
+    if(dialog._commitNote)closeWorkbenchDialog();
+    if(!db||workspaceChanged)return false;
+    for(let i=0;i<5;i++){
+        while(saving||syncBusy)await new Promise(r=>setTimeout(r,40));
+        if(conflict){showSyncConflict();return false}
+        if(workspaceChanged)return false;
+        if(syncNeeded)await syncNow(true);
+        else if(dirty)await save();
+        else return true;
+    }
+    if(conflict)showSyncConflict();else if(dirty)showToast('请先完成当前修改的保存');
+    return !dirty&&!conflict&&!workspaceChanged;
+}
+async function markVersion(){
+    if(markingVersion||!db)return;
+    if(!currentWorkspace?.history){await save();return}
+    markingVersion=true;
+    try{
+        if(!await flushDocument())return;
+        const r=await api('/api/history/tag',{revision:db.revision});
+        status('已保存版本');showToast('已保存版本：'+r.tag.name);
+    }catch(e){showToast(e.message)}
+    finally{markingVersion=false}
+}
+function historyURL(endpoint,params={}){
+    return endpoint+'?'+new URLSearchParams({workspace:currentWorkspace.id,...params});
+}
+function historicalValue(doc,id){
+    if(!id)return {thesis:doc.thesis,blocks:doc.blocks,trash:doc.trash||[]};
+    for(const n of [...doc.thesis,...doc.blocks]){
+        if(n.id===id)return n;
+        const index=doc.paragraphs?.[n.id]?.findIndex(r=>r.id===id);
+        if(index>=0)return visualParts(n.body).filter(p=>p.kind==='text')[index]?.raw??null;
+        for(const m of n.body.matchAll(objectPattern()))if(m[2]===id)return m[0];
+    }
+    return null;
+}
+async function showParagraphHistory(owner,index,raw){
+    if(!await flushDocument())return;
+    const texts=visualParts(find(owner)?.body||'').filter(p=>p.kind==='text');
+    if(raw!=null&&texts[index]?.raw!==raw){const matches=texts.map((p,i)=>p.raw===raw?i:-1).filter(i=>i>=0);index=matches.length===1?matches[0]:-1}
+    const id=db.paragraphs?.[owner]?.[index]?.id;
+    showHistory(id||owner);
+}
+function historyText(value){
+    if(value==null)return '（对象不存在）';
+    if(typeof value==='string')return value;
+    if(Array.isArray(value.thesis))return ['thesis','blocks'].map(space=>space+'\n'+value[space].map(n=>historyText(n)).join('\n\n')).join('\n\n')+'\n\n回收站\n'+JSON.stringify(value.trash||[],null,2);
+    if(typeof value.body==='string'){const {body,...meta}=value;return JSON.stringify(meta,null,2)+'\n\n'+body}
+    return JSON.stringify(value,null,2);
+}
+async function restoreHistory(entry,objectId){
+    if(!requireEditMode()||!confirm('恢复此'+(objectId?'对象':'文档')+'版本？当前版本仍会保留在历史中。'))return;
+    if(!await flushDocument())return;
+    try{
+        await api('/api/history/restore',{id:entry.id,object:objectId,revision:db.revision});
+        dialog.close();await syncNow(true);showToast('已恢复历史版本');
+    }catch(e){showToast(e.message)}
+}
+async function showHistory(objectId=null){
+    if(!currentWorkspace?.history||!db)return;
+    const workspace=currentWorkspace.id,d=showDialog('历史版本');
+    const heading=el('div','historyControls'),scope=el('select');scope.setAttribute('aria-label','历史范围');
+    const ids=[['','全部文档']];
+    const current=objectId||panes[active]?.id;
+    if(current)ids.push([current,(resolve(current)?.title||find(current)?.title||(current.startsWith('para-')?'当前段落':current))]);
+    for(const [id,label] of ids){const opt=el('option','',label);opt.value=id;scope.append(opt)}
+    scope.value=objectId||'';scope.onchange=()=>showHistory(scope.value||null);
+    const expand=btn('全部展开',()=>{const groups=[...list.querySelectorAll('details.historyGroup')];const opened=groups.every(x=>x.open);groups.forEach(x=>x.open=!opened);expand.textContent=opened?'全部展开':'全部折叠'});
+    heading.append(scope,expand);d.append(heading);
+    const list=el('div','historyList'),detail=el('div','historyDetail');d.append(list,detail);
+    let entries=[],more=true,loading=false,viewSequence=0;
+    const valid=()=>dialog.open&&d.contains(list)&&list.isConnected&&workspace===currentWorkspace?.id;
+    function date(t){return new Date(t).toLocaleDateString()}
+    function clock(t){return new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+    async function preview(entry){
+        const token=++viewSequence;detail.replaceChildren(el('p','small','加载差异…'));
+        try{
+            const past=await api(historyURL('/api/history/item',{id:entry.id}));
+            if(!valid()||token!==viewSequence)return;
+            const old=historyText(historicalValue(past,objectId)),now=historyText(historicalValue(db,objectId));
+            detail.replaceChildren(el('h3','',entry.tag?.name||clock(entry.time)),el('p','small','历史版本 → 当前版本'));
+            const tools=el('div','historyControls');tools.append(btn('复制历史内容',()=>copy(old)),btn('恢复版本',()=>restoreHistory(entry,objectId)));detail.append(tools);
+            const pre=el('pre','historyDiff');
+            let length=0;const diff=Diff.diffLines(old,now,{timeout:300});
+            if(!diff){pre.textContent='差异较大，请使用 CLI diff 查看完整内容。'}
+            else for(const item of diff){
+                let text=item.value;if(!item.added&&!item.removed&&text.length>1200)text=text.slice(0,450)+'\n… 未变化内容 …\n'+text.slice(-450);
+                if(length+text.length>100000){pre.append(el('span','','\n… 预览已截断，可复制完整历史内容 …'));break}
+                length+=text.length;pre.append(el('span',item.added?'historyAdded':item.removed?'historyRemoved':'',text));
+            }
+            if(old===now)pre.textContent='内容一致';detail.append(pre);
+        }catch(e){if(valid())detail.replaceChildren(el('p','muted',e.message))}
+    }
+    function row(entry){
+        const r=el('div','historyRow'),name=el('span','historyName',entry.tag?.name||entry.message||'自动保存'),meta=el('span','small',clock(entry.time)+' · '+entry.id.slice(0,8));r.dataset.commit=entry.id;
+        const title=el('div','historyTitle');title.append(name,meta);r.append(title);
+        title.onclick=()=>preview(entry);
+        async function setName(value,clear=false){
+            try{const result=await api('/api/history/tag',{id:entry.id,name:value,clear});entry.tag=result.tag;draw()}
+            catch(e){showToast(e.message)}
+        }
+        function rename(){
+            const input=el('input','historyRename');input.value=entry.tag?.name||new Date(entry.time).toLocaleString();input.maxLength=200;input.setAttribute('aria-label','版本名称');
+            name.replaceWith(input);input.focus();input.select();
+            input.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();const value=input.value.trim();if(value)setName(value);else showToast('请输入版本名称')}else if(e.key==='Escape'){e.preventDefault();input.replaceWith(name)}};
+            input.onblur=()=>{if(input.isConnected)input.replaceWith(name)};
+        }
+        const menu=()=>[['查看差异',()=>preview(entry)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
+        r.addEventListener('contextmenu',e=>{if(e.target.matches('input'))return;e.preventDefault();e.stopPropagation();menuAt(e,menu())});
+        r.append(btn('⋯',e=>menuAt(e,menu()),'historyMore'));if(entry.tag)r.classList.add('named');return r;
+    }
+    function draw(){
+        const opened=new Set([...list.querySelectorAll('details[open]')].map(x=>x.dataset.group));
+        list.replaceChildren();
+        let day='',group=null,last=null;
+        for(const entry of entries){
+            const nextDay=date(entry.time),auto=!entry.tag&&['editor','migration','initial'].includes(entry.source);
+            if(day!==nextDay){day=nextDay;group=null;list.append(el('h4','historyDate',day))}
+            if(!auto){group=null;list.append(row(entry))}
+            else{
+                if(!group||!last||Math.abs(new Date(last.time)-new Date(entry.time))>5*60*1000){
+                    group=el('details','historyGroup');group.dataset.group=entry.id;group.open=opened.has(entry.id);
+                    const summary=el('summary');group.append(summary);group._summary=summary;group._count=0;group._first=entry.time;list.append(group);
+                }
+                group.append(row(entry));group._count++;group._summary.textContent=clock(entry.time)+'–'+clock(group._first)+' · '+group._count+' 个自动版本';
+            }
+            last=entry;
+        }
+        if(!entries.length)list.append(el('p','muted','没有相关历史'));
+        if(more)list.append(btn('加载更多',fetchMore));
+    }
+    async function fetchMore(){
+        if(loading||!valid())return;loading=true;
+        try{const result=await api(historyURL('/api/history',{offset:entries.length,limit:100,...(objectId?{object:objectId}:{})}));if(!valid())return;entries.push(...result.items);more=result.more;draw()}
+        catch(e){if(valid())list.replaceChildren(el('p','muted',e.message))}
+        finally{loading=false}
+    }
+    list.append(el('p','small','加载历史…'));await fetchMore();
 }
 async function load(force=false){
     if(syncLoading)return;
@@ -391,6 +552,7 @@ async function load(force=false){
         }
         $('workspaceName').textContent=currentWorkspace?.name||'PaperEditer';$('workspaceName').title=currentWorkspace?.name||'PaperEditer';
         db=clone(result);trashSupported=Array.isArray(result.trash);db.trash=db.trash||[];dirty=false;conflict=false;undoStack=[];redoStack=[];
+        updateHistoryControls();
         syncBase=editableSnapshot();syncConflict=null;syncNeeded=false;workspaceChanged=false;
         reindex();
         const r=result.readingPosition||readPosition();
@@ -415,8 +577,8 @@ async function load(force=false){
         status('已加载');renderNav();renderPanes();readingReady=true;
         // Migrate a previously stored local position only if the server has none.
         if(!result.readingPosition&&r){readingInteracted=true;rememberPosition();readingInteracted=false}
-        try{const draft=await draftAccess(draftKey(),null,true);if(draft?.base&&draft?.local){Object.assign(db,clone(draft.local),{revision:draft.revision});syncBase=draft.base;dirty=true;reindex();renderNav();renderPanes();reconcile(result,draft.base,draft.local);if(conflict)showSyncConflict();else showToast('已恢复本地未保存草稿。')}}catch(e){console.warn(e);showToast('无法读取本地草稿。')}
-    }catch(e){readingReady=false;db=null;currentWorkspace=null;readingRestored=false;nav.replaceChildren();$('sideTools').replaceChildren();$('workspaceName').textContent='PaperEditer';for(const id of ['treeTab','blockTab','dual','newNode','search'])$(id).disabled=true;status('未打开文件');paneBox.replaceChildren(el('p','empty',e.message));console.error(e)}
+        try{const draft=await draftAccess(draftKey(),null,true);if(draft?.base&&draft?.local){Object.assign(db,clone(draft.local),{revision:draft.revision});syncBase=draft.base;dirty=true;reindex();renderNav();renderPanes();await reconcile(result,draft.base,draft.local);if(conflict)showSyncConflict();else showToast('已恢复本地未保存草稿。')}}catch(e){console.warn(e);showToast('无法读取本地草稿。')}
+    }catch(e){readingReady=false;db=null;currentWorkspace=null;updateHistoryControls();readingRestored=false;nav.replaceChildren();$('sideTools').replaceChildren();$('workspaceName').textContent='PaperEditer';for(const id of ['treeTab','blockTab','dual','newNode','search'])$(id).disabled=true;status('未打开文件');paneBox.replaceChildren(el('p','empty',e.message));console.error(e)}
     finally{syncLoading=false;if(dirty&&!conflict&&!workspaceChanged){clearTimeout(timer);timer=setTimeout(save,100)}}
 }
 function mobileClose(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
@@ -473,7 +635,7 @@ let floatingToolsEnabled=(()=>{try{const stored=localStorage.getItem(FLOATING_TO
 // A fresh mobile page opens for reading. Editing always requires an explicit switch.
 let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
-const readOnlyActions=new Set(['复制','复制交叉引用','复制知识块','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','查看关联网','查看原图','打开知识块','展开内容','折叠内容','展开下级','折叠下级','保存']);
+const readOnlyActions=new Set(['复制','复制交叉引用','复制知识块','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','查看关联网','查看原图','打开知识块','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看差异','设置版本名称','清除版本名称']);
 function modeMenuItems(items){
     return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
 }
@@ -843,6 +1005,10 @@ function simpleContextMenu(e,explicit){
     if(source&&(source.kind==='node'||source.number||all().some(n=>refsOf(n).includes(source.id))))result.push(['复制交叉引用',()=>copy(refToken(source))]);
     const noteId=draft?dialog._noteId:(source?.kind==='node'&&spaceOf(source.id)==='blocks'?source.id:pane&&owner&&spaceOf(owner.id)==='blocks'?owner.id:null);
     if(noteId&&find(noteId))result.push(['删除知识块/批注',()=>deleteNode(find(noteId))]);
+    if(currentWorkspace?.history&&(source||owner)){
+        const card=e.target.closest('.visualCard[data-paragraph-index]');
+        result.push(['历史版本',()=>card&&!source?showParagraphHistory(owner.id,Number(card.dataset.paragraphIndex),card._part?.raw):showHistory(source?.actualId||source?.id||owner.id)]);
+    }
     return modeMenuItems(result);
 }
 function annotationDialog(binding,attach,ownerId,e){
@@ -863,8 +1029,8 @@ function newAnnotation(binding,e){
     },{floating:true,x:e.clientX,y:e.clientY,annotation:true,binding,freePlacement,anchorRect:binding?.mode==='object'?binding.anchorRect:binding?()=>binding.area.isConnected?binding.range.getBoundingClientRect():null:freePlacement?()=>freeNoteAnchor(freePlacement):null});
 }
 function refToken(t){return '[['+(t.kind==='equation'?'eqref':'ref')+':'+(t.actualId||t.id)+']]'}
-function refMenu(t){return [['复制交叉引用',()=>copy(refToken(t))],['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],['查看关联网',()=>relationDialog(t.owner,t.id)]]}
-function nodeMenu(n){return spaceOf(n.id)==='blocks'?[['复制交叉引用',()=>copy(refToken(resolve(n.id)))]]:treeNodeMenu(n)}
+function refMenu(t){return [['复制交叉引用',()=>copy(refToken(t))],['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],['查看关联网',()=>relationDialog(t.owner,t.id)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(t.actualId||t.id)]]:[])]}
+function nodeMenu(n){return spaceOf(n.id)==='blocks'?[['复制交叉引用',()=>copy(refToken(resolve(n.id)))],...(currentWorkspace?.history?[['历史版本',()=>showHistory(n.id)]]:[])]:treeNodeMenu(n)}
 function createEmptyThesis(parent=null,after=null){
     if(!requireEditMode())return;
     checkpoint();const id='sec-'+uid(),n={id,title:'',parent,level:1,number:'',file:'thesis/'+id+'.md',source:'',order:db.thesis.length,body:''};
@@ -872,7 +1038,7 @@ function createEmptyThesis(parent=null,after=null){
     if(after){const sibling=find(after),last=descendants('thesis',after).at(-1)||sibling;list.splice(list.indexOf(last)+1,0,n)}else list.push(n);
     normalizeOrder('thesis');change(false);select(id);
 }
-function treeNodeMenu(n){return [['新建同级目录',()=>createEmptyThesis(n.parent||null,n.id)],['新建子目录',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)]]}
+function treeNodeMenu(n){return [['新建同级目录',()=>createEmptyThesis(n.parent||null,n.id)],['新建子目录',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(n.id)]]:[])]}
 const TREE_NEST_DELAY=600;
 let treeDrop=null;
 function clearTreeDrop(){
@@ -1305,6 +1471,7 @@ $('drawer').onclick=()=>{$('sidebar').classList.toggle('open');$('overlay').clas
 $('search').oninput=e=>{search=e.target.value;renderNav()};$('newNode').onclick=()=>newNode(view);
 $('dual').onclick=()=>{if(panes.length===1){panes.push({id:panes[0].id,edit:false,thesisReading:thesisPosition(panes[0].thesisReading)});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
 $('refresh').onclick=()=>{if(dialog._commitNote)closeWorkbenchDialog();if(conflict){showSyncConflict();return}if(workspaceChanged||!db){load();return}syncNow(true)};$('closeDialog').onclick=()=>closeWorkbenchDialog();
+$('saveVersion').onclick=markVersion;$('historyButton').onclick=()=>showHistory();
 $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
     if(dialog._commitNote)closeWorkbenchDialog();
@@ -1444,7 +1611,7 @@ document.addEventListener('keydown',e=>{
     if(editingEnabled&&dialog.open&&dialog.classList.contains('blankNoteDialog')&&e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.isComposing&&e.keyCode!==229&&!e.composedPath().some(x=>x.tagName==='MATH-FIELD')){
         if(!e.target.closest('button')&&dialog.contains(e.target)){e.preventDefault();closeWorkbenchDialog();return}
     }
-    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();if(conflict)showSyncConflict();else if(syncNeeded&&!dialog.open)syncNow(true);else save()}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();if(currentWorkspace?.history)markVersion();else if(conflict)showSyncConflict();else if(syncNeeded&&!dialog.open)syncNow(true);else save()}
 });
 
 // Native fullscreen must be requested directly from a trusted click/tap.
