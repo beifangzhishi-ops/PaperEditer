@@ -13,6 +13,17 @@ from document import Document, readonly, revision, content, recover_document
 from workspace import pack
 
 
+class CLIHelpTests(unittest.TestCase):
+    def test_no_arguments_prints_help(self):
+        script = Path(__file__).with_name("paperedit.py")
+        empty = subprocess.run([sys.executable, str(script)], capture_output=True)
+        explicit = subprocess.run([sys.executable, str(script), "--help"], capture_output=True)
+        self.assertEqual(empty.returncode, 0)
+        self.assertEqual(empty.stderr, b"")
+        self.assertEqual(empty.stdout, explicit.stdout)
+        self.assertIn(b"usage: paperedit", empty.stdout)
+
+
 class DocumentTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix=".test-v3-", dir=Path(__file__).resolve().parent)

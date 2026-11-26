@@ -140,6 +140,9 @@ def main():
     p.add_argument("--revision", required=True)
     p = sub.add_parser("recover", help="Explicit recovery of a damaged or missing document; retains original bytes")
     p.add_argument("--version")
+    if len(sys.argv) == 1:
+        parser.print_help()
+        return
     args = parser.parse_args()
     if args.command == "open":
         c = object.__new__(Client)
