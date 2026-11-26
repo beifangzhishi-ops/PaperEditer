@@ -39,6 +39,7 @@
 !/thesis-workbench/paperedit.py
 !/thesis-workbench/install_cli.py
 !/thesis-workbench/test_document.py
+!/thesis-workbench/test_cli.py
 !/thesis-workbench/example.json
 # All private data, original figures, screenshots, logs, local configuration,
 # dependencies and existing project-specific QA scripts stay local.

@@ -13,20 +13,44 @@ import server
 from document import Document, objects, object_value, revision, recover_document
 
 
+class APIError(RuntimeError):
+    def __init__(self, status, message):
+        self.status = status
+        super().__init__("HTTP " + str(status) + ": " + message)
+
+
 class Client:
     def __init__(self, filename, url, offline=False):
         self.url = url.rstrip("/")
         self.info = None
         self.doc = None
+        if filename is not None:
+            filename = str(server.workspace_path(filename))
+        local_url = urllib.parse.urlparse(self.url).hostname in ("127.0.0.1", "localhost", "::1")
         if not offline:
             try:
                 active = self.request("/api/state")
-            except (urllib.error.URLError, OSError, ValueError, RuntimeError):
+            except APIError as exc:
+                # An explicit local file may be used without opening it in
+                # the UI, even if that UI currently has no valid document.
+                if not (local_url and filename and exc.status == 409):
+                    raise
+                active = None
+            except urllib.error.URLError as exc:
+                # Do not silently redirect failed remote requests, timeouts,
+                # invalid responses or HTTP failures into a local write.
+                reason = exc.reason
+                if not local_url or not isinstance(reason, ConnectionRefusedError):
+                    raise
                 active = None
             if active and active.get("workspace", {}).get("history"):
                 info = active["workspace"]
                 if filename is None or Path(filename).resolve() == Path(info["path"]).resolve():
                     self.info = info
+            if self.info is None and not local_url:
+                raise ValueError("Remote workspace not active; refusing local fallback")
+            if active is not None and self.info is None and filename is None:
+                raise ValueError("No active single-file document; specify --workspace")
         if self.info is None:
             filename = filename or server.settings_load().get("workspace")
             if not filename:
@@ -50,7 +74,7 @@ class Client:
                 message = json.dumps(result, ensure_ascii=False) if result.get("conflicts") else result.get("error", str(e))
             except Exception:
                 message = str(e)
-            raise RuntimeError("HTTP " + str(e.code) + ": " + message) from e
+            raise APIError(e.code, message) from e
 
     def query(self, endpoint, **params):
         return self.request(endpoint + "?" + urllib.parse.urlencode(dict(workspace=self.info["id"], **{k:v for k,v in params.items() if v is not None})))
@@ -108,33 +132,33 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("open", help="Explicitly change active web workspace")
     p.add_argument("path")
-    sub.add_parser("status")
-    p = sub.add_parser("list")
+    sub.add_parser("status", help="Show current workspace, revision and history head")
+    p = sub.add_parser("list", help="List sections, blocks, paragraphs and objects")
     p.add_argument("--space", choices=["thesis", "blocks"])
-    p = sub.add_parser("search")
+    p = sub.add_parser("search", help="Search document content")
     p.add_argument("query")
     p.add_argument("--space", choices=["thesis", "blocks"])
-    p = sub.add_parser("read")
+    p = sub.add_parser("read", help="Read an object by ID, optionally at a history commit")
     p.add_argument("id")
     p.add_argument("--version")
-    p = sub.add_parser("edit")
+    p = sub.add_parser("edit", help="Apply an atomic revision-checked JSON batch")
     p.add_argument("--file", required=True, help="JSON operation batch with revision and operations; - for stdin")
     p.add_argument("--revision")
     p.add_argument("-m", "--message")
-    p = sub.add_parser("history")
+    p = sub.add_parser("history", help="List document or object history")
     p.add_argument("id", nargs="?")
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--limit", type=int, default=100)
-    p = sub.add_parser("diff")
+    p = sub.add_parser("diff", help="Compare two versions, or a version with current content")
     p.add_argument("version")
     p.add_argument("other", nargs="?")
     p.add_argument("--object")
-    p = sub.add_parser("tag")
+    p = sub.add_parser("tag", help="Name, rename or clear a version")
     p.add_argument("version", nargs="?")
     p.add_argument("--name")
     p.add_argument("--clear", action="store_true")
     p.add_argument("--revision")
-    p = sub.add_parser("restore")
+    p = sub.add_parser("restore", help="Restore a document or object with revision verification")
     p.add_argument("version")
     p.add_argument("--object")
     p.add_argument("--revision", required=True)
@@ -182,7 +206,9 @@ def main():
             raise ValueError("Object not found")
         emit(dict(revision=revision(state) if args.version else state["revision"], value=value))
     elif cmd == "edit":
-        batch = json.load(sys.stdin) if args.file == "-" else json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
+        # Decode the byte stream as JSON (UTF-8/16/32 with optional BOM),
+        # independently of the Windows console's legacy text encoding.
+        batch = json.loads(sys.stdin.buffer.read()) if args.file == "-" else json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
         operations = batch if isinstance(batch, list) else batch["operations"]
         expected = args.revision or (batch.get("revision") if isinstance(batch, dict) else None)
         if not expected:
@@ -211,5 +237,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        sys.stderr.buffer.write((str(e) + "\n").encode("utf-8"))
+        message = str(e)
+        if os.name == "nt" and not sys.stderr.isatty():
+            message = message.encode("ascii", "backslashreplace").decode("ascii")
+        sys.stderr.buffer.write((message + "\n").encode("utf-8"))
         sys.exit(1)

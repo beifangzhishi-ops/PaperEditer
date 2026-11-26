@@ -24,7 +24,7 @@ python server.py
 
 ### CLI
 
-首次安装在本目录执行 `python install_cli.py`。Windows 默认安装到当前 Python 的 Scripts 目录，Linux/macOS 默认为 `~/.local/bin`；如未在 PATH 中，按提示添加即可。安装后在任意目录执行 `paperedit --help`，命令自动使用原代码仓库的最新版本；相对批量文件路径仍相对于调用者当前目录。默认操作当前文档；指定 `--workspace` 不切换网页。服务关闭可用 `--offline`。所有日常命令输出 JSON。
+首次安装在本目录执行 `python install_cli.py`。Windows 默认在当前 Python 的 Scripts 目录安装原生 `paperedit.exe`（需要 pip 自带的 distlib 或独立 distlib），Linux/macOS 默认为 `~/.local/bin`；如未在 PATH 中，按提示添加即可。安装后在任意目录执行 `paperedit`（无参显示帮助），命令自动使用原代码仓库的最新版本；相对批量文件路径仍相对于调用者当前目录。Python 可直接用 `subprocess.run(["paperedit", "status"], capture_output=True, check=True)`，无需 shell。默认操作当前文档；指定绝对路径 `--workspace` 不切换网页。服务关闭可用 `--offline`。仅本机连接被拒绝时允许自动回退到本地核心；远程 API 失败、超时、服务器内部错误不会静默回退。所有日常命令输出 JSON，Windows 管道输出使用兼容旧 PowerShell 的 ASCII 转义（JSON 解码后仍为原始 Unicode）。`edit --file -` 支持 UTF-8 JSON 字节输入；文件输入支持 UTF-8 和 UTF-8 BOM。
 
 ~~~sh
 paperedit status

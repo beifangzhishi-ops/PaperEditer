@@ -18,6 +18,8 @@ paperedit restore COMMIT --object OBJECT_ID --revision REVISION
 
 edit 批量文件格式：`{"revision":"读取时返回的版本","operations":[{"op":"update","id":"OBJECT_ID","body":"新内容"}]}`。不能用猜测或刷新得到的新 revision 强行覆盖旧草稿；并发冲突时重新读取、合并并提交。每次有效保存自动进入独立本地 Git，不需要额外 commit；tag 只命名版本。历史仓库不设远程，不得推送用户数据。
 
+Windows 使用原生 `paperedit.exe`，Python 可直接 `subprocess.run(["paperedit", ...], capture_output=True, check=True)`，不需要 shell 或脚本绝对路径。用 `json.loads(result.stdout)` 解析结果；批量文件使用 UTF-8，标准输入使用 UTF-8 JSON 字节。不要将 API 超时或内部错误当成切换工作区的理由。
+
 先搜索、读取必要的对象，再按 ID 编辑。正文段落有持久 ID；公式、图、表采用 `:::equation ID`、`:::figure ID`、`:::table ID`，结束行为独立的 `:::`。引用 `[[ref:ID]]`、`[[eqref:ID]]`、`[[embed:ID]]`。显示编号由目录顺序计算，不写死。知识块不等于正式论文正文。外部 TeX、PPT、图片保持原权限，只有明确要求才修改源文件。图片历史记录路径和指纹，不保存二进制内容。
 
 服务关闭可用 `--offline --workspace ABSOLUTE_PATH` 直接调用同一个跨进程加锁的核心。不要使用旧 workspace.py refresh 操作 v3 文件。损坏文件由 `recover` 命令显式恢复，保留损坏原件。数据、外部资源、历史、备份与锁文件均不得提交到编辑器 Public 仓库。
