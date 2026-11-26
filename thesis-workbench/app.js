@@ -930,9 +930,11 @@ function positionToolHint(){
     const tip=$('toolHint');
     if(!hintButton.isConnected||!hintButton.getClientRects().length){hideToolHint();return}
     const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,ox=v?.offsetLeft||0,oy=v?.offsetTop||0;
-    const r=hintButton.getBoundingClientRect(),above=r.top-tip.offsetHeight-8;
-    tip.style.left=Math.max(ox+4,Math.min(r.left+(r.width-tip.offsetWidth)/2,ox+w-tip.offsetWidth-4))+'px';
-    tip.style.top=Math.max(oy+4,Math.min(above>=oy+4?above:r.bottom+8,oy+h-tip.offsetHeight-4))+'px'
+    const scale=hintButton.closest('#floatingTools')&&matchMedia('(pointer: coarse), (max-width: 760px)').matches?1/(v?.scale||1):1;
+    tip.style.transformOrigin='top left';tip.style.transform=scale===1?'':`scale(${scale})`;
+    const r=hintButton.getBoundingClientRect(),tw=tip.offsetWidth*scale,th=tip.offsetHeight*scale,pad=4*scale,gap=8*scale,above=r.top-th-gap;
+    tip.style.left=Math.max(ox+pad,Math.min(r.left+(r.width-tw)/2,ox+w-tw-pad))+'px';
+    tip.style.top=Math.max(oy+pad,Math.min(above>=oy+pad?above:r.bottom+gap,oy+h-th-pad))+'px'
 }
 function showToolHint(button,touch){
     hideToolHint();hintButton=button;hintTouch=touch;
@@ -1030,14 +1032,21 @@ function toolbarUndo(redo){
 function positionFloatingTools(){
     const bar=$('floatingTools');if(bar.hidden)return;
     const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,ox=v?.offsetLeft||0,oy=v?.offsetTop||0;
+    const mobile=matchMedia('(pointer: coarse), (max-width: 760px)').matches;
+    // VisualViewport dimensions are in layout CSS pixels. Counteract native pinch zoom for the dock only.
+    const scale=mobile?1/(v?.scale||1):1;
+    bar.style.transformOrigin='top left';bar.style.transform=scale===1?'':`scale(${scale})`;
+    if(mobile){
+        bar.style.maxWidth=Math.max(0,w/scale-16)+'px';
+        const bw=bar.offsetWidth*scale,bh=bar.offsetHeight*scale,pad=8*scale;
+        const x=ox+(w-bw)/2;let y=oy+h-bh-12*scale;
+        const keyboard=window.mathVirtualKeyboard;
+        if(keyboard?.visible&&keyboard.boundingRect?.height>0)y=Math.min(y,keyboard.boundingRect.top-bh-pad);
+        bar.style.left=Math.max(ox+pad,Math.min(x,ox+w-bw-pad))+'px';
+        bar.style.top=Math.max(oy+pad,y)+'px';positionToolHint();return
+    }
     bar.style.maxWidth=Math.max(0,w-16)+'px';
     let x=ox+(w-bar.offsetWidth)/2,y=oy+h-bar.offsetHeight-12;
-    if(matchMedia('(pointer: coarse), (max-width: 760px)').matches){
-        const keyboard=window.mathVirtualKeyboard;
-        if(keyboard?.visible&&keyboard.boundingRect?.height>0)y=Math.min(y,keyboard.boundingRect.top-bar.offsetHeight-8);
-        bar.style.left=Math.max(ox+8,Math.min(x,ox+w-bar.offsetWidth-8))+'px';
-        bar.style.top=Math.max(oy+8,y)+'px';positionToolHint();return
-    }
     const scope=dialog.open?dialog:paneBox.children[active],s=getSelection(),r=s?.rangeCount?s.getRangeAt(0):null;
     const a=r&&(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
     const selected=scope?.querySelector('.selectedNoteLabel')||scope?.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;

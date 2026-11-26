@@ -520,6 +520,32 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--toolbar-zoom-only')){
+            for(const mobile of [true,false]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                await p.evaluate(()=>select('demo-start'));
+                const bar=p.locator('#floatingTools');
+                if(!await bar.isVisible())await p.locator('#headerActions').click();
+                const cdp=await context.newCDPSession(p);
+                const measure=()=>p.evaluate(()=>{
+                    const v=visualViewport,b=document.querySelector('#floatingTools'),r=b.getBoundingClientRect(),button=b.querySelector('button').getBoundingClientRect();
+                    return {scale:v.scale,width:r.width*v.scale,height:r.height*v.scale,buttonWidth:button.width*v.scale,buttonHeight:button.height*v.scale,bottom:(v.offsetTop+v.height-r.bottom)*v.scale,center:(r.left+r.width/2-v.offsetLeft-v.width/2)*v.scale,transform:b.style.transform};
+                });
+                const initial=await measure();
+                if(mobile){
+                    for(const scale of [2,3,1]){
+                        await cdp.send('Emulation.setPageScaleFactor',{pageScaleFactor:scale});
+                        await p.waitForFunction(s=>Math.abs(visualViewport.scale-s)<.01&&Math.abs(document.querySelector('#floatingTools').getBoundingClientRect().height*visualViewport.scale-document.querySelector('#floatingTools').offsetHeight)<1,scale);
+                        const result=await measure();
+                        for(const k of ['width','height','buttonWidth','buttonHeight','bottom','center'])assert(Math.abs(result[k]-initial[k])<2,JSON.stringify({k,initial,result}));
+                        const hit=await p.evaluate(()=>{const r=document.querySelector('#editModeToggle').getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('button')?.id});
+                        assert.equal(hit,'editModeToggle');
+                    }
+                }else assert.equal(initial.transform,'');
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: mobile toolbar dimensions, screen position and hit target at 1x/2x/3x; desktop unchanged');return
+        }
         if(process.argv.includes('--math-clipboard-only')){
             const {p,context,errors}=await fixture(browser);
             await p.evaluate(()=>select('demo-start'));
