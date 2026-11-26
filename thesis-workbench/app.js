@@ -317,10 +317,37 @@ async function reconcile(remote,base=syncBase,local=editableSnapshot(),respectFo
     applySynced(remote,m.state,preserve);
 }
 function downloadSyncDraft(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download=name+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+function conflictVersionText(value){return typeof value==='string'?value:JSON.stringify(value,null,2)??'（不存在）'}
+function conflictDiff(c){
+    const local=conflictVersionText(c.local),remote=conflictVersionText(c.remote);
+    const textOnly=typeof c.local==='string'&&typeof c.remote==='string';
+    // Compare server -> local. Character-level changes are useful for Chinese
+    // prose and TeX; structured values and large conflicts use line changes.
+    let changes=null;
+    try{if(Math.max(local.length,remote.length)<=200000){
+        const compare=textOnly&&Math.max(local.length,remote.length)<=12000?window.Diff?.diffChars:window.Diff?.diffLines;
+        changes=compare?.(remote,local,{timeout:200})
+    }}catch{}
+    const grid=el('div','conflictDiffGrid'),views={};
+    for(const [side,title] of [['local','本地版本'],['remote','服务器版本']]){
+        const panel=el('div','conflictDiffPanel'),pre=el('pre','conflictDiffText');
+        pre.setAttribute('aria-label',title+'内容');pre.tabIndex=0;
+        panel.append(el('h4','',title),pre);views[side]={panel,pre};grid.append(panel);
+    }
+    if(changes){
+        for(const part of changes){
+            if(!part.removed)views.local.pre.append(el('span',part.added?'conflictAdded':'',part.value));
+            if(!part.added)views.remote.pre.append(el('span',part.removed?'conflictRemoved':'',part.value))
+        }
+    }else{views.local.pre.textContent=local;views.remote.pre.textContent=remote}
+    for(const [side,value] of [['local',local],['remote',remote]])if(value==='')views[side].pre.append(el('span','conflictEmpty','（空内容）'));
+    return {grid,views,highlighted:!!changes}
+}
 function showSyncConflict(){
     if(!syncConflict)return;
     const {remote,base}=syncConflict,local=editableSnapshot(),server={thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]},choices={};
     const d=showDialog('处理并发修改');d.append(el('p','small','双方草稿均保留。选择每个冲突项的版本，其他不冲突的修改会自动合并。目录或回收站冲突以完整操作为单位。'));
+    const legend=el('p','conflictLegend');legend.append(el('span','conflictAdded','绿色：本地新增或修改'),el('span','conflictRemoved','红色：服务器独有或被本地替换'),el('span','small','对比方向：服务器 → 本地'));d.append(legend);
     const backups=el('div','');backups.append(btn('导出本地草稿',()=>downloadSyncDraft('local-draft',local)),btn('导出服务器版本',()=>downloadSyncDraft('server-draft',server)));d.append(backups);
     const fields=el('div');d.append(fields);let plan=null,generation=0;
     const done=btn('确认合并并保存',()=>{if(!plan||plan.conflicts.length)return;dialog.close();applySynced(remote,plan.state)});d.append(done);
@@ -328,7 +355,13 @@ function showSyncConflict(){
         const token=++generation;done.disabled=true;fields.replaceChildren(el('p','small','计算合并差异…'));
         let m;try{m=await mergePlan(base,local,server,choices)}catch(e){if(fields.isConnected)fields.replaceChildren(el('p','muted',e.message),btn('重试',draw));return}
         if(token!==generation||!fields.isConnected||!dialog.open)return;plan=m;fields.replaceChildren();
-        for(const c of m.conflicts){const row=el('section');row.append(el('h3','',c.label));for(const [side,title] of [['local','本地版本'],['remote','服务器版本']]){const content=el('textarea');content.readOnly=true;content.rows=4;content.value=typeof c[side]==='string'?c[side]:JSON.stringify(c[side],null,2)??'（不存在）';content.style.width='100%';row.append(el('p','small',title),content,btn('采用'+title,()=>{choices[c.key]=side;draw()}))}fields.append(row)}
+        for(const c of m.conflicts){
+            const row=el('section','conflictItem');row.append(el('h3','',c.label));
+            const {grid,views,highlighted}=conflictDiff(c);
+            if(!highlighted)row.append(el('p','small muted','差异过大或计算超时，以下显示双方完整原文（未高亮）。'));
+            for(const [side,title] of [['local','本地版本'],['remote','服务器版本']])views[side].panel.append(btn('采用'+title,()=>{choices[c.key]=side;draw()}));
+            row.append(grid);fields.append(row)
+        }
         done.disabled=!!m.conflicts.length;if(!m.conflicts.length)fields.append(el('p','','已选择全部冲突项。确认后保存。'))
     }draw();
 }

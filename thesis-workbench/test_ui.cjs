@@ -794,9 +794,38 @@ async function run(){
             await edit(p,'demo-start','Desktop conflict.');await edit(q,'demo-start','Mobile conflict.');await p.evaluate(()=>save());await q.evaluate(()=>save());
             await q.waitForFunction(()=>conflict);await q.evaluate(()=>draftQueue);await q.reload();await q.waitForFunction(()=>conflict&&dialog.open);
             assert.equal(await q.evaluate(()=>find('demo-start').body),'Mobile conflict.');
+            const row=q.locator('.conflictItem');
+            await row.waitFor();
+            const local=row.locator('.conflictDiffPanel').nth(0),remote=row.locator('.conflictDiffPanel').nth(1);
+            assert.equal(await local.locator('pre').textContent(),'Mobile conflict.');
+            assert.equal(await remote.locator('pre').textContent(),'Desktop conflict.');
+            assert.ok(await local.locator('.conflictAdded').count());
+            assert.ok(await remote.locator('.conflictRemoved').count());
+            assert.equal(await q.getByRole('button',{name:'确认合并并保存',exact:true}).isEnabled(),false);
+            assert.equal(await row.locator('.conflictDiffGrid').evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);
+            const checks=await p.evaluate(()=>{
+                const c={local:'模型精度提高至95%',remote:'模型精度提高至90%'};
+                const t=conflictDiff(c),s=conflictDiff({local:{parent:'new',order:2},remote:{parent:'old',order:1}});
+                const empty=conflictDiff({local:'',remote:'原文'}),large='x'.repeat(200001),fallback=conflictDiff({local:large,remote:'server'});
+                return {local:t.views.local.pre.textContent,remote:t.views.remote.pre.textContent,
+                    changed:t.views.local.pre.querySelector('.conflictAdded')?.textContent,
+                    removed:t.views.remote.pre.querySelector('.conflictRemoved')?.textContent,
+                    structured:s.highlighted&&!!s.views.local.pre.querySelector('.conflictAdded')&&!!s.views.remote.pre.querySelector('.conflictRemoved'),
+                    empty:!!empty.views.local.pre.querySelector('.conflictEmpty'),
+                    complete:!fallback.highlighted&&fallback.views.local.pre.textContent===large&&fallback.views.remote.pre.textContent==='server'}
+            });
+            assert.deepEqual(checks,{local:'模型精度提高至95%',remote:'模型精度提高至90%',changed:'5',removed:'0',structured:true,empty:true,complete:true});
             await q.getByRole('button',{name:'采用本地版本',exact:true}).click();await q.getByRole('button',{name:'确认合并并保存',exact:true}).click();
             await p.waitForFunction(()=>find('demo-start').body==='Mobile conflict.'&&!dirty);await q.waitForFunction(()=>!dirty&&!conflict);
-            assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop/mobile live refresh, independent sections and objects, conflict draft reload and resolution');return;
+            // Verify the other choice also saves exactly the selected version.
+            await edit(p,'demo-start','服务器修改 <b>原文</b>');await edit(q,'demo-start','本地修改 <script>文本</script>');await p.evaluate(()=>save());await q.evaluate(()=>save());
+            await q.waitForFunction(()=>conflict);await q.evaluate(()=>showSyncConflict());
+            await q.locator('.conflictItem .conflictAdded').first().waitFor();
+            assert.equal(await q.locator('.conflictItem pre script,.conflictItem pre b').count(),0);
+            await q.getByRole('button',{name:'采用服务器版本',exact:true}).click();
+            await q.getByRole('button',{name:'确认合并并保存',exact:true}).click();
+            await q.waitForFunction(()=>find('demo-start').body==='服务器修改 <b>原文</b>'&&!dirty&&!conflict);
+            assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop/mobile live refresh, independent sections and objects, highlighted conflict diff, draft reload and both resolution choices');return;
         }
         if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}

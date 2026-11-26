@@ -113,6 +113,19 @@
 .historyDiff span{white-space:pre-wrap}
 .historyAdded{background:#e0f2e6;color:#176237}
 .historyRemoved{background:#f9e2e2;color:#9c3030;text-decoration:line-through}
+.conflictLegend{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:12px;margin:8px 0}
+.conflictLegend>span{padding:2px 5px;border-radius:3px}
+.conflictItem{border-top:1px solid #dce1e5;margin:14px 0;padding-top:10px}
+.conflictItem h3{font-size:15px;margin:0 0 8px;overflow-wrap:anywhere}
+.conflictDiffGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.conflictDiffPanel{display:flex;flex-direction:column;min-width:0;gap:6px}
+.conflictDiffPanel h4{font-size:13px;margin:0;color:#526674}
+.conflictDiffText{margin:0;min-height:72px;height:clamp(100px,26vh,300px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,Consolas,"Microsoft YaHei",monospace;background:#f6f8fa;border:1px solid #e1e5e9;border-radius:6px;padding:10px;user-select:text}
+.conflictDiffPanel>button{align-self:flex-start}
+.conflictAdded{background:#d9f0e1;color:#175e36;border-bottom:1px solid #409665}
+.conflictRemoved{background:#f9e0e0;color:#943131;text-decoration:line-through}
+.conflictEmpty{color:#73818a;font-style:italic}
+@media(max-width:600px){.conflictDiffGrid{grid-template-columns:minmax(0,1fr)}.conflictDiffText{height:clamp(88px,20vh,200px)}}
 .historicalPane{background:#f8fafc}
 .historyPageToolbar{gap:8px;align-items:center;flex-wrap:wrap}
 .historyReadOnly{font-size:12px;font-weight:600;color:#765c24;background:#f9efce;padding:4px 8px;border-radius:4px}
