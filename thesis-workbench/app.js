@@ -135,6 +135,8 @@ const ancestors=n=>{const a=[];let p=n;while(p&&p.parent){p=find(p.parent);if(!p
 const descendants=(space,id)=>{let out=[];for(const n of children(space,id)){out.push(n,...descendants(space,n.id))}return out};
 const flat=space=>descendants(space,null);
 const objectList=n=>[...n.body.matchAll(objectPattern())].map(m=>({kind:m[1],id:m[2],flags:m[3]||'',body:m[4],owner:n.id,raw:m[0]}));
+function objectIds(n){return objectList(n).flatMap(o=>[o.id,...(o.kind==='figure'?[...o.body.matchAll(figureImagePattern())].map((m,i)=>figureImageId(m[3],o.id,i)):[])])}
+function occupiedObjectIds(){return new Set(all().flatMap(n=>[n.id,...objectIds(n)]))}
 function reindex(){
     targets=new Map();numbers=new Map();aliases=new Map();
     let chapter=0,counters={};
@@ -149,8 +151,7 @@ function reindex(){
             }
             numbers.set(n.id,number);
             targets.set(n.id,{kind:'node',owner:n.id,id:n.id,number,title:n.title});
-            if(space==='blocks')chap='K'+(db.blocks.indexOf(n)+1);
-            for(const o of objectList(n)){
+            for(const o of space==='thesis'?objectList(n):[]){
                 const key=space+'|'+chap+'|'+o.kind;
                 counters[key]=(counters[key]||0)+(!o.flags.includes('unnumbered')?1:0);
                 o.number=o.flags.includes('unnumbered')?'':(chap?chap+'.':'')+counters[key];
@@ -1231,7 +1232,7 @@ function deleteNode(n){
     if(s==='blocks'&&!trashSupported){showToast('请先重启工作台服务以启用回收站');return}
     const nodeIds=new Set([n.id,...kids.map(x=>x.id)]);
     if(s==='blocks'&&dialog.open&&nodeIds.has(dialog._noteId))closeWorkbenchDialog();
-    const ids=new Set([...nodeIds,...[...targets.values(),...aliases.values()].filter(t=>nodeIds.has(t.owner)).map(t=>t.id)]);
+    const ids=new Set([...nodeIds,...[n,...kids].flatMap(objectIds),...[...targets.values(),...aliases.values()].filter(t=>nodeIds.has(t.owner)).map(t=>t.id)]);
     const count=all().filter(x=>!ids.has(x.id)&&[...x.body.matchAll(refPattern())].some(m=>ids.has(m[2])&&(s!=='blocks'||m[1]!=='embed'))).length;
     if(s!=='blocks'&&!confirm('删除“'+n.title+'”'+(kids.length?'及 '+kids.length+' 个下级':'')+'？'+(count?'有 '+count+' 个节点引用其中对象，删除会留下失效交叉引用。':'')))return;
     if(dialog.open&&ids.has(dialog._noteId))closeWorkbenchDialog();
@@ -1344,14 +1345,14 @@ function showDialog(title,options={}){
     return d
 }
 function remapCopiedObjects(s,own=null,force=false){
-    const map=new Map();
+    const map=new Map(),occupied=occupiedObjectIds();
     s=s.replace(objectPattern(),(m,k,id)=>{
-        if(force||targets.has(id))map.set(id,k+'-'+uid());
+        if(force||occupied.has(id))map.set(id,k+'-'+uid());
         if(k==='figure'){
             m=normalizeFigureImages(m,id);
             m=m.replace(figureImagePattern(),(full,alt,url,title)=>{
                 const child=figureImageId(title,id,0);
-                if(force||targets.has(child))map.set(child,'subfig-'+uid());
+                if(force||occupied.has(child))map.set(child,'subfig-'+uid());
                 return figureImageMarkup(alt,url,title,map.get(child)||child)
             })
         }
@@ -1418,8 +1419,9 @@ function renderBody(n,host,trail=[n.id]){
         markdown(n.body.slice(pos,m.index),host,trail);pos=m.index+m[0].length;
         const [raw,kind,id,flags,body]=m,t=resolve(id)||{id,kind,owner:n.id,title:id,number:''};
         const box=el('section','object');box.dataset.object=id;
-        const h=el('div','objecthead');h.append(el('span','objnum',(kind==='equation'?'公式':kind==='figure'?'图':'表')+(t.number?' '+t.number:'')),el('div','spacer'),btn('⋯',e=>menuAt(e,[...refMenu(t),['复制对象源码',()=>copy(raw)]])));
-        box.append(h);context(box,()=>[...refMenu(t),['复制对象源码',()=>copy(raw)]],()=>resolve(t.id)||t);
+        const h=el('div','objecthead');h.append(el('span','objnum',(kind==='equation'?'公式':kind==='figure'?'图':'表')+(t.number?' '+t.number:'')),el('div','spacer'));
+        if(resolve(id)){h.append(btn('⋯',e=>menuAt(e,[...refMenu(t),['复制对象源码',()=>copy(raw)]])));context(box,()=>refMenu(t),()=>resolve(t.id))}
+        box.append(h);
         if(kind==='equation'){const b=el('div','mathscroll');math(b,body.trim(),true);box.append(b)}
         else {const lines=body.split('\n');const cap=lines.shift();const b=el('div');markdown(lines.join('\n'),b,trail);const c=el('div','caption');markdown(cap,c,trail);if(kind==='table')box.append(c,b);else box.append(b,c)}
         host.append(box)

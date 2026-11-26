@@ -43,6 +43,8 @@ jobs:
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --history-only
       - name: Selected text annotation regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-highlight-only
+      - name: Annotation image and private object regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-images-only
       - name: Mobile reading mode and dock regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --view-mode-only
   windows-cli:

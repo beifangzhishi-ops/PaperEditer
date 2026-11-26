@@ -326,10 +326,58 @@ async function checkTreeReturn(browser,mobile){
     assert.deepEqual(first.errors,[]);assert.deepEqual(second.errors,[]);
     await first.context.close();await second.context.close();
 }
+async function checkAnnotationImages(browser,mobile){
+    const {p,context,errors}=await fixture(browser,mobile);
+    const original='Note before.\n\n![Legacy image](/assets/demo.png "wb-width:45")\n\n:::figure private-fig\nPrivate figure\n\n![Another image](/assets/demo.png "wb-id:private-sub wb-width:40")\n:::\n\n:::equation private-eq\nx^2\n:::\n\n:::table private-tab\nPrivate table\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n:::\n\nNote after.\n';
+    await p.evaluate(raw=>{find('demo-note').body=raw;reindex();select('demo-start')},original);
+    assert(await p.evaluate(()=>resolve('demo-note')&&!['private-fig','private-sub','private-eq','private-tab'].some(id=>resolve(id))));
+    const activate=async loc=>mobile?loc.tap():loc.click();
+    const note=p.locator('.pane .inlineAnnotation[data-token="[[embed:demo-note]]"]').first();
+    const images=p.locator('#dialog .visualImages img');
+    await activate(note);await images.first().waitFor();assert.equal(await images.count(),2);
+    await activate(images.first());
+    await p.waitForFunction(()=>document.querySelector('#dialog .selectedImage img')?.alt==='Legacy image');
+    assert.equal(await p.locator('#dialog .selectedImage .resizeHandle').count(),4);
+    assert.equal(await p.locator('#dialog .visualNum').count(),0);
+    await contextAt(p,images.first());
+    assert.equal(await menu(p,'复制交叉引用').count(),0);
+    await menu(p,'复制').click();
+    await p.waitForFunction(()=>localClipboard?.startsWith(':::subfigure')&&localClipboard.includes('/assets/demo.png'));
+    const copied=await p.evaluate(()=>localClipboard);
+    await p.evaluate(()=>closeWorkbenchDialog());
+    assert.equal(await p.evaluate(()=>find('demo-note').body),original);
+    if(mobile)await p.locator('#editModeToggle').tap();
+    const area=p.locator('.pane .visualDocument .part-text .richText').first();
+    await contextAt(p,area);await menu(p,'粘贴').click();
+    await p.waitForFunction(()=>find('demo-start').body.includes('Legacy image'));
+    const formal=await p.evaluate(()=>[...targets.values()].find(t=>t.kind==='figure'&&t.body.includes('Legacy image')));
+    assert(formal?.number);assert.notEqual(formal.id,'private-fig');
+    const formalSub=await p.evaluate(id=>[...targets.values()].find(t=>t.parentId===id),formal.id);
+    assert(formalSub?.number);assert(copied.includes(formalSub.id));
+    await contextAt(p,p.locator('[data-subfigure="'+formalSub.id+'"] img'));
+    assert.equal(await menu(p,'复制交叉引用').count(),1);
+    await menu(p,'复制').click();
+    await p.waitForFunction(id=>localClipboard?.startsWith(':::subfigure')&&!localClipboard.includes(id),formalSub.id);
+    await activate(note);await images.first().waitFor();
+    await contextAt(p,p.locator('#dialog .part-text .richText').first());await menu(p,'粘贴').click();
+    await p.waitForFunction(()=>document.querySelectorAll('#dialog .visualImages img').length===3);
+    await activate(images.first());await p.waitForFunction(()=>!!document.querySelector('#dialog .selectedImage'));
+    await p.keyboard.press('Delete');await p.waitForFunction(()=>document.querySelectorAll('#dialog .visualImages img').length===2);
+    await p.evaluate(()=>closeWorkbenchDialog());
+    const saved=await p.evaluate(()=>find('demo-note').body);assert(saved.includes('wb-id:'));assert(saved.includes('Note before.')&&saved.includes('Note after.'));
+    await p.evaluate(()=>{select('demo-note')});
+    assert.equal(await p.locator('.pane .visualNum').count(),0);
+    assert(await p.evaluate(()=>objectIds(find('demo-note')).every(id=>!resolve(id))));
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--annotation-images-only')){
+            await checkAnnotationImages(browser,false);await checkAnnotationImages(browser,true);
+            console.log('PASS: note images, private object IDs, selection, copy/paste across spaces and deletion on desktop/mobile');return
+        }
         if(process.argv.includes('--history-only')){
             const workspace={...data.state.workspace,history:true},a={id:'a'.repeat(40),time:'2026-11-26T10:00:00Z',source:'editor',message:'Automatic save',tag:null},b={id:'b'.repeat(40),time:'2026-11-26T09:58:00Z',source:'editor',message:'Automatic save',tag:null},c={id:'c'.repeat(40),time:'2026-11-26T09:55:00Z',source:'agent',message:'Agent edit',tag:{id:'v',name:'Named'}};
             const past=structuredClone(data.state);past.thesis[0].body='Historical body.';
