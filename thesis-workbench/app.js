@@ -1036,6 +1036,9 @@ function positionFloatingTools(){
     // VisualViewport dimensions are in layout CSS pixels. Counteract native pinch zoom for the dock only.
     const scale=mobile?1/(v?.scale||1):1;
     bar.style.transformOrigin='top left';bar.style.transform=scale===1?'':`scale(${scale})`;
+    // Fixed auto-width boxes shrink to fit the space after their previous left.
+    // Keep intrinsic layout width independent of the panned viewport position.
+    bar.style.width=mobile?'max-content':'';
     if(mobile){
         bar.style.maxWidth=Math.max(0,w/scale-16)+'px';
         const bw=bar.offsetWidth*scale,bh=bar.offsetHeight*scale,pad=8*scale;
