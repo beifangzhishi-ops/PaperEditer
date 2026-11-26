@@ -269,6 +269,27 @@ async function checkMixedRange(browser,mobile){
     }
     await context.close();
 }
+async function checkMouseRange(browser){
+    const {p,context,errors}=await fixture(browser);
+    const original='Alpha start\n\nMiddle paragraph\n\n:::equation drag-eq\nx^2\n:::\n\nOmega end\n';
+    await p.evaluate(raw=>{find('demo-start').body=raw;reindex();select('demo-start')},original);
+    const doc=p.locator('.pane .visualDocument').first(),areas=doc.locator('.part-text .richText');
+    const at=(i,offset)=>areas.nth(i).evaluate((a,i)=>{const r=document.createRange();r.setStart(a.querySelector('p').firstChild,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},offset);
+    const drag=async(i,a,j,b)=>{const start=await at(i,a),end=await at(j,b);await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(end.x,end.y,{steps:15});await p.mouse.up()};
+    const mixed=()=>doc.evaluate(d=>!!d._mixedRange());
+    await drag(0,0,0,5);assert.equal(await mixed(),false);assert.equal(await p.evaluate(()=>getSelection().toString()),'Alpha');
+    await drag(0,6,1,6);assert.equal(await mixed(),true);await p.keyboard.press('Control+C');
+    await p.waitForFunction(()=>localClipboard==='start\n\nMiddle');
+    await drag(2,5,0,6);assert.equal(await mixed(),true);assert.equal(await doc.locator('.part-equation.rangeSelected').count(),1);
+    await p.keyboard.press('Control+X');await p.waitForFunction(()=>find('demo-start').body==='Alpha  end\n');
+    assert((await p.evaluate(()=>localClipboard)).includes(':::equation drag-eq'));
+    await p.evaluate(()=>undo(false));await p.waitForFunction(raw=>find('demo-start').body===raw,original);
+    const start=await at(0,0),far=await at(1,6),back=await at(0,5);
+    await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(far.x,far.y,{steps:10});assert.equal(await mixed(),true);
+    await p.mouse.move(back.x,back.y,{steps:10});await p.mouse.up();assert.equal(await mixed(),false);assert.equal(await p.evaluate(()=>getSelection().toString()),'Alpha');
+    await drag(0,6,2,5);await p.keyboard.press('Delete');await p.waitForFunction(()=>find('demo-start').body==='Alpha  end\n');
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function checkNewlineDeletion(browser,mobile){
     const {p,context,errors}=await fixture(browser,mobile);
     if(mobile)await p.evaluate(()=>{if(!editingEnabled)toggleEditMode()});
@@ -484,6 +505,7 @@ async function run(){
         }
         if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
+        if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);console.log('PASS: mouse drag across paragraphs and objects, reverse, copy, cut, delete and undo');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--workspace-only')){
             const initial='C:\\Projects\\example.json',network='\\\\server\\share\\network.json';

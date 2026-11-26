@@ -267,17 +267,63 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const rect=area.getBoundingClientRect();return edge(card,y>rect.top+rect.height/2||x>rect.right)
     }
     function selectionAnchor(){const s=getSelection();return anchorPoint||(s?.anchorNode&&body.contains(s.anchorNode)?point(s.anchorNode,s.anchorOffset):null)}
+    // Each paragraph is a separate editing host. Let Chromium handle a local
+    // mouse selection until the pointer leaves that host, then extend the
+    // same anchor using the logical document range (including atomic cards).
+    let suppressDragClick=false;
+    function beginMouseRange(e){
+        const area=e.target.closest('.part-text .richText');
+        if(e.pointerType!=='mouse'||e.detail>1||!area||area.closest('.visualDocument')!==root||e.target.closest('math-field,[data-token],img,a,button,input,textarea,.resizeHandle'))return;
+        const hit=document.caretRangeFromPoint?.(e.clientX,e.clientY);
+        if(!hit||!area.contains(hit.startContainer))return;
+        const a=point(hit.startContainer,hit.startOffset),startCard=cardOf(a.node),start={x:e.clientX,y:e.clientY};
+        const scroller=root.closest('.blankNoteDialog .visualDocument,.pane')||root;
+        let crossed=false,latest=start,frame=0;
+        function update(){
+            if(!root.isConnected||!area.contains(a.node))return;
+            const rect=scroller.getBoundingClientRect(),x=Math.max(0,Math.min(innerWidth-1,Math.max(rect.left,Math.min(rect.right-1,latest.x)))),y=Math.max(0,Math.min(innerHeight-1,Math.max(rect.top,Math.min(rect.bottom-1,latest.y))));
+            const b=pointAt(x,y,a);if(!b)return;
+            if(!crossed&&cardOf(b.node)===startCard)return;
+            crossed=true;dragging=true;
+            if(cardOf(b.node)===startCard){
+                // Returning to the original paragraph restores native editing.
+                clearMixed();if(editingEnabled)area.focus({preventScroll:true});
+                getSelection().setBaseAndExtent(a.node,a.offset,b.node,b.offset);
+                syncRange();scheduleToolbarUpdate();
+            }else setRange(a,b)
+        }
+        function scroll(){
+            frame=0;if(!root.isConnected||!area.contains(a.node)){finish();return}
+            const r=scroller.getBoundingClientRect(),top=Math.max(r.top,0),bottom=Math.min(r.bottom,innerHeight),margin=28;
+            const delta=latest.y<top+margin?-Math.min(22,(top+margin-latest.y)/3):latest.y>bottom-margin?Math.min(22,(latest.y-bottom+margin)/3):0;
+            if(delta){const before=scroller.scrollTop;scroller.scrollTop+=delta;if(before!==scroller.scrollTop)update()}
+            if(crossed)frame=requestAnimationFrame(scroll)
+        }
+        function move(ev){
+            if(!(ev.buttons&1)||!root.isConnected||!area.contains(a.node)){finish();return}
+            latest={x:ev.clientX,y:ev.clientY};
+            if(!crossed&&Math.hypot(latest.x-start.x,latest.y-start.y)<4)return;
+            update();if(crossed){ev.preventDefault();if(!frame)frame=requestAnimationFrame(scroll)}
+        }
+        function finish(ev){
+            if(ev?.type==='mouseup'&&crossed){latest={x:ev.clientX,y:ev.clientY};update();ev.preventDefault();suppressDragClick=true}
+            dragging=false;cancelAnimationFrame(frame);
+            document.removeEventListener('mousemove',move,true);document.removeEventListener('mouseup',finish,true);window.removeEventListener('blur',finish);
+        }
+        document.addEventListener('mousemove',move,true);document.addEventListener('mouseup',finish,true);window.addEventListener('blur',finish);
+    }
     root.addEventListener('pointerdown',e=>{
         if(e.target.closest('.rangeHandle'))return;
+        suppressDragClick=false;
         if(e.button===0&&e.shiftKey){
             let a=selectionAnchor();
             if(!a&&selectedObject){const c=cards().find(c=>c._part===selectedObject);if(c)a=edge(c,e.clientY<c.getBoundingClientRect().top)}
             const b=a&&pointAt(e.clientX,e.clientY,a);
             if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node))){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}
         }
-        if(e.button===0){clearMixed()}
+        if(e.button===0){clearMixed();if(!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey)beginMouseRange(e)}
     },true);
-    root.addEventListener('click',e=>{if(e.shiftKey&&activeMixed()){e.preventDefault();e.stopImmediatePropagation()}},true);
+    root.addEventListener('click',e=>{if(suppressDragClick||(e.shiftKey&&activeMixed())){suppressDragClick=false;e.preventDefault();e.stopImmediatePropagation()}},true);
     for(let i=0;i<2;i++)handles[i].addEventListener('pointerdown',e=>{
         const r=activeMixed()||nativeRange();if(!r)return;
         e.preventDefault();e.stopPropagation();dragging=true;$('menu').hidden=true;const h=handles[i],fixed=i?point(r.startContainer,r.startOffset):point(r.endContainer,r.endOffset);h.setPointerCapture(e.pointerId);
