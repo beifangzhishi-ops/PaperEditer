@@ -1,1 +1,1 @@
-Example annotation. This note is linked to text and an equation.
+Example annotation. This note is linked to a single text position.

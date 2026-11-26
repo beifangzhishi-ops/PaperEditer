@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
 import json, hashlib, mimetypes, uuid, os, threading, re, datetime, base64, traceback, contextlib
 from workspace import Package
-from document import Document, content, object_value, create_document, EXAMPLE_IMAGE
+from document import Document, content, object_value, create_document, EXAMPLE_IMAGE, validate_annotation_locations
 from merge import merge_content
 ROOT=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('PAPEREDITER_DATA_DIR',str(ROOT/'data'))).expanduser().resolve()
@@ -69,9 +69,10 @@ def example_content():
     start,method=initial['thesis']
     start['title']='示例：正文与对象'
     start['body']=start['body'].replace('Synthetic color swatches','示例图：可复制整图或子图').replace('\n:::\n\n:::table','\n\n![Second swatch](/assets/'+EXAMPLE_IMAGE+' "wb-id:demo-subfig-2")\n:::\n\n:::table')
-    method['title']='示例：引用与知识块'
-    method['body']+='\n\n普通段落，**粗体**、*斜体*，行内公式 $a^2+b^2=c^2$。\n\n章节 [[ref:demo-start]]，公式 [[eqref:demo-eq]]，图 [[ref:demo-fig]]，子图 [[ref:demo-subfig]]，表 [[ref:demo-table]]，知识块 [[ref:demo-note]]，文献 [[cite:example2026]]。\n\n[[embed:demo-independent]]\n'
-    initial['blocks'].append(dict(id='demo-independent',title='独立知识块示例',parent=None,level=1,number='',file='blocks/demo-independent.md',source='',order=2,body='独立知识块：可复制正文，也可在本文件中嵌入或引用。'))
+    method['title']='示例：交叉引用与批注'
+    method['body']+='\n\n普通段落，**粗体**、*斜体*，行内公式 $a^2+b^2=c^2$。\n\n章节 [[ref:demo-start]]，公式 [[eqref:demo-eq]]，图 [[ref:demo-fig]]，子图 [[ref:demo-subfig]]，表 [[ref:demo-table]]，文献 [[cite:example2026]]。\n\n[[embed:demo-independent]]\n'
+    initial['blocks'].append(dict(id='demo-independent',title='独立标签批注示例',parent=None,level=1,number='',file='blocks/demo-independent.md',source='',order=2,body='批注：选中标签或浮窗可以复制、剪切和删除。'))
+    initial['blocks'].append(dict(id='demo-object',title='对象批注示例',parent=None,level=1,number='',file='blocks/demo-object.md',source='',order=3,body='这是公式对象上的批注。',objectBindings=[{'targetId':'demo-eq','floatOffset':{'x':14,'y':8}}]))
     return initial
 def create_workspace(filename):
     return create_document(workspace_path(filename),validate_document_state,example_content())
@@ -194,6 +195,7 @@ def save_legacy(payload):
             return 409,{'error':'其他网页或 Agent 已修改文件。请复制当前草稿，刷新后合并。'}
         trash=payload.get('trash',old['trash'])
         validate_document_state({**payload,'trash':trash})
+        validate_annotation_locations(payload)
         for space in ['thesis','blocks']:
             prior={n['id']:n for n in old[space]}
             for n in payload[space]:

@@ -1,1 +1,1 @@
-Independent note. Related to [[ref:demo-note]].
+Independent annotation placed on the page.

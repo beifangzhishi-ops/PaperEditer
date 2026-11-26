@@ -25,6 +25,75 @@ ASSET = re.compile(r"[\w.-]+")
 TAG = re.compile(r"[0-9a-f]{32}")
 REF = re.compile(r"\[\[(ref|eqref|embed|cite):([^\]\n]+)\]\]")
 
+
+def annotation_locations(doc):
+    """Count actual placements, not the metadata describing a text anchor."""
+    notes = {n["id"]: n for n in doc["blocks"]}
+    locations = {key: [] for key in notes}
+    for owner in doc["thesis"] + doc["blocks"]:
+        for m in REF.finditer(owner["body"]):
+            if m[1] == "embed" and m[2] in notes:
+                locations[m[2]].append(("text", owner, m.start(), m.end()))
+    for key, n in notes.items():
+        locations[key].extend(("object", b) for b in (n.get("objectBindings") or []))
+        locations[key].extend(("free", b) for b in (n.get("freePlacements") or []))
+    return locations
+
+
+def validate_annotation_locations(doc):
+    if any(len(places) > 1 for places in annotation_locations(doc).values()):
+        raise ValueError("An annotation may have only one placement; copy it to create another")
+
+
+def split_annotation_locations(doc):
+    """Preserve every legacy placement with a distinct annotation identity.
+
+    Only active placements are migrated. Historical snapshots remain intact.
+    """
+    locations = annotation_locations(doc)
+    if not any(len(places) > 1 for places in locations.values()):
+        return False
+    notes = {n["id"]: n for n in doc["blocks"]}
+    replacements = {}
+    for key, places in locations.items():
+        if len(places) < 2:
+            continue
+        note = notes[key]
+        original = copy.deepcopy(note)
+        meta = [b for b in [original.get("annotation", {}), *(original.get("textBindings") or [])] if isinstance(b, dict)]
+        for i, place in enumerate(places):
+            current = note if i == 0 else copy.deepcopy(original)
+            for field in ("annotation", "textBindings", "objectBindings", "freePlacements"):
+                current.pop(field, None)
+            if i:
+                new_id = "block-" + uuid.uuid4().hex
+                current.update(id=new_id, parent=None, level=1, order=len(doc["blocks"]), file="blocks/" + new_id + ".md")
+                ids = {m[2]: m[1] + "-" + uuid.uuid4().hex for m in OBJECT.finditer(current["body"])}
+                ids.update({m[1]: "subfig-" + uuid.uuid4().hex for m in re.finditer(r'wb-id:([^\s"]+)', current["body"])})
+                body = OBJECT.sub(lambda m: m[0].replace(":::" + m[1] + " " + m[2], ":::" + m[1] + " " + ids[m[2]], 1), current["body"])
+                body = re.sub(r'wb-id:([^\s"]+)', lambda m: "wb-id:" + ids[m[1]], body)
+                # Nested legacy markers belong to the original annotation; do
+                # not create extra placements by copying its text.
+                current["body"] = REF.sub(lambda m: notes[m[2]]["title"] if m[1] == "embed" and m[2] in notes else "[[" + m[1] + ":" + ids.get(m[2], m[2]) + "]]", body)
+                doc["blocks"].append(current)
+            if place[0] == "text":
+                _, owner, start, end = place
+                match = next((b for b in meta if b.get("owner") == owner["id"] and b.get("quote") and owner["body"][end:].startswith(b["quote"])), None)
+                match = match or next((b for b in meta if b.get("owner") == owner["id"]), None)
+                if match:
+                    current["annotation"] = dict(copy.deepcopy(match), mode=match.get("mode", "selection" if match.get("quote") else "caret"))
+                if i:
+                    replacements.setdefault(owner["id"], []).append((owner, start, end, current["id"]))
+            elif place[0] == "object":
+                current["objectBindings"] = [copy.deepcopy(place[1])]
+            else:
+                current["freePlacements"] = [copy.deepcopy(place[1])]
+    for edits in replacements.values():
+        for owner, start, end, key in sorted(edits, key=lambda x: x[1], reverse=True):
+            owner["body"] = owner["body"][:start] + "[[embed:" + key + "]]" + owner["body"][end:]
+    validate_annotation_locations(doc)
+    return True
+
 # A portable, reserved resource for the built-in example. Ordinary user
 # assets remain document-local; never fall back to other users' files.
 EXAMPLE_IMAGE = "paperediter-example-swatches.png"
@@ -58,6 +127,7 @@ def create_document(filename, validator, initial=None):
             for key in (*SPACES, "trash", "originalLabels", "importReport", "assets", "sources"):
                 if key in initial:
                     doc[key] = copy.deepcopy(initial[key])
+        split_annotation_locations(doc)
         register_example_resource(doc)
         doc["paragraphs"] = rebuild(None, doc)
         check_document(doc, validator)
@@ -467,7 +537,7 @@ def apply_operations(doc, operations):
                     doc["paragraphs"] = rebuild(before, doc)
                     continue
                 ids = {n["id"]}
-                while True:
+                while space != "blocks":
                     more = {x["id"] for x in doc[space] if x.get("parent") in ids}
                     if more <= ids:
                         break
@@ -475,6 +545,9 @@ def apply_operations(doc, operations):
                 removed = [x for x in doc[space] if x["id"] in ids]
                 doc[space] = [x for x in doc[space] if x["id"] not in ids]
                 if space == "blocks":
+                    for x in doc[space]:
+                        if x.get("parent") in ids:
+                            x["parent"] = None
                     targets = ids | {m[2] for x in removed for m in OBJECT.finditer(x["body"])}
                     targets |= {m[1] for x in removed for m in re.finditer(r'wb-id:([^\s"]+)', x["body"])}
                     entry = dict(id=uuid.uuid4().hex, deletedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), nodes=removed, anchors=[], bindings=[])
@@ -560,6 +633,11 @@ class Document:
                 doc["paragraphs"] = rebuild(old, doc)
                 self.replace(self.filename.read_bytes(), doc)
             self.record(doc, "Initial version", "initial")
+            original = copy.deepcopy(doc)
+            if split_annotation_locations(doc):
+                doc["paragraphs"] = rebuild(original, doc)
+                self.replace(self.filename.read_bytes(), doc)
+                self.record(doc, "Separate legacy annotation placements", "migration")
             readonly(self.filename)
 
     def migrate(self, raw):
@@ -674,6 +752,13 @@ class Document:
                     doc["paragraphs"] = rebuild(old, doc)
                     self.replace(raw, doc)
                     raw = self.filename.read_bytes()
+                original = copy.deepcopy(doc)
+                if split_annotation_locations(doc):
+                    self.record(original, "Before separating legacy annotation placements", "external")
+                    doc["paragraphs"] = rebuild(original, doc)
+                    self.replace(raw, doc)
+                    self.record(doc, "Separate legacy annotation placements", "migration")
+                    raw = self.filename.read_bytes()
                 self._cached_raw, self._cached_doc = raw, copy.deepcopy(doc)
             if doc["id"] != self.id:
                 raise ValueError("Document identity changed externally")
@@ -716,6 +801,7 @@ class Document:
             next_doc["paragraphs"] = rebuild(doc, next_doc)
             register_example_resource(next_doc)
             check_document(next_doc, self.validator)
+            validate_annotation_locations(next_doc)
             reject_encoding_loss(doc, next_doc)
             if doc != next_doc:
                 self.replace(self.local.raw, next_doc)
@@ -746,6 +832,7 @@ class Document:
                         next_doc[key] = local[key]
             register_example_resource(next_doc)
             check_document(next_doc, self.validator)
+            validate_annotation_locations(next_doc)
             reject_encoding_loss(doc, next_doc)
             if next_doc != doc:
                 self.replace(self.local.raw, next_doc)
@@ -785,7 +872,7 @@ class Document:
                     next_doc[key] = {**past[key], **next_doc[key]}
             else:
                 next_doc = past
-            if not paragraph_index_valid(next_doc):
+            if split_annotation_locations(next_doc) or not paragraph_index_valid(next_doc):
                 next_doc["paragraphs"] = rebuild(doc, next_doc)
             check_document(next_doc, self.validator)
             if next_doc != doc:

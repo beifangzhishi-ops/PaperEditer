@@ -33,7 +33,7 @@ class WorkspaceTests(unittest.TestCase):
             info=server.new_workspace(str(new))
             self.assertEqual(info['path'],str(new))
             self.assertEqual(len(server.state()['thesis']),2)
-            self.assertEqual(len(server.state()['blocks']),3)
+            self.assertEqual(len(server.state()['blocks']),4)
             self.assertEqual(server.state()['trash'],[])
             self.assertEqual(server.PACKAGE.history_list()['total'],1)
             before=new.read_bytes()

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import server
-from document import Document, readonly, revision, content, recover_document
+from document import Document, readonly, revision, content, recover_document, annotation_locations
 from workspace import pack
 
 
@@ -125,6 +125,32 @@ class DocumentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.doc.edit([dict(op="update",id="note",body="Not committed"),dict(op="move",id="note",parent="note")], before["revision"])
         self.assertEqual(self.doc.state(), before)
+
+    def test_annotation_single_placement_and_legacy_migration(self):
+        initial = self.doc.state()
+        chapter = initial['thesis'][0]['id']
+        operations = [dict(op='create', space='blocks', id='single-note', title='Note', body='Note content'), dict(op='bind', id='single-note', target='eq-test')]
+        self.assertEqual(self.doc.edit(operations, initial['revision'])[0], 200)
+        before = self.doc.state()
+        with self.assertRaisesRegex(ValueError, 'only one placement'):
+            self.doc.edit([dict(op='bind', id='single-note', target=chapter)], before['revision'])
+        duplicate = content(before)
+        duplicate['revision'] = before['revision']
+        duplicate['thesis'][0]['body'] += '\n\n[[embed:single-note]]\n'
+        with self.assertRaisesRegex(ValueError, 'only one placement'):
+            self.doc.save(duplicate)
+        self.assertEqual(self.doc.state(), before)
+        # Simulate a legacy on-disk document in the isolated test directory.
+        raw = json.loads(self.file.read_bytes())
+        raw['thesis'][0]['body'] += '\n\n[[embed:single-note]]\n'
+        readonly(self.file, False)
+        self.file.write_text(json.dumps(raw), encoding='utf-8')
+        opened = Document(self.file, server.validate_document_state)
+        result = opened.state()
+        copies = [n for n in result['blocks'] if n['body'] == 'Note content']
+        self.assertEqual(len(copies), 2)
+        self.assertEqual({len(annotation_locations(result)[n['id']]) for n in copies}, {1})
+        self.assertEqual(opened.history_list()['items'][0]['source'], 'migration')
 
     def test_resource_registration_and_invalid_external_change(self):
         image = self.root / "image.png"

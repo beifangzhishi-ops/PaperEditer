@@ -16,16 +16,7 @@
         "x": 14,
         "y": 8
       }
-    },
-    "objectBindings": [
-      {
-        "targetId": "demo-eq",
-        "floatOffset": {
-          "x": 14,
-          "y": 8
-        }
-      }
-    ]
+    }
   },
   {
     "id": "demo-free",

@@ -37,7 +37,7 @@ function setPageFold(pi,key,folded){
 }
 function pageFoldTargets(pi){
     const n=find(panes[pi]?.id);if(!n)return [];
-    const nodes=[n,...descendants(spaceOf(n.id),n.id)];
+    const nodes=spaceOf(n.id)==='blocks'?[n]:[n,...descendants(spaceOf(n.id),n.id)];
     return [...nodes.slice(1).map(x=>'section:'+x.id),...nodes.flatMap(x=>[
         ...objectList(x).map(o=>'object:'+x.id+':'+o.id),
         ...[...x.body.matchAll(/^\s*\[\[embed:([^\]\n]+)\]\]\s*$/gm)].map(m=>'object:'+x.id+':'+m[1])
@@ -150,7 +150,7 @@ function reindex(){
                 else {sec++;number=prefix+'.'+sec}
             }
             numbers.set(n.id,number);
-            targets.set(n.id,{kind:'node',owner:n.id,id:n.id,number,title:n.title});
+            if(space==='thesis')targets.set(n.id,{kind:'node',owner:n.id,id:n.id,number,title:n.title});
             for(const o of space==='thesis'?objectList(n):[]){
                 const key=space+'|'+chap+'|'+o.kind;
                 counters[key]=(counters[key]||0)+(!o.flags.includes('unnumbered')?1:0);
@@ -179,6 +179,7 @@ function reindex(){
     }
 }
 const resolve=id=>targets.get(id)||aliases.get(id);
+const texTarget=t=>!!t&&spaceOf(t.owner)==='thesis'&&!!(t.number||db.originalLabels?.[t.id]||db.thesis.some(n=>[...n.body.matchAll(refPattern())].some(m=>['ref','eqref'].includes(m[1])&&m[2]===t.id)));
 function showToast(t){$('toast').textContent=t;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3000)}
 function status(t){$('status').textContent=t}
 async function api(url,body){const r=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-PaperEditer-Workspace':currentWorkspace?.id||''},body:JSON.stringify(body)});let v=await r.json();if(!r.ok)throw Object.assign(new Error(v.error||'HTTP '+r.status),{status:r.status});return v}
@@ -224,7 +225,7 @@ function mergeSnapshots(base,local,remote,choices={}){
         const deleteEdit=original.some(n=>(!lm.has(n.id)&&rm.has(n.id)&&!syncEqual(nodeContent(n),nodeContent(rm.get(n.id))))||(!rm.has(n.id)&&lm.has(n.id)&&!syncEqual(nodeContent(n),nodeContent(lm.get(n.id)))));
         const structureConflict=deleteEdit||(!syncEqual(ol,ll)&&!syncEqual(ol,rl)&&!syncEqual(ll,rl));
         const key='structure:'+space;
-        if(structureConflict&&!choices[key])conflicts.push({key,label:(space==='thesis'?'博论树':'知识块')+'：目录结构或删除冲突',local:mine,remote:theirs});
+        if(structureConflict&&!choices[key])conflicts.push({key,label:(space==='thesis'?'博论树':'批注')+'：目录结构或删除冲突',local:mine,remote:theirs});
         const selected=structureConflict?(choices[key]==='remote'?theirs:mine):syncEqual(ol,ll)?theirs:mine;
         result[space]=selected.map((n,i)=>{
             const o=om.get(n.id),a=lm.get(n.id),b=rm.get(n.id);let value;
@@ -298,7 +299,7 @@ function applySynced(remote,merged,preserveEditor=false){
     else if(redraw)Object.assign(db,local);
     Object.assign(db,{revision:remote.revision,originalLabels:remote.originalLabels,importReport:remote.importReport,paragraphs:remote.paragraphs});
     dirty=!syncEqual(local,syncBase);conflict=false;syncConflict=null;syncNeeded=false;version++;
-    if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshBlockNetworks()}else renderPanes()}
+    if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists()}else renderPanes()}
     persistDraft();syncStatus();if(dirty){clearTimeout(timer);timer=setTimeout(save,100)}
 }
 async function mergePlan(base,local,remote,choices={}){
@@ -356,11 +357,13 @@ async function syncNow(force=false){
     }catch(e){if(e.status>=500)status('文档异常 · 草稿保留');if(force)showToast(e.message);else console.warn(e)}
     finally{syncBusy=false;if(dirty&&!conflict&&!workspaceChanged&&!syncNeeded){clearTimeout(timer);timer=setTimeout(save,100)}}
 }
-function checkpoint(){undoStack.push(editableSnapshot());if(undoStack.length>30)undoStack.shift();redoStack=[]}
+let annotationEditBefore=null,annotationEditCheckpointed=false;
+function checkpoint(){if(annotationEditBefore&&annotationEditCheckpointed)return;undoStack.push(annotationEditBefore||editableSnapshot());if(annotationEditBefore)annotationEditCheckpointed=true;if(undoStack.length>30)undoStack.shift();redoStack=[]}
+function annotationEdit(fn){if(annotationEditBefore)return fn();annotationEditBefore=editableSnapshot();annotationEditCheckpointed=false;try{return fn()}finally{annotationEditBefore=null;annotationEditCheckpointed=false}}
 function refreshObjectLabels(){
     for(const el of document.querySelectorAll('.visualRef[data-token],a.ref[data-ref]')){
         const m=el.dataset.token&&[...el.dataset.token.matchAll(refPattern())][0],id=m?.[2]||el.dataset.ref;
-        if(m&&['embed','cite'].includes(m[1]))continue;
+        if(m&&['embed','cite'].includes(m[1])||db.blocks.some(n=>n.id===id))continue;
         const t=resolve(id);
         const formula=m?.[1]==='eqref'||(!m&&t?.kind==='equation');
         el.textContent=t?(formula?'('+(t.number||t.title)+')':t.number||t.title):'〔未解析：'+id+'〕';
@@ -371,7 +374,7 @@ function refreshObjectLabels(){
     }
     for(const wrap of document.querySelectorAll('[data-subfigure]')){const t=resolve(wrap.dataset.subfigure);if(t)wrap.title='子图 '+t.number}
 }
-function change(structural=false){dirty=true;version++;reindex();syncStatus();persistDraft();clearTimeout(timer);timer=setTimeout(save,850);if(structural){renderNav();renderPanes()}else{refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshBlockNetworks()}scheduleToolbarUpdate()}
+function change(structural=false){dirty=true;version++;reindex();syncStatus();persistDraft();clearTimeout(timer);timer=setTimeout(save,850);if(structural){renderNav();renderPanes()}else{refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists()}scheduleToolbarUpdate()}
 async function save(){
     if(!dirty||saving||conflict||workspaceChanged||syncLoading||syncBusy)return;
     if(syncNeeded){await syncNow();return}
@@ -490,7 +493,7 @@ function renderHistoricalPage(pane,p,pi){
     page.append(el('h2','historyPreviewHeading',entry.tag?.name||new Date(entry.time).toLocaleString()),el('p','small',entry.id.slice(0,12)+' · '+(entry.message||'')));
     if(!h.objectId){
         const scope=el('select','historySectionSelect');scope.setAttribute('aria-label','历史章节');
-        for(const [space,title] of [['thesis','博论树'],['blocks','知识块']]){
+        for(const [space,title] of [['thesis','博论树'],['blocks','批注']]){
             const group=el('optgroup');group.label=title;
             for(const n of past[space]){const o=el('option','','　'.repeat(Math.max(0,Math.min(8,(n.level||1)-1)))+(n.title||'未命名'));o.value=n.id;group.append(o)}
             scope.append(group)
@@ -708,7 +711,7 @@ let floatingToolsEnabled=(()=>{try{const stored=localStorage.getItem(FLOATING_TO
 // A fresh mobile page opens for reading. Editing always requires an explicit switch.
 let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
-const readOnlyActions=new Set(['复制','复制交叉引用','复制知识块','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','查看关联网','查看原图','打开知识块','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看历史版本','查看差异','设置版本名称','清除版本名称']);
+const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看历史版本','查看差异','设置版本名称','清除版本名称']);
 function modeMenuItems(items){
     return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
 }
@@ -740,6 +743,7 @@ function syncEditMode(){
     document.body.classList.toggle('viewMode',!editingEnabled);
     for(const node of document.querySelectorAll('.richText,.editableTitle,math-field'))setEditorControlMode(node);
     $('newNode').disabled=!editingEnabled;
+    for(const b of document.querySelectorAll('.annotationDelete,.createBlockButton'))b.disabled=!editingEnabled;
     const b=$('editModeToggle');
     if(b){
         setToolIcon(b,editingEnabled?'edit':'eye');
@@ -858,8 +862,9 @@ function toolbarContext(){
     const s=getSelection(),r=s?.rangeCount?s.getRangeAt(0):null;
     const rangeTarget=r&&(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
     const mixedDoc=[...scope.querySelectorAll('.visualDocument')].find(d=>d._mixedRange?.());
-    const selected=scope.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
-    if(mixedDoc&&usable(mixedDoc))target=mixedDoc;
+    const selected=scope.querySelector('.selectedNoteLabel')||scope.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
+    if(selected?.classList.contains('selectedNoteLabel')&&usable(selected))target=selected;
+    else if(mixedDoc&&usable(mixedDoc))target=mixedDoc;
     else if(selected&&usable(selected))target=selected;
     else if(usable(rangeTarget)&&(!target||target.closest('.richText')===rangeTarget||focus===rangeTarget))target=rangeTarget;
     else if(usable(focus)&&focus.matches('input,textarea,math-field,.richText'))target=focus;
@@ -901,7 +906,7 @@ function positionFloatingTools(){
     }
     const scope=dialog.open?dialog:paneBox.children[active],s=getSelection(),r=s?.rangeCount?s.getRangeAt(0):null;
     const a=r&&(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
-    const selected=scope?.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
+    const selected=scope?.querySelector('.selectedNoteLabel')||scope?.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
     const mixed=[...(scope?.querySelectorAll('.visualDocument')||[])].map(d=>d._mixedRange?.()).find(Boolean);
     const anchor=mixed?.getBoundingClientRect()||selected?.getBoundingClientRect()||(a&&scope?.contains(a)&&(focus===a||!r.collapsed)?r.getBoundingClientRect():null)||(focus?.matches('math-field,.editableTitle')&&scope?.contains(focus)?focus.getBoundingClientRect():null);
     const visible=scope?.getBoundingClientRect();
@@ -959,7 +964,7 @@ function showFloatingTools(e,items){
 function initFloatingTools(){
     const bar=$('floatingTools');
     const mode=toolIcon(btn('',toggleEditMode),'eye',MODE_TOOL);mode.id='editModeToggle';bar.append(mode);
-    for(const [name,label] of [['cut','剪切'],['copy','复制'],['paste','粘贴'],['note','新建批注/知识块'],['insert','插入批注/知识块'],['link','复制交叉引用']])bar.append(toolIcon(btn('',()=>toolbarAction(label)),name,label));
+    for(const [name,label] of [['cut','剪切'],['copy','复制'],['paste','粘贴'],['note','新建批注'],['link','复制交叉引用']])bar.append(toolIcon(btn('',()=>toolbarAction(label)),name,label));
     bar.append(toolIcon(btn('',()=>toolbarUndo(false)),'undo','撤销'),toolIcon(btn('',()=>toolbarUndo(true)),'redo','重做'));
     for(const b of bar.querySelectorAll('button'))b.dataset.tool=b.getAttribute('aria-label');
     toolIcon($('headerActions'),'toolbar','显示工具栏');
@@ -1046,10 +1051,12 @@ function objectAnnotationBinding(source,e){
 }
 function bindNoteToObject(id,binding){
     const n=find(id);if(!n||!binding||id===binding.targetId)return;
-    if(objectNoteBindings(n).some(x=>x.targetId===binding.targetId)){showToast('该知识块已绑定此对象');return}
+    if(objectNoteBindings(n).some(x=>x.targetId===binding.targetId)){showToast('该批注已绑定此对象');return}
     checkpoint();n.objectBindings=[...objectNoteBindings(n),{targetId:binding.targetId,floatOffset:{x:14,y:8}}];change(false)
 }
 function simpleContextMenu(e,explicit){
+    const noteLabel=e.target.closest(noteLabelSelector);
+    if(noteLabel?._openNote)return modeMenuItems(noteLabelMenu(noteLabel));
     const rangeDoc=e.target.closest('.visualDocument');
     if(rangeDoc?._mixedRange?.())return modeMenuItems(rangeDoc._clipboardMenu(e));
     const pane=e.target.closest('.pane'),pi=pane?[...paneBox.children].indexOf(pane):active;
@@ -1063,49 +1070,22 @@ function simpleContextMenu(e,explicit){
     const draft=dialog.open&&e.target.closest('#dialog');
     // Prose and its surrounding document whitespace allow annotations, not
     // headings, navigation, reference objects or other interface controls.
-    const prose=!!(pane&&owner&&!draft&&!source&&!e.target.closest('button,input,textarea,select,.toolbar,.editableHeading,.breadcrumb,summary,.blockcard,.graph,.cards,.visualRef,[data-object],.resizeHandle,.noteResizeHandle'));
-    const objectBinding=!draft&&source?objectAnnotationBinding(source,e):null;
+    const prose=!!(pane&&owner&&spaceOf(owner.id)==='thesis'&&!draft&&!source&&!e.target.closest('button,input,textarea,select,.toolbar,.editableHeading,.breadcrumb,summary,.blockcard,.cards,.visualRef,[data-object],.resizeHandle,.noteResizeHandle'));
+    const objectBinding=!draft&&source&&spaceOf(source.owner)==='thesis'?objectAnnotationBinding(source,e):null;
     const binding=objectBinding||(prose?annotationBinding(e,pane):null);
-    const freePlacement=prose&&!binding?freeNoteLocation(e):null;
-    const anchor=doc?._annotationAnchor?.(e.clientY);
-    const attach=objectBinding?(id=>bindNoteToObject(id,objectBinding)):owner&&!draft? (id=>{
-        if(id===owner.id)return;
-        if(binding){
-            if(!binding.doc._insertBoundAnnotation(id,binding)){showToast('原文字位置已变化，知识块已保留但未绑定');return}
-            const note=find(id);
-            if(note&&binding.mode==='selection'&&binding.quote){
-                const bindings=note.textBindings||[];
-                if(!bindings.some(b=>b.owner===binding.owner.id&&b.quote===binding.quote)){note.textBindings=[...bindings,{owner:binding.owner.id,quote:binding.quote}];change(false)}
-            }
-            return
-        }
-        if(freePlacement){placeExistingFreeNote(id,freePlacement);return}
-        if(doc?._owner===owner.id&&doc._insertAnnotation&&doc.isConnected)doc._insertAnnotation(id,anchor);
-        else{checkpoint();owner.body=owner.body.trimEnd()+'\n\n[[embed:'+id+']]\n';change(true)}
-    }):null;
     const result=editorClipboardMenu(e);
     // Insertion lives in the context menu, not a persistent button in the text.
     const insertDoc=e.target.closest('.visualDocument')||(prose?doc:null);
     if(!e.preview&&insertDoc?._contentInsertMenu)result.push(...insertDoc._contentInsertMenu(e));
-    if(prose||objectBinding){
-        result.push(['新建批注/知识块',()=>newAnnotation(binding,e)]);
-        result.push(['插入批注/知识块',()=>annotationDialog(binding,attach,objectBinding?.targetId||owner?.id,e)]);
-    }
-    if(source&&(source.kind==='node'||source.number||all().some(n=>refsOf(n).includes(source.id))))result.push(['复制交叉引用',()=>copy(refToken(source))]);
+    if(prose||objectBinding)result.push(['新建批注',()=>newAnnotation(binding,e)]);
+    if(texTarget(source)&&!draft&&spaceOf(owner?.id)!=='blocks')result.push(['复制交叉引用',()=>copy(refToken(source))]);
     const noteId=draft?dialog._noteId:(source?.kind==='node'&&spaceOf(source.id)==='blocks'?source.id:pane&&owner&&spaceOf(owner.id)==='blocks'?owner.id:null);
-    if(noteId&&find(noteId))result.push(['删除知识块/批注',()=>deleteNode(find(noteId))]);
+    if(noteId&&find(noteId))result.push(['删除批注',()=>deleteNode(find(noteId))]);
     if(currentWorkspace?.history&&(source||owner)){
         const card=e.target.closest('.visualCard[data-paragraph-index]');
         result.push(['历史版本',()=>card&&!source?showParagraphHistory(owner.id,Number(card.dataset.paragraphIndex),card._part?.raw):showHistory(source?.actualId||source?.id||owner.id)]);
     }
     return modeMenuItems(result);
-}
-function annotationDialog(binding,attach,ownerId,e){
-    const d=showDialog('插入批注/知识块',{floating:true,x:e.clientX,y:e.clientY});
-    if(binding?.quote)d.append(el('blockquote','muted',binding.quote));
-    const q=el('input');q.placeholder='搜索已有知识块';q.style.width='100%';const list=el('div','visualPickList');
-    function draw(){list.replaceChildren();const key=q.value.trim().toLowerCase();for(const n of db.blocks.filter(n=>n.id!==ownerId&&n.title.toLowerCase().includes(key)).slice(0,80))list.append(btn(n.title,()=>{dialog.close();if(attach)attach(n.id);else select(n.id)}));if(!list.childNodes.length)list.append(el('p','muted','暂无可插入的知识块'))}
-    d.append(q,list);q.addEventListener('input',draw);draw();q.focus()
 }
 function newAnnotation(binding,e){
     const origin=binding?.owner,quote=binding?.quote;
@@ -1113,13 +1093,13 @@ function newAnnotation(binding,e){
     const initial='';
     newNode('blocks',null,initial,'',id=>{
         if(binding?.mode==='object'){showToast('批注已绑定对象');return}
-        if(binding&&!binding.doc._insertBoundAnnotation(id,binding))showToast('原文字位置已变化，知识块已保留但未绑定');
-        else showToast(binding?'批注已创建并绑定':freePlacement?'知识块已保留在创建位置':'已创建独立知识块')
+        if(binding&&!binding.doc._insertBoundAnnotation(id,binding))showToast('原文字位置已变化，批注已保留但未绑定');
+        else showToast(binding?'批注已创建并绑定':freePlacement?'批注已保留在创建位置':'已创建批注')
     },{floating:true,x:e.clientX,y:e.clientY,annotation:true,binding,freePlacement,anchorRect:binding?.mode==='object'?binding.anchorRect:binding?()=>binding.area.isConnected?binding.range.getBoundingClientRect():null:freePlacement?()=>freeNoteAnchor(freePlacement):null});
 }
 function refToken(t){return '[['+(t.kind==='equation'?'eqref':'ref')+':'+(t.actualId||t.id)+']]'}
-function refMenu(t){return [['复制交叉引用',()=>copy(refToken(t))],['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],['查看关联网',()=>relationDialog(t.owner,t.id)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(t.actualId||t.id)]]:[])]}
-function nodeMenu(n){return spaceOf(n.id)==='blocks'?[['复制交叉引用',()=>copy(refToken(resolve(n.id)))],...(currentWorkspace?.history?[['历史版本',()=>showHistory(n.id)]]:[])]:treeNodeMenu(n)}
+function refMenu(t){return [...(texTarget(t)?[['复制交叉引用',()=>copy(refToken(t))]]:[]),['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(t.actualId||t.id)]]:[])]}
+function nodeMenu(n){return spaceOf(n.id)==='blocks'?[...annotationLocationMenu(n),['删除批注',()=>deleteNode(n)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(n.id)]]:[])]:treeNodeMenu(n)}
 function createEmptyThesis(parent=null,after=null){
     if(!requireEditMode())return;
     checkpoint();const id='sec-'+uid(),n={id,title:'',parent,level:1,number:'',file:'thesis/'+id+'.md',source:'',order:db.thesis.length,body:''};
@@ -1169,6 +1149,18 @@ function renderNav(){
     if(!db)return;
     clearTreeDrop();
     nav.replaceChildren();
+    $('newNode').hidden=view==='blocks';
+    if(view==='blocks'){
+        $('sideTools').replaceChildren();$('newNode').title='新建批注';
+        nav.append(btn('批注一览',()=>{replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
+        const query=search.trim().toLowerCase();
+        for(const n of db.blocks.filter(n=>(n.title+' '+n.body).toLowerCase().includes(query))){
+            const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));row.dataset.nodeId=n.id;
+            row.append(el('span','navlabel',n.title),btn('⋯',e=>menuAt(e,nodeMenu(n))));
+            row.addEventListener('click',()=>select(n.id));context(row,()=>nodeMenu(n),null,true);nav.append(row)
+        }
+        rememberPosition();return
+    }
     const branches=db[view].filter(n=>children(view,n.id).length).map(n=>n.id);
     const collapsed=branches.every(id=>!open.has(id));
     const foldButton=btn(collapsed?'全部展开':'全部折叠',()=>{
@@ -1177,10 +1169,9 @@ function renderNav(){
     },'foldAllButton navFoldButton');
     foldButton.disabled=!branches.length;foldButton.title='仅展开或折叠导航目录';
     $('sideTools').replaceChildren(foldButton);
-    $('newNode').title=view==='blocks'?'新建知识块':'新建章节';
+    $('newNode').title=view==='blocks'?'新建批注':'新建章节';
     const list=db[view];
     const query=search.trim().toLowerCase();
-    if(view==='blocks')nav.append(btn('块网总览',()=>{replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
     function add(n,depth,hit=false){
         const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));
         row.style.paddingLeft=Math.min(depth,8)*12+'px';row.dataset.nodeId=n.id;row.draggable=true;
@@ -1199,7 +1190,7 @@ function renderNav(){
     }
     if(query){for(const n of list.filter(n=>(n.title+' '+n.body).toLowerCase().includes(query)))add(n,0,true)}
     else for(const n of children(view,null))add(n,0);
-    if(!list.length)nav.append(el('div','empty','尚无知识块，点击 ＋ 新建。'));
+    if(!list.length)nav.append(el('div','empty','尚无章节，点击 ＋ 新建。'));
     rememberPosition();
 }
 function normalizeOrder(space){db[space]=flat(space);db[space].forEach((n,i)=>{n.order=i;n.level=ancestors(n).length+1})}
@@ -1228,7 +1219,7 @@ function mergePrev(n){
 function deleteNode(n){
     if(!requireEditMode())return;
     if(!n)return;
-    const s=spaceOf(n.id),kids=descendants(s,n.id);
+    const s=spaceOf(n.id),kids=s==='blocks'?[]:descendants(s,n.id);
     if(s==='blocks'&&!trashSupported){showToast('请先重启工作台服务以启用回收站');return}
     const nodeIds=new Set([n.id,...kids.map(x=>x.id)]);
     if(s==='blocks'&&dialog.open&&nodeIds.has(dialog._noteId))closeWorkbenchDialog();
@@ -1239,6 +1230,7 @@ function deleteNode(n){
     checkpoint();
     if(s==='blocks'){
         const entry={id:uid(),deletedAt:new Date().toISOString(),nodes:clone([n,...kids]),anchors:[],bindings:[]};
+        for(const child of db.blocks)if(child.parent===n.id){child.parent=null;child.level=1}
         for(const x of all())if(!ids.has(x.id)){
             const marks=[];let removed=0;
             const body=x.body.replace(refPattern(),(m,k,id,offset)=>{
@@ -1288,15 +1280,15 @@ function restoreTrash(entry){
         const current=n[b.field]||[],key=b.field==='objectBindings'?'targetId':'id';
         n[b.field]=[...current,...clone(b.values.filter(v=>!current.some(x=>x[key]===v[key])))];
     }
-    db.trash=db.trash.filter(x=>x.id!==entry.id);change(true);showTrash();
-    if(missed)showToast('知识块已恢复，'+missed+' 处引用或绑定位置已变化，请重新关联');
+    db.trash=db.trash.filter(x=>x.id!==entry.id);splitLegacyAnnotationPlacements();change(true);showTrash();
+    if(missed)showToast('批注已恢复，'+missed+' 处引用或绑定位置已变化，请重新关联');
 }
 function showTrash(){
     const d=showDialog('回收站');
     if(!db.trash.length){d.append(el('p','muted','回收站为空'));return}
     for(const entry of db.trash){
         const row=el('div','trashRow'),info=el('div');
-        info.append(el('strong','',entry.nodes[0].title),el('div','small',new Date(entry.deletedAt).toLocaleString()+(entry.nodes.length>1?' · '+entry.nodes.length+' 个知识块':'')));
+        info.append(el('strong','',entry.nodes[0].title),el('div','small',new Date(entry.deletedAt).toLocaleString()+(entry.nodes.length>1?' · '+entry.nodes.length+' 个批注':'')));
         const restore=btn('恢复',()=>restoreTrash(entry));restore.disabled=!editingEnabled;
         row.append(info,restore);d.append(row);
     }
@@ -1309,8 +1301,10 @@ function closeWorkbenchDialog(){
 }
 function showDialog(title,options={}){
     if(dialog.open&&dialog._commitNote)closeWorkbenchDialog();
+    clearNoteLabel();
     dialog._commitNote=null;
     dialog._noteId=null;
+    dialog._noteValue=null;
     hideFloatingTools();
     const generation=++dialogPlacementVersion;
     dialog._relativeOffset=null;
@@ -1360,7 +1354,7 @@ function remapCopiedObjects(s,own=null,force=false){
     });
     return s.replace(refPattern(),(m,k,id)=>map.has(id)?'[['+k+':'+map.get(id)+']]':m)
 }
-function createBlockFrom(body,title,id){newNode('blocks',null,body+'\n\n来源：[[ref:'+id+']]\n',title+' · 知识块')}
+function createBlockFrom(body,title,id){newNode('blocks',null,body+'\n\n来源：[[ref:'+id+']]\n',title+' · 批注')}
 function undo(redo){if(!requireEditMode())return;const a=redo?redoStack:undoStack,b=redo?undoStack:redoStack;if(!a.length){showToast('无可'+(redo?'重做':'撤销')+'的操作');return}b.push(editableSnapshot());const s=a.pop();db.thesis=s.thesis;db.blocks=s.blocks;db.trash=s.trash;panes.forEach(p=>{if(!find(p.id))p.id=null});change(true)}
 function math(e,tex,display=false){
     try{katex.render(tex,e,{displayMode:display,throwOnError:false,strict:'ignore',trust:false,macros:{'\\textmu':'\\mu'}})}
@@ -1368,6 +1362,7 @@ function math(e,tex,display=false){
 }
 function refSpan(kind,id){
     if(kind==='cite'){const s=el('span','muted','['+id.replaceAll(',',', ')+']');s.title='参考文献键：'+id;return s}
+    const note=db.blocks.find(n=>n.id===id);if(note)return el('span','muted',note.title);
     const t=resolve(id);
     if(!t)return el('span','badref','〔未解析：'+id+'〕');
     const title=t.kind==='node'?(t.number||t.title):t.number||t.title||id;
@@ -1386,8 +1381,8 @@ function markdown(raw,host,trail=[],onImageResize=null){
         const t=tokens[Number(p.dataset.wbToken)];if(!t){p.remove();continue}
         if(t.kind==='math'||t.kind==='display'){const a=el(t.kind==='math'?'span':'div',t.kind==='display'?'mathscroll':'');math(a,t.value,t.kind==='display');p.replaceWith(a)}
         else if(t.kind==='embed'){
-            const n=find(t.value);const d=el('details','embed');d.append(el('summary','',n?'知识块：'+n.title:'失效嵌入：'+t.value));
-            if(n&&!trail.includes(n.id)){d.addEventListener('toggle',()=>{if(d.open&&!d.dataset.loaded){d.dataset.loaded='1';const b=el('div','content');renderBody(n,b,[...trail,n.id]);d.append(b,btn('打开知识块',()=>select(n.id)))}})}
+            const n=find(t.value);const d=el('details','embed');d.append(el('summary','',n?'批注：'+n.title:'失效嵌入：'+t.value));
+            if(n&&!trail.includes(n.id)){d.addEventListener('toggle',()=>{if(d.open&&!d.dataset.loaded){d.dataset.loaded='1';const b=el('div','content');renderBody(n,b,[...trail,n.id]);d.append(b,btn('打开批注',()=>select(n.id)))}})}
             else d.append(el('div','muted','循环引用或对象不存在'));
             p.replaceWith(d)
         }else p.replaceWith(refSpan(t.kind,t.value))
@@ -1428,95 +1423,111 @@ function renderBody(n,host,trail=[n.id]){
     }
     markdown(n.body.slice(pos),host,trail);
 }
-function refsOf(n){return [...new Set([...n.body.matchAll(refPattern())].filter(m=>m[1]!=='cite').map(m=>m[2]).concat(objectNoteBindings(n).map(x=>x.targetId)))]}
-function related(id,object=null){
-    const n=find(id);if(!n)return[];
-    const ids=new Set([id,...objectList(n).map(o=>o.id)]), rel=new Map();
-    const put=(other,kind)=>{if(other&&other!==id&&find(other)){if(!rel.has(other))rel.set(other,new Set());rel.get(other).add(kind)}};
-    for(const r of refsOf(n))put(resolve(r)?.owner,'引用');
-    for(const x of all())if(x.id!==id&&refsOf(x).some(r=>ids.has(r)||resolve(r)?.owner===id))put(x.id,'被引用');
-    // Free placements and text annotations also link a knowledge block to its page.
-    for(const x of db.blocks){
-        const owners=[x.annotation?.owner,...freeNotePlacements(x).map(p=>p.pageId)];
-        if(x.id===id)for(const owner of owners)put(owner,'批注位置');
-        else if(owners.includes(id))put(x.id,'批注');
-    }
-    if(n.parent)put(n.parent,'上级');for(const c of children(spaceOf(id),id))put(c.id,'下级');
-    return [...rel].map(([id,kinds])=>({id,kinds:[...kinds].join(' / ')}))
+function annotationLocationIndex(){
+    const index=new Map(db.blocks.map(n=>[n.id,[]]));
+    for(const n of all())for(const m of n.body.matchAll(refPattern()))if(m[1]==='embed'&&index.has(m[2]))index.get(m[2]).push({owner:n.id,kind:'text',start:m.index,end:m.index+m[0].length});
+    for(const note of db.blocks){const places=index.get(note.id);
+        for(const b of objectNoteBindings(note)){const target=resolve(b.targetId);places.push({owner:target?.owner||b.targetId,kind:'object',targetId:b.targetId,binding:b})}
+        for(const p of freeNotePlacements(note))places.push({owner:p.pageId,kind:'free',placementId:p.id,placement:p})
+    }return index
 }
-function svgEl(tag,attrs={}){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,String(v)));return e}
+function annotationLocations(note,index=null){return (index||annotationLocationIndex()).get(note.id)||[]}
+const ANNOTATION_CLIPBOARD='PaperEditer-annotation-v1:';
+function annotationClipboard(note,cut=false){
+    const body=dialog.open&&dialog._noteId===note.id&&dialog._noteValue?dialog._noteValue():note.body;
+    return ANNOTATION_CLIPBOARD+JSON.stringify({workspace:currentWorkspace?.id,id:note.id,title:note.title,body,floatSize:note.floatSize,cut})
+}
+function annotationClipboardValue(text){
+    if(!text.startsWith(ANNOTATION_CLIPBOARD))return null;
+    try{const n=JSON.parse(text.slice(ANNOTATION_CLIPBOARD.length));return typeof n.body==='string'&&typeof n.title==='string'?n:null}catch{return null}
+}
+function clearAnnotationPlacement(n){delete n.annotation;delete n.textBindings;delete n.objectBindings;delete n.freePlacements}
+function annotationCopy(n){
+    const id='block-'+uid(),body=remapCopiedObjects(n.body.replace(refPattern(),(m,k,target)=>k==='embed'||(['ref','eqref'].includes(k)&&db.blocks.some(x=>x.id===target))?(find(target)?.title||target):m),null,true);
+    const copy={id,title:n.title||blockLabel(body),body,parent:null,level:1,order:db.blocks.length,number:'',file:'blocks/'+id+'.md',source:''};
+    if(n.floatSize)copy.floatSize=clone(n.floatSize);db.blocks.push(copy);return copy
+}
+function prepareAnnotationPaste(text,owner){
+    const payload=annotationClipboardValue(text),internal=spaceOf(owner)!=='thesis';
+    if(payload){
+        if(internal)return payload.body.replace(refPattern(),(m,k,id)=>k==='embed'?(find(id)?.title||id):m);
+        const source=payload.workspace===currentWorkspace?.id&&db.blocks.find(n=>n.id===payload.id);
+        const note=payload.cut&&source&&!annotationLocations(source).length?source:annotationCopy(payload);
+        clearAnnotationPlacement(note);return '[[embed:'+note.id+']]'
+    }
+    const claimed=new Set();
+    return text.replace(refPattern(),(m,k,id)=>{
+        const source=db.blocks.find(n=>n.id===id);
+        if(k!=='embed')return source&&['ref','eqref'].includes(k)?source.title:m;
+        if(!source)return '（批注不可用：'+id+'）';
+        if(internal)return source.title;
+        const note=!claimed.has(id)&&!annotationLocations(source).length?source:annotationCopy(source);
+        claimed.add(id);clearAnnotationPlacement(note);return '[[embed:'+note.id+']]'
+    })
+}
+function splitLegacyAnnotationPlacements(){
+    const index=annotationLocationIndex(),edits=new Map();
+    for(const n of [...db.blocks]){
+        const places=annotationLocations(n,index);if(places.length<2)continue;
+        const old=clone(n),meta=[old.annotation,...(old.textBindings||[])].filter(Boolean);
+        places.forEach((place,i)=>{
+            const note=i?annotationCopy(old):n;clearAnnotationPlacement(note);
+            if(place.kind==='text'){
+                const owner=find(place.owner),match=meta.find(b=>b.owner===place.owner&&b.quote&&owner?.body.slice(place.end).startsWith(b.quote))||meta.find(b=>b.owner===place.owner);
+                if(match)note.annotation={...clone(match),mode:match.mode||(match.quote?'selection':'caret')};
+                if(i&&owner){if(!edits.has(owner.id))edits.set(owner.id,[]);edits.get(owner.id).push({...place,id:note.id})}
+            }else if(place.kind==='object')note.objectBindings=[clone(place.binding)];else note.freePlacements=[clone(place.placement)]
+        })
+    }
+    for(const [owner,positions] of edits){const n=find(owner);for(const p of positions.sort((a,b)=>b.start-a.start))n.body=n.body.slice(0,p.start)+'[[embed:'+p.id+']]'+n.body.slice(p.end)}
+}
+function annotationLocationMenu(note){
+    const place=annotationLocations(note)[0];
+    return place&&find(place.owner)?[['定位批注',()=>jumpAnnotation(note.id,place)]]:[]
+}
 function highlightNetworkTarget(target){
     if(!target)return;target.classList.add('networkJumpHighlight');
     target.scrollIntoView({block:'center',behavior:'instant'});
     setTimeout(()=>target.classList.remove('networkJumpHighlight'),3000)
 }
-function networkJump(center,id){
+function jumpAnnotation(center,place){
     if(dialog.open)closeWorkbenchDialog();
-    const note=find(center),dest=find(id);if(!dest)return;
-    if(spaceOf(id)==='blocks'){
-        select(id);highlightNetworkTarget([...paneBox.children[active].querySelectorAll('.visualDocument')].find(d=>d._owner===id));return
-    }
+    const id=place.owner,note=find(center),dest=find(id);if(!dest||!note)return;
     select(id);
-    if(!note||spaceOf(center)!=='blocks')return;
     const pane=paneBox.children[active];
     const belongs=el=>el.closest('.visualDocument')?._owner===id;
-    const inline=[...pane.querySelectorAll('.inlineAnnotation')].find(el=>el.dataset.token==='[[embed:'+center+']]'&&belongs(el));
-    const embedded=[...pane.querySelectorAll('.visualCard')].find(el=>el._part?.kind==='embed'&&el._part.ref===center&&belongs(el));
-    const object=[...pane.querySelectorAll('.objectNoteMarker')].find(el=>el.dataset.noteId===center&&resolve(el.dataset.targetId)?.owner===id);
-    const free=[...pane.querySelectorAll('.freeNoteMarker')].find(el=>el.dataset.noteId===center);
-    let marker=inline||embedded||object||free;
-    if(!marker){
-        const reference=refsOf(note).map(resolve).find(t=>t?.owner===id&&t.kind!=='node');
-        marker=reference&&[...pane.querySelectorAll('[data-object]')].find(el=>el.dataset.object===(reference.actualId||reference.id));
-        marker=marker||[...pane.querySelectorAll('.editableHeading')].find(el=>el.dataset.bindObject===id);
-    }
-    if(!marker)return;
+    const marker=[...pane.querySelectorAll(noteLabelSelector)].find(el=>el.dataset.noteId===center&&(place.kind==='text'?belongs(el):place.kind==='object'?el.dataset.targetId===place.targetId:el.dataset.placementId===place.placementId));
+    if(!marker){showToast('原批注位置已不存在');return}
     const card=marker.closest('.visualCard');if(card?.classList.contains('folded'))card._setFolded?.(false);
     highlightNetworkTarget(marker);
-    const r=marker.getBoundingClientRect(),e={clientX:r.left,clientY:r.bottom};
-    const binding=marker===object?objectNoteBindings(note).find(b=>b.targetId===object.dataset.targetId):null;
-    const placement=marker===free?freeNotePlacements(note).find(p=>p.id===free.dataset.placementId):null;
-    openAnnotationNote(note,marker,e,binding,placement)
+    marker._openNote?.()
 }
-function network(center,rels,host){
-    const graph=el('div','graph');const svg=svgEl('svg',{viewBox:'0 0 700 420',role:'img','aria-label':'知识关联图'});
-    const nodes=rels.slice(0,18).map((r,i)=>{const a=2*Math.PI*i/Math.max(1,Math.min(18,rels.length))-.5*Math.PI;return{...r,x:350+270*Math.cos(a),y:210+160*Math.sin(a)}});
-    for(const n of nodes){const l=svgEl('line',{x1:350,y1:210,x2:n.x,y2:n.y,stroke:'#b5c4cf','stroke-width':1.4});svg.append(l)}
-    function add(id,x,y,main=false){
-        const n=find(id);if(!n)return;const g=svgEl('g',{tabindex:0,role:'button','aria-label':n.title,'data-network-id':id});
-        g.append(svgEl('rect',{x:x-66,y:y-22,width:132,height:44,rx:7,fill:main?'#dce9f3':'#f3f6f8',stroke:main?'#5f8fb4':'#c9d3db'}));
-        const t=svgEl('text',{x,y:y+4,'text-anchor':'middle',fill:'#263038'});t.textContent=(n.title.length>12?n.title.slice(0,11)+'…':n.title);g.append(t);
-        const title=svgEl('title');title.textContent=n.title;g.append(title);g.addEventListener('click',()=>networkJump(center,id));g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();networkJump(center,id)}});svg.append(g)
+function renderAnnotationLocation(host,n,index=null){
+    const place=annotationLocations(n,index)[0],dest=place&&find(place.owner);
+    const key=JSON.stringify([place,dest?.title]);if(host.dataset.key===key)return;host.dataset.key=key;
+    host.replaceChildren(dest?btn('定位批注 · '+label(dest),()=>jumpAnnotation(n.id,place),'annotationLocation'):el('span','muted','未放置'))
+}
+function refreshAnnotationLists(){
+    for(const host of paneBox.querySelectorAll('[data-annotation-list]'))renderAnnotationList(host);
+    for(const host of paneBox.querySelectorAll('[data-annotation-location]')){const n=find(host.dataset.annotationLocation);if(n)renderAnnotationLocation(host,n)}
+}
+function renderAnnotationList(host){
+    const index=annotationLocationIndex(),entries=db.blocks.map(n=>[n.id,n.title,n.body,annotationLocations(n,index),annotationLocations(n,index).map(p=>find(p.owner)?.title)]);
+    const key=JSON.stringify([entries,db.trash.length,search]);if(host.dataset.key===key)return;host.dataset.key=key;
+    const actions=el('div','blockOverviewActions');actions.append(btn('回收站'+(db.trash.length?' ('+db.trash.length+')':''),showTrash,'trashButton'));
+    host.replaceChildren(actions);
+    const list=el('div','annotationList');
+    for(const n of db.blocks.filter(n=>(n.title+' '+n.body).toLowerCase().includes(search.trim().toLowerCase()))){
+        const row=el('article','blockcard annotationRow');row.dataset.noteId=n.id;
+        const title=btn(n.title,()=>select(n.id),'annotationTitle');
+        row.append(title,el('div','small',n.body.replace(/:::[^\n]*/g,'').slice(0,180)||'空白批注'));
+        const loc=el('div','annotationLocationRow');renderAnnotationLocation(loc,n,index);loc.append(btn('删除',()=>deleteNode(n),'annotationDelete'));loc.lastChild.disabled=!editingEnabled;row.append(loc);
+        context(row,()=>nodeMenu(n),null,true);list.append(row)
     }
-    for(const n of nodes)add(n.id,n.x,n.y);add(center,350,210,true);graph.append(svg);host.append(graph)
+    host.append(list);if(!list.childNodes.length)host.append(el('div','empty','暂无批注'))
 }
-function relationDialog(id,object=null){
-    const n=find(id);if(!n)return;const d=showDialog('关联网络 · '+n.title);
-    const rels=related(id,object);network(id,rels,d);
-    if(!rels.length)d.append(el('p','muted','尚无引用关系'));
-    const list=el('div','relationlist');for(const r of rels)list.append(btn(r.kinds+' · '+find(r.id).title,()=>networkJump(id,r.id)));d.append(list)
-}
-function renderBlockNetwork(host){
-    const id=host.dataset.blockNetwork,n=find(id);if(!n)return;
-    const rels=related(id),key=JSON.stringify([n.title,...rels.map(r=>[r.id,r.kinds,find(r.id)?.title])]);
-    if(host.dataset.networkKey===key)return;host.dataset.networkKey=key;
-    host.replaceChildren(el('h2','', '关联网'));
-    if(!rels.length){host.append(el('p','muted','尚无关联'));return}
-    network(id,rels,host);
-    const list=el('div','relationlist');for(const r of rels)list.append(btn(r.kinds+' · '+find(r.id).title,()=>networkJump(id,r.id)));host.append(list)
-}
-function refreshBlockNetworks(){for(const host of paneBox.querySelectorAll('[data-block-network]'))renderBlockNetwork(host)}
 function blockOverview(page){
-    const actions=el('div','blockOverviewActions');
-    actions.append(btn('＋ 新建知识块',()=>newNode('blocks'),'createBlockButton'),btn('回收站'+(db.trash.length?' ('+db.trash.length+')':''),showTrash,'trashButton'));
-    page.append(el('h1','title','块网'),el('p','muted','独立存放研究思路、草稿、推导与备注。与博论树通过引用关联，不进入正式正文。'),actions);
-    if(!db.blocks.length){page.append(el('div','empty','块网目前为空。你可以复制博论正文，再粘贴到新建知识块。'));return}
-    // Global network shows block-to-block links; select a block for its complete graph.
-    const box=el('div','graph');const svg=svgEl('svg',{viewBox:'0 0 800 420',role:'img','aria-label':'知识块网络'});
-    const list=db.blocks.slice(0,48),positions=new Map(list.map((n,i)=>[n.id,{x:80+(i%6)*128,y:55+Math.floor(i/6)*Math.min(55,310/Math.max(1,Math.ceil(list.length/6)-1))}]));
-    for(const n of list){for(const r of refsOf(n)){const a=positions.get(n.id),b=positions.get(resolve(r)?.owner);if(a&&b)svg.append(svgEl('line',{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:'#a8b8c5'}))}}
-    for(const n of list){const p=positions.get(n.id),g=svgEl('g',{tabindex:0,role:'button','aria-label':n.title});g.append(svgEl('rect',{x:p.x-58,y:p.y-17,width:116,height:34,rx:6,fill:'#eef3f7',stroke:'#b7c8d5'}));const t=svgEl('text',{x:p.x,y:p.y+4,'text-anchor':'middle',fill:'#263038'});t.textContent=n.title.slice(0,10);g.append(t);g.addEventListener('click',()=>networkJump(n.id,n.id));g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();networkJump(n.id,n.id)}});context(g,()=>nodeMenu(n),()=>resolve(n.id));svg.append(g)}box.append(svg);page.append(box);
-    const cards=el('div','cards');for(const n of db.blocks){const c=el('article','blockcard');c.append(el('h3','',n.title),el('div','small',n.body.replace(/:::[^\n]*/g,'').slice(0,100)||'空白块'),el('div','small',related(n.id).length+' 个关联'));c.addEventListener('click',()=>select(n.id));context(c,()=>nodeMenu(n),()=>resolve(n.id));cards.append(c)}page.append(cards)
+    const list=el('div');list.dataset.annotationList='1';page.append(el('h1','title','批注一览'),list);renderAnnotationList(list)
 }
 function renderChild(n,host,pi){
     const d=el('details','child');d.dataset.sectionId=n.id;const s=el('summary',''),collapsedTitle=el('span','childCollapsedTitle',label(n));s.append(collapsedTitle);d.append(s);
@@ -1539,16 +1550,16 @@ function renderPanes(){
         const n=find(p.id);
         if(n){
             const foldButton=btn('本页全部折叠',()=>togglePageFolds(pi),'foldAllButton pageFoldButton');foldButton.title='仅展开或折叠当前正文页';toolbar.append(foldButton);
-            const path=ancestors(n).map(id=>find(id)).filter(Boolean);const bc=el('div','breadcrumb');bc.append(el('span','',spaceOf(n.id)==='thesis'?'博论树':'块网'));for(const a of path){bc.append(document.createTextNode(' / '));const link=el('a','ref',label(a));link.href='#';link.addEventListener('click',e=>{e.preventDefault();select(a.id,pi)});bc.append(link)}page.append(bc);
-            editor(n,page,pi);const kids=children(spaceOf(n.id),n.id);if(kids.length){for(const c of kids)renderChild(c,page,pi)}
-            if(spaceOf(n.id)==='blocks'){const host=el('section','blockNetwork');host.dataset.blockNetwork=n.id;page.append(host);renderBlockNetwork(host)}
+            const path=ancestors(n).map(id=>find(id)).filter(Boolean);const bc=el('div','breadcrumb');bc.append(el('span','',spaceOf(n.id)==='thesis'?'博论树':'批注一览'));for(const a of path){bc.append(document.createTextNode(' / '));const link=el('a','ref',label(a));link.href='#';link.addEventListener('click',e=>{e.preventDefault();select(a.id,pi)});bc.append(link)}page.append(bc);
+            editor(n,page,pi);if(spaceOf(n.id)==='thesis'){for(const c of children('thesis',n.id))renderChild(c,page,pi)}
+            else{const host=el('section','annotationLocationRow');host.dataset.annotationLocation=n.id;page.append(host);renderAnnotationLocation(host,n)}
         }else if(view==='blocks')blockOverview(page);else page.append(el('div','empty','从左侧目录选择章节'));
         context(pane,e=>{
             const docs=[...page.querySelectorAll('.visualDocument')].filter(d=>d.getClientRects().length);
             const distance=d=>{const r=d.getBoundingClientRect();return Math.max(r.top-e.clientY,0,e.clientY-r.bottom)};
             const doc=e.target.closest('.visualDocument')||docs.sort((a,b)=>distance(a)-distance(b))[0];
             if(doc?._blankMenu)return doc._blankMenu(e);
-            return [[view==='blocks'?'新建知识块':'新建章节',()=>newNode(view)],['撤销',()=>undo(false)],['重做',()=>undo(true)]]
+            return [[view==='blocks'?'新建批注':'新建章节',()=>newNode(view)],['撤销',()=>undo(false)],['重做',()=>undo(true)]]
         });
         if(toolbar.childNodes.length)pane.append(toolbar);pane.append(page);paneBox.append(pane);updatePageFoldButton(pi);restorePane(pane,p)
     });
@@ -1559,7 +1570,7 @@ function renderPanes(){
 }
 $('treeTab').onclick=()=>setView('thesis');$('blockTab').onclick=()=>setView('blocks');
 $('drawer').onclick=()=>{$('sidebar').classList.toggle('open');$('overlay').classList.toggle('show')};$('overlay').onclick=mobileClose;
-$('search').oninput=e=>{search=e.target.value;renderNav()};$('newNode').onclick=()=>newNode(view);
+$('search').oninput=e=>{search=e.target.value;renderNav();if(view==='blocks')refreshAnnotationLists()};$('newNode').onclick=()=>newNode(view);
 $('dual').onclick=()=>{if(panes[1]?.history){closeHistoricalVersion();return}if(panes.length===1){panes.push({id:panes[0].id,edit:false,thesisReading:thesisPosition(panes[0].thesisReading)});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
 $('refresh').onclick=()=>{if(dialog._commitNote)closeWorkbenchDialog();if(conflict){showSyncConflict();return}if(workspaceChanged||!db){load();return}syncNow(true)};$('closeDialog').onclick=()=>closeWorkbenchDialog();
 $('saveVersion').onclick=markVersion;$('historyButton').onclick=()=>showHistory();
@@ -1611,7 +1622,7 @@ async function openWorkspaceDialog(){
 }
 $('openWorkspace').onclick=openWorkspaceDialog;
 context(dialog,()=>[]);
-dialog.addEventListener('close',()=>{if(!dialog.open){hideFloatingTools();$('menu').hidden=true;dialog._noteId=null}});
+dialog.addEventListener('close',()=>{if(!dialog.open){clearNoteLabel();hideFloatingTools();$('menu').hidden=true;dialog._noteId=null}});
 $('headerActions').onclick=toggleFloatingTools;
 initFloatingTools();
 dialog.addEventListener('cancel',e=>{if(dialog._commitNote){e.preventDefault();closeWorkbenchDialog()}});
@@ -1626,7 +1637,7 @@ const combo=(key,alt=false,shift=false)=>({ctrl:true,alt,shift,key});
 const defaultShortcuts={
     [MODE_TOOL]:combo('e',true),
     '剪切':combo('x'),'复制':combo('c'),'粘贴':combo('v'),
-    '新建批注/知识块':combo('f'),'插入批注/知识块':combo('i',true),
+    '新建批注':combo('f'),
     '复制交叉引用':combo('r',true),'撤销':combo('z'),'重做':combo('y'),
     '显示/隐藏工具栏':combo('t',true)
 };
@@ -1639,7 +1650,7 @@ let toolShortcuts=(()=>{
         if(saved){for(const label of Object.keys(result))if(Object.hasOwn(saved,label)&&validShortcut(saved[label]))result[label]=saved[label]}
         else{
             const old=JSON.parse(localStorage.getItem('wb:new-note-shortcut:v1'));
-            if(old&&validShortcut(old)&&!Object.entries(result).some(([label,s])=>label!=='新建批注/知识块'&&shortcutLabel(s)===shortcutLabel(old)))result['新建批注/知识块']=old
+            if(old&&validShortcut(old)&&!Object.entries(result).some(([label,s])=>label!=='新建批注'&&shortcutLabel(s)===shortcutLabel(old)))result['新建批注']=old
         }
     }catch{}
     return result
@@ -1668,7 +1679,7 @@ function shortcutSettings(){
         list.replaceChildren();
         for(const label of Object.keys(values)){
             const row=el('div','shortcutRow'),name=el('span','',label),controls=el('div','shortcutControls');
-            const input=el('input');input.readOnly=true;input.dataset.shortcutCapture='1';input.setAttribute('aria-label',label==='新建批注/知识块'?'新建批注快捷键':label+'快捷键');
+            const input=el('input');input.readOnly=true;input.dataset.shortcutCapture='1';input.setAttribute('aria-label',label==='新建批注'?'新建批注快捷键':label+'快捷键');
             const mod=el('select'),key=el('select');
             mod.setAttribute('aria-label',label+'修饰键');key.setAttribute('aria-label',label+'按键');
             for(const [v,t] of modifiers)mod.append(new Option(t,v));
@@ -1702,7 +1713,7 @@ document.addEventListener('keydown',e=>{
         e.preventDefault();e.stopImmediatePropagation();if(!e.repeat)toggleEditMode();return
     }
     const control=e.target.closest?.('input,textarea,select,math-field'),rich=e.target.closest?.('.richText,.visualDocument');
-    if(['剪切','复制','粘贴'].includes(label)&&matches(defaultShortcuts[label])&&(control||rich))return;
+    if(['剪切','复制','粘贴'].includes(label)&&matches(defaultShortcuts[label])&&(control||rich)&&!e.target.closest?.('.selectedNoteLabel'))return;
     if(dialog.open&&!dialog.querySelector('.visualDocument')&&label!=='显示/隐藏工具栏')return;
     if(['撤销','重做'].includes(label)&&control&&!rich)return;
     // Keep the MathLive native undo for its own formula edits.

@@ -44,13 +44,55 @@ function mathPanel(field){
     for(const [name,value] of symbols){const b=btn(name,()=>{field.focus();field.insert(value,{insertionMode:'replaceSelection'});field.dispatchEvent(new Event('input',{bubbles:true}))});b.addEventListener('pointerdown',e=>e.preventDefault());bar.append(b)}
     bar.append(btn('数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}));return bar
 }
-function visualRef(kind,id){
+// A note marker is a selectable reference, not an editable text character.
+const noteLabelSelector='.inlineAnnotation,.objectNoteMarker,.freeNoteMarker,.noteWindowHandle';
+function clearNoteLabel(){
+    document.querySelectorAll('.selectedNoteLabel').forEach(chip=>{chip.classList.remove('selectedNoteLabel');chip.setAttribute('aria-pressed','false')});
+}
+function selectNoteLabel(chip){
+    clearNoteLabel();
+    for(const root of document.querySelectorAll('.visualDocument')){root._clearObject?.();root._clearMixed?.()}
+    chip.classList.add('selectedNoteLabel');chip.setAttribute('aria-pressed','true');
+    chip.focus({preventScroll:true});getSelection()?.removeAllRanges();scheduleToolbarUpdate();
+}
+function noteLabelMenu(chip){
+    const id=chip.dataset.noteId,n=find(id);if(!n)return [];
+    const detach=()=>{if(!chip.isConnected||!requireEditMode())return;clearNoteLabel();chip._detachNote?.()};
+    return [['剪切',async()=>{if(chip._detachNote&&requireEditMode()){await writeEditorClipboard(annotationClipboard(n,true));detach()}},!chip._detachNote],['复制',()=>writeEditorClipboard(annotationClipboard(n))],
+        ['打开批注',()=>chip._openNote?.()],
+        ['删除批注',()=>{if(!requireEditMode())return;clearNoteLabel();if(dialog.open)closeWorkbenchDialog();deleteNode(find(id))}],
+        ...(chip.matches('.objectNoteMarker')?[['解除绑定',detach]]:chip.matches('.freeNoteMarker')?[['移除此处标记',detach]]:[])];
+}
+function setupNoteLabel(chip,id,open,detach,windowHandle=false){
+    chip.dataset.noteId=id;chip.tabIndex=0;chip.setAttribute('role','button');chip.setAttribute('aria-pressed','false');
+    chip.title=windowHandle?'单击选中批注，拖动移动窗口':'单击选中，再次点击打开批注（查看模式直接打开）';
+    chip._openNote=()=>{clearNoteLabel();const r=chip.getBoundingClientRect();open({clientX:r.left,clientY:r.bottom})};
+    chip._detachNote=detach;
+    let wasSelected=false;
+    chip.addEventListener('pointerdown',e=>{wasSelected=chip.classList.contains('selectedNoteLabel');if(e.button===0&&e.pointerType!=='touch')e.preventDefault()});
+    chip.addEventListener('pointercancel',()=>{wasSelected=false});
+    chip.addEventListener('click',e=>{e.stopPropagation();const reopen=wasSelected||chip.classList.contains('selectedNoteLabel');wasSelected=false;if(windowHandle)selectNoteLabel(chip);else if(!editingEnabled||reopen){clearNoteLabel();open(e)}else selectNoteLabel(chip)});
+    chip.addEventListener('keydown',e=>{
+        if(e.defaultPrevented||e.isComposing||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return;
+        if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();chip._openNote();return}
+        if(e.key==='Escape'){clearNoteLabel();scheduleToolbarUpdate();return}
+        if(e.key==='Delete'&&chip.classList.contains('selectedNoteLabel')){e.preventDefault();e.stopPropagation();if(editingEnabled&&!e.repeat)noteLabelMenu(chip).find(x=>x[0]==='删除批注')?.[1]()}
+    });
+    context(chip,()=>{selectNoteLabel(chip);return noteLabelMenu(chip)},()=>resolve(id),true);
+}
+document.addEventListener('pointerdown',e=>{if(!isActionSurface(e.target)&&!e.target.closest('.selectedNoteLabel'))clearNoteLabel()},true);
+document.addEventListener('focusin',e=>{if(!isActionSurface(e.target)&&!e.target.closest('.selectedNoteLabel'))clearNoteLabel()},true);
+document.addEventListener('click',e=>{if(dialog.open&&(e.target===dialog||e.target===$('dialogBody'))){const handle=dialog.querySelector('.noteWindowHandle');if(handle)selectNoteLabel(handle)}});
+function visualRef(kind,id,allowRefs=true){
     const chip=el('span','visualRef');chip.contentEditable='false';chip.dataset.token='[['+kind+':'+id+']]';
-    if(kind==='embed'){const n=find(id);chip.textContent='※';chip.classList.add('inlineAnnotation');chip.setAttribute('aria-label','打开批注/知识块');chip.title=n?'打开批注/知识块':'知识块不存在';chip.addEventListener('click',e=>{e.stopPropagation();if(n)openAnnotationNote(n,chip,e)});if(n)context(chip,()=>refMenu(resolve(id)),()=>resolve(id));}
-    else {const t=resolve(id);const text=kind==='cite'?'['+id+']':t?(kind==='eqref'?'('+(t.number||t.title)+')':t.number||t.title):'〔未解析：'+id+'〕';chip.textContent=text;if(t){chip.title=t.title;context(chip,()=>refMenu(t),()=>resolve(id)||t);chip.addEventListener('click',e=>{e.stopPropagation();jump(id,e.shiftKey)})}}
+    if(kind==='embed'){const n=find(id);chip.textContent='※';chip.classList.add('inlineAnnotation');chip.setAttribute('aria-label','批注');chip.title='批注不存在';if(n)setupNoteLabel(chip,id,e=>{const current=find(id);if(current)openAnnotationNote(current,chip,e)},()=>{
+        const area=chip.closest('.richText');if(!area)return;
+        annotationEdit(()=>{const note=find(id);if(note){delete note.annotation;delete note.textBindings}chip.remove();area.dispatchEvent(new Event('input',{bubbles:true}))});
+    });}
+    else {const t=resolve(id),note=db.blocks.find(n=>n.id===id);const text=kind==='cite'?'['+id+']':note?note.title:t?(kind==='eqref'?'('+(t.number||t.title)+')':t.number||t.title):'〔未解析：'+id+'〕';chip.textContent=text;if(note||!allowRefs)chip.classList.add('legacyNoteRef');else if(texTarget(t)){chip.title=t.title;context(chip,()=>refMenu(t),()=>resolve(id)||t);chip.addEventListener('click',e=>{e.stopPropagation();jump(id,e.shiftKey)})}}
     return chip
 }
-function visualRich(raw,changed,compact=false){
+function visualRich(raw,changed,compact=false,allowRefs=true){
     const host=el('div','richText'+(compact?' compact':''));host.contentEditable='true';host.spellcheck=false;host.setAttribute('role','textbox');host.setAttribute('aria-multiline','true');
     setEditorControlMode(host);
     const tokens=[];
@@ -61,7 +103,7 @@ function visualRich(raw,changed,compact=false){
         const t=tokens[Number(p.dataset.wbToken)];if(!t){p.remove();continue}
         if(t.kind==='math'){
             const f=visualMath(t.value,false,()=>changed());f.dataset.inline='1';p.replaceWith(f);
-        }else p.replaceWith(visualRef(t.kind,t.value))
+        }else p.replaceWith(visualRef(t.kind,t.value,allowRefs))
     }
     if(!host.childNodes.length)host.append(el('p'));
     host.addEventListener('input',()=>{if(editingEnabled)changed()});
@@ -169,7 +211,7 @@ function visualPick(onSelect){
     const existing=dialog.open,d=existing?$('dialogBody'):showDialog('选择引用对象');
     const container=el('div','visualPicker'),q=el('input'),list=el('div','visualPickList');q.placeholder='搜索标题、公式、编号';
     container.append(q,list,btn('取消',()=>{if(existing)container.remove();else dialog.close()}));d.append(container);
-    function draw(){list.replaceChildren();const needle=q.value.toLowerCase();for(const t of [...targets.values()].filter(t=>((t.title||'')+' '+t.id+' '+t.number).toLowerCase().includes(needle)).slice(0,80)){
+    function draw(){list.replaceChildren();const needle=q.value.toLowerCase();for(const t of [...targets.values()].filter(t=>texTarget(t)&&((t.title||'')+' '+t.id+' '+t.number).toLowerCase().includes(needle)).slice(0,80)){
         list.append(btn((t.kind==='equation'?'式 ':t.kind==='figure'?'图 ':t.kind==='table'?'表 ':'')+(t.number||'')+' '+(t.title||t.id),()=>{onSelect(refToken(t));if(existing)container.remove();else dialog.close()}))
     }}q.addEventListener('input',draw);draw();q.focus()
 }
@@ -308,7 +350,8 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!editingEnabled||!root.isConnected)return;
         const pieces=selectedPieces(r,true);if(!pieces.length)return;
         const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
-        const replacement=text.trim()?parseParts(remapCopiedObjects(text,owner)):[];
+        return annotationEdit(()=>{
+        const replacement=text.trim()?parseParts(remapCopiedObjects(prepareAnnotationPaste(text,owner),owner)):[];
         if(first.before?.trim()){
             if(replacement[0]?.kind==='text')replacement[0].raw=first.before+replacement[0].raw;
             else replacement.unshift({kind:'text',raw:first.before})
@@ -318,7 +361,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             else replacement.push({kind:'text',raw:last.after})
         }
         parts.splice(i,j-i+1,...replacement);if(!parts.length)parts=[{kind:'text',raw:''}];
-        selectedPart=parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();flush();const dest=cards().find(c=>c._part===selectedPart)?.querySelector('.part-text .richText');if(dest)placeIn(dest);else root.focus({preventScroll:true})
+        selectedPart=parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();flush();const dest=cards().find(c=>c._part===selectedPart)?.querySelector('.part-text .richText');if(dest)placeIn(dest);else root.focus({preventScroll:true})})
     }
     function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null)replaceMixed(r,t)}}]]}
     root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
@@ -411,7 +454,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const tail=area.lastElementChild,head=rightArea.firstElementChild;
         const paragraph=n=>n&&/^(P|DIV|H[1-6])$/.test(n.tagName);
         if(!paragraph(tail)||!paragraph(head))return false;
-        const fresh=visualRich(richMarkdown(rightArea),()=>{left.raw=richMarkdown(area);flush()});
+        const fresh=visualRich(richMarkdown(rightArea),()=>{left.raw=richMarkdown(area);flush()},false,!internal);
         const start=fresh.firstElementChild;if(!paragraph(start))return false;
         // Marked inserts formatting newlines between block elements. Those are
         // not visible text and must not become a line break at the join.
@@ -487,10 +530,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         let i=parts.indexOf(after);parts.splice(i<0?parts.length:i+1,0,p);selectedPart=p;draw();flush();const card=[...body.children].find(e=>e._part===p);card?.scrollIntoView({block:'nearest'});card?.querySelector('[contenteditable=true],math-field,input')?.focus()
     }
     function insertPaste(text,after){
+        return annotationEdit(()=>{
+        text=prepareAnnotationPaste(text,owner);
         const ids=new Set(parts.flatMap(p=>[p.id,...(p.kind==='figure'?[...p.raw.matchAll(figureImagePattern())].map((m,i)=>figureImageId(m[3],p.id,i)):[])].filter(Boolean)));
         const collision=[...text.matchAll(objectPattern())].some(m=>ids.has(m[2])||(m[1]==='figure'&&[...m[4].matchAll(figureImagePattern())].some((img,i)=>ids.has(figureImageId(img[3],m[2],i)))));
         const p=parseParts(remapCopiedObjects(text,owner,collision));if(!p.length)return;
-        let i=parts.indexOf(after);if(after?.kind==='text'&&!after.raw.trim()){parts.splice(i,1,...p)}else parts.splice(i<0?parts.length:i+1,0,...p);selectedPart=p.at(-1);draw();flush()
+        let i=parts.indexOf(after);if(after?.kind==='text'&&!after.raw.trim()){parts.splice(i,1,...p)}else parts.splice(i<0?parts.length:i+1,0,...p);selectedPart=p.at(-1);draw();flush()})
     }
     const imageMarkup=({url,name})=>figureImageMarkup(name.replace(/[\[\]\r\n]/g,''),url,'','subfig-'+uid());
     function pasteSubfigure(text,after){
@@ -522,15 +567,17 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!files.length)return false;e.preventDefault();e.stopImmediatePropagation();uploadImages(files,after);return true
     }
     function pasteInline(area,text){
+        return annotationEdit(()=>{
+        text=prepareAnnotationPaste(text,owner);
         const s=window.getSelection();let r=s?.rangeCount&&area.contains(s.getRangeAt(0).commonAncestorContainer)?s.getRangeAt(0).cloneRange():null;
         if(!r){r=document.createRange();r.selectNodeContents(area);r.collapse(false)}
         const frag=document.createDocumentFragment();let at=0;
-        for(const m of text.matchAll(refPattern())){if(m[1]==='embed')continue;if(m.index>at)frag.append(document.createTextNode(text.slice(at,m.index)));frag.append(visualRef(m[1],m[2]));at=m.index+m[0].length}
+        for(const m of text.matchAll(refPattern())){if(m.index>at)frag.append(document.createTextNode(text.slice(at,m.index)));frag.append(visualRef(m[1],m[2],!internal));at=m.index+m[0].length}
         if(at<text.length)frag.append(document.createTextNode(text.slice(at)));
         const last=frag.lastChild;if(!last)return;
-        r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()
+        r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()})
     }
-    function insertMenu(){return [
+    function insertMenu(){return internal?[]:[
         ['插入交叉引用',()=>visualPick(s=>{const m=[...s.matchAll(refPattern())][0];if(m)insertInline(visualRef(m[1],m[2]))})]
     ]}
     root._contentInsertMenu=e=>{
@@ -567,6 +614,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         area.addEventListener('paste',e=>{const text=e.clipboardData?.getData('text/plain')||'';
             if(pasteSubfigure(text,p)){e.preventDefault();e.stopImmediatePropagation();return}
             if(pasteImage(e,p))return;
+            if(annotationClipboardValue(text)){e.preventDefault();e.stopImmediatePropagation();if(internal)insertPaste(text,p);else pasteInline(area,text);return}
+            const label=text.trim().match(/^\[\[embed:([^\]\n]+)\]\]$/);
+            if(label&&find(label[1])&&label[1]!==owner){e.preventDefault();e.stopImmediatePropagation();pasteInline(area,label[0]);return}
             if(/(^:::(equation|figure|table)\s|^\s*\[\[embed:[^\]\n]+\]\]\s*$)/m.test(text)||(internal&&figureImagePattern().test(text))){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
             if(/\[\[(ref|eqref|cite):[^\]\n]+\]\]/.test(text)&&!/\[\[embed:/.test(text)){e.preventDefault();e.stopImmediatePropagation();pasteInline(area,text);return}
             if(/(\[\[embed:|\$[^$\n]+\$)/m.test(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p)}
@@ -583,7 +633,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             card._selectWhole=()=>{selectedPart=p;selectObject(p,card);root.focus({preventScroll:true})};
             if(p.kind==='figure')card.addEventListener('contextmenu',e=>{if(!e.target.closest('.resizeImage,.richText,.visualRef,button'))card._selectWhole()},true);
             const head=el('div','visualCardHead'),handle=el('span','visualHandle','⠿');handle.draggable=true;handle.title='拖动调整顺序';
-            const title=p.kind==='text'?'正文':p.kind==='embed'?'知识块':p.kind==='equation'?'公式':p.kind==='figure'?'图片':'表格';
+            const title=p.kind==='text'?'正文':p.kind==='embed'?'批注':p.kind==='equation'?'公式':p.kind==='figure'?'图片':'表格';
             if(p.id||p.ref)card.dataset.object=p.id||p.ref;card.classList.add('part-'+p.kind);
             if(p.kind==='text')card.dataset.paragraphIndex=paragraphIndex++;
             head.append(handle,el('span','small partLabel',p.kind==='text'?'':title),el('div','spacer'));
@@ -603,18 +653,16 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             card.addEventListener('dragover',e=>{if(e.dataTransfer.types.includes('application/x-workbench-part'))e.preventDefault()});
             card.addEventListener('drop',e=>{if(!e.dataTransfer.types.includes('application/x-workbench-part'))return;e.preventDefault();const from=+e.dataTransfer.getData('application/x-workbench-part'),to=parts.indexOf(p);if(from!==to&&parts[from]){const a=parts.splice(from,1)[0];parts.splice(to,0,a);draw();flush()}});
             if(p.kind==='embed'){
-                const n=find(p.ref),details=el('details','embed visualEmbed'),summary=el('summary','',n?.title||'失效知识块：'+p.ref);
-                details.append(summary);content.append(details);
-                details.addEventListener('toggle',()=>{if(!details.open)return;while(details.children.length>1)details.lastChild.remove();if(!n||p.ref===owner){details.append(el('p','muted','知识块不存在或不能嵌入自身'));return}const preview=el('div','content');renderBody(n,preview,[owner,n.id].filter(Boolean));details.append(preview,btn('打开知识块',()=>select(n.id)))});
-                extra=[['复制知识块',()=>copy(p.raw)],['打开知识块',()=>{if(n)select(n.id)}]];
+                const n=find(p.ref),chip=visualRef('embed',p.ref);content.append(chip,el('span','small',' '+(n?.title||'批注不存在')));
+                if(n){chip._detachNote=()=>annotationEdit(()=>{clearAnnotationPlacement(n);removePart(p)});extra=noteLabelMenu(chip)}
             }else if(p.kind==='text'){
-                const area=visualRich(p.raw,()=>{p.raw=richMarkdown(area);flush()});bindRich(area,p);content.append(area)
+                const area=visualRich(p.raw,()=>{p.raw=richMarkdown(area);flush()},false,!internal);bindRich(area,p);content.append(area)
             }else if(p.kind==='equation'){
                 const field=visualMath(p.body.trim(),true,value=>{p.body=value;objectRaw(p)}),palette=mathPanel(field);content.append(field,palette);
                 extra=[['公式输入工具',()=>{card.classList.add('showMathTools');field.focus()}],['数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}],['复制公式',()=>copy(p.body)]]
             }else if(p.kind==='figure'){
                 const lines=p.body.split('\n'),caption=lines.shift()||'',rest=lines.join('\n').trim();
-                const cap=visualRich(caption,()=>{p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+imageSource;objectRaw(p)},true);
+                const cap=visualRich(caption,()=>{p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+imageSource;objectRaw(p)},true,!internal);
                 let imageSource=normalizeFigureImages(rest,p.id);
                 const imgs=el('div','visualImages');
                 function displayImages(){
@@ -649,12 +697,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                 displayImages()
             }else if(p.kind==='table'){
                 const lines=p.body.split('\n'),caption=lines.shift()||'',rest=lines.join('\n').trim();
-                const cap=visualRich(caption,()=>commitTable(),true);const wrap=el('div','tablescroll');const table=el('table','visualTable');wrap.append(table);
+                const cap=visualRich(caption,()=>commitTable(),true,!internal);const wrap=el('div','tablescroll');const table=el('table','visualTable');wrap.append(table);
                 let rows=rest.split('\n').filter(s=>s.trim().startsWith('|')).map(s=>s.trim().replace(/^\||\|$/g,'').split(/(?<!\\)\|/).map(x=>x.trim()));if(rows.length>1&&rows[1].every(x=>/^:?-+:?$/.test(x)))rows.splice(1,1);
                 if(!rows.length){rows=[['项目','数值'],['','']];content.append(el('p','muted','原表格存在复杂内容，未修改时保持原始数据；如需改表请核对预览。'))}
                 const cols=Math.max(1,...rows.map(x=>x.length));rows=rows.map(r=>Array.from({length:cols},(_,i)=>r[i]||''));
                 function commitTable(){p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+[rows[0],rows[0].map(()=> '---'),...rows.slice(1)].map(r=>'| '+r.map(x=>x.replace(/\n+/g,' ').replace(/(?<!\\)\|/g,'\\|')).join(' | ')+' |').join('\n');objectRaw(p)}
-                function tableDraw(){table.replaceChildren();rows.forEach((row,i)=>{const tr=el('tr');row.forEach((value,j)=>{const td=el(i===0?'th':'td');const cell=visualRich(value,()=>{rows[i][j]=richMarkdown(cell);commitTable()},true);bindRich(cell,p);td.append(cell);tr.append(td)});table.append(tr)})}
+                function tableDraw(){table.replaceChildren();rows.forEach((row,i)=>{const tr=el('tr');row.forEach((value,j)=>{const td=el(i===0?'th':'td');const cell=visualRich(value,()=>{rows[i][j]=richMarkdown(cell);commitTable()},true,!internal);bindRich(cell,p);td.append(cell);tr.append(td)});table.append(tr)})}
                 bindRich(cap,p);content.append(cap,wrap);extra=[['添加行',()=>{rows.push(rows[0].map(()=>''));tableDraw();commitTable()}],['添加列',()=>{rows.forEach(r=>r.push(''));tableDraw();commitTable()}]];tableDraw()
             }
             body.append(card)
@@ -754,7 +802,7 @@ function editor(n,host,pi,summary=null){
     if(summary){summary.append(heading);title.addEventListener('click',e=>e.stopPropagation());refreshObjectAnnotations(heading)}else host.append(heading);
     host.append(doc.root);refreshObjectAnnotations(host)
 };
-function blockLabel(body){const t=body.replace(/\[\[(?:ref|eqref|embed|cite):[^\]]+\]\]/g,'').replace(/!\[[^\]]*\]\([^)]*\)/g,'').replace(/^:::[^\n]*$/gm,'').replace(/\s+/g,' ').trim();return t.slice(0,36)||'知识块'}
+function blockLabel(body){const t=body.replace(/\[\[(?:ref|eqref|embed|cite):[^\]]+\]\]/g,'').replace(/!\[[^\]]*\]\([^)]*\)/g,'').replace(/^:::[^\n]*$/gm,'').replace(/\s+/g,' ').trim();return t.slice(0,36)||'批注'}
 function setupNoteResize(d,size,onResize){
     const clamp=(v,min,max)=>Math.round(Math.max(Math.min(min,max),Math.min(v,max)));
     const apply=(w,h)=>{dialog.style.width=clamp(w,220,innerWidth-16)+'px';dialog.style.height=clamp(h,145,innerHeight-16)+'px'};
@@ -816,9 +864,9 @@ function refreshObjectAnnotations(scope=document){
         if(group.dataset.key===key)continue;
         group.dataset.key=key;group.replaceChildren();
         for(const {n,binding} of notes){
-            const chip=btn('※',e=>{const current=find(n.id),b=current&&objectNoteBindings(current).find(x=>x.targetId===id);if(current&&b)openAnnotationNote(current,chip,e,b)},'objectNoteMarker');
-            chip.title='打开批注/知识块';chip.setAttribute('aria-label','打开对象批注');chip.dataset.noteId=n.id;chip.dataset.targetId=id;
-            chip.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();menuAt(e,[['解除绑定',()=>{const current=find(n.id);if(!current)return;checkpoint();current.objectBindings=objectNoteBindings(current).filter(x=>x.targetId!==id);change(false)}]])});
+            const chip=el('button','objectNoteMarker','※');chip.type='button';
+            chip.title='打开批注';chip.setAttribute('aria-label','打开对象批注');chip.dataset.noteId=n.id;chip.dataset.targetId=id;
+            setupNoteLabel(chip,n.id,e=>{const current=find(n.id),b=current&&objectNoteBindings(current).find(x=>x.targetId===id);if(current&&b)openAnnotationNote(current,chip,e,b)},()=>{const current=find(n.id);if(!current)return;checkpoint();current.objectBindings=objectNoteBindings(current).filter(x=>x.targetId!==id);change(false)});
             group.append(chip)
         }
     }
@@ -835,10 +883,10 @@ function refreshFreeNotes(){
         if(layer.dataset.key===key)continue;
         layer.dataset.key=key;layer.replaceChildren();
         for(const {n,placement:p} of notes){
-            const marker=btn('※',e=>{const current=find(n.id),place=current&&freeNotePlacements(current).find(x=>x.id===p.id);if(current&&place)openAnnotationNote(current,marker,e,null,place)},'freeNoteMarker');
+            const marker=el('button','freeNoteMarker','※');marker.type='button';
             marker.style.left='clamp(0px,'+(p.x*100)+'%,calc(100% - 18px))';marker.style.top='clamp(0px,'+p.y+'px,calc(100% - 18px))';
-            marker.dataset.noteId=n.id;marker.dataset.placementId=p.id;marker.title='打开独立知识块';marker.setAttribute('aria-label','打开独立知识块');
-            marker.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();menuAt(e,[['移除此处标记',()=>{const current=find(n.id);if(!current)return;checkpoint();current.freePlacements=freeNotePlacements(current).filter(x=>x.id!==p.id);change(false)}]])});
+            marker.dataset.noteId=n.id;marker.dataset.placementId=p.id;marker.title='打开独立批注';marker.setAttribute('aria-label','打开独立批注');
+            setupNoteLabel(marker,n.id,e=>{const current=find(n.id),place=current&&freeNotePlacements(current).find(x=>x.id===p.id);if(current&&place)openAnnotationNote(current,marker,e,null,place)},()=>{const current=find(n.id);if(!current)return;checkpoint();current.freePlacements=freeNotePlacements(current).filter(x=>x.id!==p.id);change(false)});
             layer.append(marker)
         }
     }
@@ -856,18 +904,22 @@ function openAnnotationNote(n,chip,e,objectBinding=null,freePlacement=null){
     dialog.classList.add('blankNoteDialog');
     dialog._noteId=n.id;
     const doc=visualDocument(n.body,()=>{},n.id),initial=doc.getValue();
+    dialog._noteValue=()=>doc.getValue();
     dialog._commitNote=()=>{
         const value=doc.getValue();dialog.close();
         if(value!==initial){checkpoint();n.body=value;n.title=blockLabel(value);change(false);renderNav()}
     };
-    d.append(doc.root);setupNoteResize(d,n.floatSize,size=>{if(editingEnabled){n.floatSize=size;change(false)}});requestAnimationFrame(()=>{if(editingEnabled)doc.root.querySelector('.richText')?.focus({preventScroll:true});scheduleToolbarUpdate()});
+    d.append(doc.root);setupNoteResize(d,n.floatSize,size=>{if(editingEnabled){n.floatSize=size;change(false)}});
+    const handle=d.querySelector('h2');handle.classList.add('noteWindowHandle');handle.setAttribute('aria-label','选中批注浮窗');
+    setupNoteLabel(handle,n.id,()=>{doc.root.querySelector('.richText,math-field')?.focus({preventScroll:true})},chip._detachNote?()=>{closeWorkbenchDialog();if(chip.isConnected)chip._detachNote()}:null,true);
+    requestAnimationFrame(()=>{if(editingEnabled&&!handle.classList.contains('selectedNoteLabel'))doc.root.querySelector('.richText')?.focus({preventScroll:true});scheduleToolbarUpdate()});
 }
 function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
     if(!requireEditMode())return;
     if(space==='blocks'){
         const d=showDialog('',{...options,floating:true});dialog.classList.add('blankNoteDialog');
         const doc=visualDocument(remapCopiedObjects(body),()=>{},null);
-        dialog._commitNote=()=>{
+        dialog._commitNote=()=>annotationEdit(()=>{
             const value=remapCopiedObjects(doc.getValue());if(!value.trim()){dialog.close();return}
             checkpoint();const id='block-'+uid(),n={id,title:blockLabel(value),parent,level:parent?ancestors(find(parent)).length+2:1,number:'',file:'blocks/'+id+'.md',source:'',order:db.blocks.length,body:value};
             if(options.binding?.mode==='object')n.objectBindings=[{targetId:options.binding.targetId,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}}];
@@ -875,7 +927,7 @@ function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
             else if(options.freePlacement)n.freePlacements=[{...options.freePlacement,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}}];
             if(dialog._noteSize)n.floatSize={...dialog._noteSize};
             db.blocks.push(n);normalizeOrder(space);dialog.close();change(false);if(onCreated){onCreated(id);renderNav()}else{select(id);renderPanes()}
-        };
+        });
         d.append(doc.root);setupNoteResize(d);requestAnimationFrame(()=>doc.root.querySelector('.richText')?.focus());return
     }
     createEmptyThesis(parent)
