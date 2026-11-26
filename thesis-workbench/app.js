@@ -1565,36 +1565,46 @@ $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
     if(dialog._commitNote)closeWorkbenchDialog();
     const d=showDialog('打开文件');
-    d.append(el('p','small','输入服务器上的 .json 文件绝对路径，可打开已有文件或新建空白文件（不覆盖已有文件）。支持本地磁盘和 UNC 网络共享路径。'));
+    d.append(el('p','small','输入服务器上的 .json 文件绝对路径，打开已有文件，或在指定位置新建包含各类对象示例的文件（不覆盖已有文件）。支持本地磁盘和 UNC 网络共享路径。'));
     const form=el('form','workspacePathForm'),input=el('input','workspacePath');input.type='text';input.required=true;input.autocomplete='off';input.autocapitalize='off';input.spellcheck=false;input.placeholder='C:\\项目\\文件.json 或 \\\\服务器\\共享\\文件.json';input.setAttribute('aria-label','服务器文件路径');
     const submit=el('button','','打开');submit.type='submit';form.append(input,submit);d.append(form);
-    const actions=el('div','workspaceFileActions');
     const create=btn('新建文件',()=>{if(input.reportValidity())openPath(input.value,'new')});
-    const example=btn('打开示例文件',()=>openPath('','example'));
-    actions.append(create,example);d.append(actions);
+    const actions=el('div','workspaceFileActions');actions.append(create);d.append(actions);
     const message=el('p','small');d.append(message,el('h3','','最近打开'));
     const list=el('div','visualPickList');d.append(list);
     async function openPath(path,mode='open'){
-        if((mode!=='example'&&!path.trim())||submit.disabled)return;
-        input.disabled=submit.disabled=create.disabled=example.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;message.textContent=mode==='new'?'正在新建…':'正在打开…';
+        if(!path.trim()||submit.disabled)return;
+        input.disabled=submit.disabled=create.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;message.textContent=mode==='new'?'正在新建…':'正在打开…';
         try{
             clearTimeout(timer);
             while(saving||syncBusy)await new Promise(r=>setTimeout(r,50));
             if(dirty)await save();
             if(dirty||conflict)throw new Error('当前工作区有未保存的内容，不能切换。');
             captureReading();await flushReading();
-            await api('/api/workspaces/'+mode,mode==='example'?{}:{path:path.trim()});
+            await api('/api/workspaces/'+mode,{path:path.trim()});
             readingReady=false;readingInteracted=false;dialog.close();await load(true);
-        }catch(e){message.textContent=e.message;input.disabled=submit.disabled=create.disabled=example.disabled=false;for(const button of list.querySelectorAll('button'))button.disabled=false}
+        }catch(e){message.textContent=e.message;input.disabled=submit.disabled=create.disabled=false;for(const button of list.querySelectorAll('button'))button.disabled=false}
     }
     form.addEventListener('submit',e=>{e.preventDefault();openPath(input.value)});
+    function renderRecent(catalog){
+        list.replaceChildren();
+        if(!catalog.files.length)list.append(el('p','small','暂无打开记录。'));
+        for(const f of catalog.files){
+            const row=el('div','workspaceRecentRow');
+            const b=btn('',()=>openPath(f.path),'workspaceRecent');b.append(el('strong','',f.name+(f.active?'（当前）':'')),el('span','small',f.path));
+            const remove=btn('删除记录',async()=>{
+                if(submit.disabled)return;
+                input.disabled=submit.disabled=create.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;
+                try{renderRecent(await api('/api/workspaces/forget',{path:f.path}));message.textContent='已删除打开记录，文件未删除。'}catch(e){message.textContent=e.message}
+                finally{input.disabled=submit.disabled=create.disabled=false;for(const button of list.querySelectorAll('button'))button.disabled=false}
+            },'workspaceForget');remove.title='仅删除打开记录，不删除文件';remove.setAttribute('aria-label','删除打开记录 '+f.name);
+            row.append(b,remove);list.append(row)
+        }
+    }
     try{
         const catalog=await api('/api/workspaces');
         if(catalog.error)message.textContent=catalog.error;
-        if(!catalog.files.length)list.append(el('p','small','暂无打开记录。'));
-        for(const f of catalog.files){
-            const b=btn('',()=>openPath(f.path),'workspaceRecent');b.append(el('strong','',f.name+(f.active?'（当前）':'')),el('span','small',f.path));list.append(b)
-        }
+        renderRecent(catalog);
     }catch(e){message.textContent=e.message}
 }
 $('openWorkspace').onclick=openWorkspaceDialog;

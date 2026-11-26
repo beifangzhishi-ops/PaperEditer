@@ -12,7 +12,7 @@ python server.py
 
 打开 http://127.0.0.1:8191/ 。Windows 也可通过 pythonw.exe start.pyw 无控制台启动，日志保存在本目录。
 
-默认首次启动不打开任何文档，通过顶部「打开文件」输入 .json 文件绝对路径，打开已有文档或新建空白文件；也可直接打开示例文件。可通过 PAPEREDITER_PORT 指定端口；显式设置 PAPEREDITER_DATA_DIR 可启用旧的独立目录模式（用于测试与迁移）。服务仅监听回环地址，不应直接暴露公网。
+默认首次启动不打开任何文档，通过顶部「打开文件」输入 .json 文件绝对路径，打开已有文档或新建包含各类对象示例的文件。可通过 PAPEREDITER_PORT 指定端口；显式设置 PAPEREDITER_DATA_DIR 可启用旧的独立目录模式（用于测试与迁移）。服务仅监听回环地址，不应直接暴露公网。
 
 ## 单文件文档（v3）
 
@@ -28,7 +28,7 @@ python server.py
 
 ~~~sh
 paperedit new ABSOLUTE_PATH
-paperedit example
+paperedit forget ABSOLUTE_PATH
 paperedit status
 paperedit list --space thesis
 paperedit search "关键词"
@@ -73,9 +73,11 @@ pack 会创建普通文件目录与索引，不覆盖已有文件；migrate 从�
 
 最近打开、当前工作区及每份文档的阅读位置、导航和页面折叠状态由服务端记录在 `workspace.local.json`（不提交到 Git），所有设备共享。切换前保存当前浏览器的修改；其他客户端须刷新后再编辑。刷新或再次打开文档时恢复共享阅读位置，正在阅读的页面不会实时被其他设备滚动位置打断。文件缺失时提示重新选择。备份时须包含 .json 及其引用的文件。
 
-「新建文件」要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。成功后立即打开空白 v3 文档，初始化独立 Git 历史；`paperedit new ABSOLUTE_PATH` 行为相同，`paperedit --offline new ABSOLUTE_PATH` 仅创建文件而不切换网页。
+「新建文件」要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次在指定位置生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new ABSOLUTE_PATH` 行为相同，`paperedit --offline new ABSOLUTE_PATH` 仅创建文件而不切换网页。
 
-「打开示例文件」和 `paperedit example` 无需指定路径。首次从仓库内的 `example.json` 和 `example-data/` 模板生成独立的本地 `example-workspace/example.json`，以后打开同一可编辑副本。示例包含章节、子章节、段落、粗斜体、行内及独立公式、图和子图、表格、交叉引用、知识块及嵌入、文本及对象批注和自由放置标记。模板不被改写，示例工作区及其历史不进入 Git。示例图可直接复制到其他文档；引用与批注的目标仍属于各自文档，跨文档复制时需重新建立对应引用或绑定。
+每份新文档从仓库内的 `example.json` 和 `example-data/` 模板生成，包含章节、子章节、段落、粗斜体、行内及独立公式、图和子图、表格、交叉引用、知识块及嵌入、文本及对象批注和自由放置标记。模板不被改写，工作文件及其历史不进入 Git。示例图可直接复制到其他文档；引用与批注的目标仍属于各自文档，跨文档复制时需重新建立对应引用或绑定。没有独立的打开示例入口。
+
+最近打开记录旁的「删除记录」仅移除共享的路径记录，不关闭当前文件、不删除文件、历史版本或阅读位置。重启不会自动恢复已删除的当前记录；主动再次打开文件会重新加入记录。CLI `paperedit forget ABSOLUTE_PATH` 使用记录中的完整路径执行相同操作。
 
 ## 多设备同步与并发编辑
 

@@ -31,13 +31,12 @@ async function fixture(browser,mobile=false,shared=null){
             const filename=r.request().postDataJSON().path;shared.requestedNew=filename;
             if(shared.recent.some(x=>x.path===filename))return r.fulfill({status:400,json:{error:'文件已存在'}});
             shared.workspace={id:filename,name:filename.split(/[\\/]/).pop(),path:filename,history:true};shared.recent=[shared.workspace,...shared.recent];
-            shared.state={...data.state,thesis:[],blocks:[],trash:[],revision:'blank'};
+            shared.state=structuredClone(data.state);shared.state.revision='new-example';
             return r.fulfill({json:shared.workspace})
         }
-        if(shared&&name==='/api/workspaces/example'){
-            shared.exampleCalls=(shared.exampleCalls||0)+1;
-            shared.workspace={id:'built-in-example',name:'example.json',path:'built-in-example',history:true};shared.recent=[shared.workspace,...shared.recent.filter(x=>x.id!=='built-in-example')];shared.state=structuredClone(data.state);
-            return r.fulfill({json:shared.workspace})
+        if(shared&&name==='/api/workspaces/forget'){
+            const filename=r.request().postDataJSON().path;shared.recent=shared.recent.filter(x=>x.path!==filename);
+            return r.fulfill({json:{files:shared.recent.map(x=>({...x,active:x.id===shared.workspace.id})),current:shared.workspace}})
         }
         if(shared&&name==='/api/workspaces/open'){
             const filename=r.request().postDataJSON().path;shared.requested=filename;
@@ -469,13 +468,14 @@ async function run(){
                 await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.getByText('文件已存在',{exact:true}).waitFor();
                 assert.equal(await p.evaluate(()=>currentWorkspace.name),'existing.json');
                 await p.getByRole('textbox',{name:'服务器文件路径'}).fill(target);
-                await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.waitForFunction(()=>currentWorkspace?.name==='new.json'&&db.thesis.length===0&&db.blocks.length===0);
+                await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.waitForFunction(()=>currentWorkspace?.name==='new.json'&&db.thesis.length===2&&db.blocks.length>0);
                 assert.equal(shared.requestedNew,target);
-                await p.locator('#openWorkspace').click();await p.getByRole('button',{name:'打开示例文件',exact:true}).click();
-                await p.waitForFunction(()=>currentWorkspace?.id==='built-in-example'&&db.thesis.length===2);
-                assert.equal(shared.exampleCalls,1);assert.deepEqual(errors,[]);await context.close();
+                await p.locator('#openWorkspace').click();assert.equal(await p.getByRole('button',{name:'打开示例文件',exact:true}).count(),0);
+                await p.getByRole('button',{name:'删除打开记录 existing.json',exact:true}).click();await p.waitForFunction(()=>!document.querySelector('.workspaceRecentRow [aria-label="删除打开记录 existing.json"]'));
+                await p.getByRole('button',{name:'删除打开记录 new.json',exact:true}).click();await p.getByText('暂无打开记录。',{exact:true}).waitFor();
+                assert.equal(shared.recent.length,0);assert.equal(await p.evaluate(()=>currentWorkspace.name),'new.json');assert.deepEqual(errors,[]);await context.close();
             }
-            console.log('PASS: desktop/mobile required new path, collision preserves current document, blank creation and one-click example');return;
+            console.log('PASS: desktop/mobile required new path, collision preserves current document, seeded creation and deleting recent records');return;
         }
         const {p,context,errors}=await fixture(browser);
         if(process.argv.includes('--section-menu-only')){await checkSectionMenu(p);assert.deepEqual(errors,[]);await context.close();console.log('PASS: heading and collapsed child menus, blank creation and subtree deletion');return}

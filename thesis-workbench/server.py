@@ -31,12 +31,18 @@ def workspace_catalog():
     for filename in settings.get('recent',[]):
         if isinstance(filename,str):files.append({'path':filename,'name':Path(filename).name,'active':PACKAGE is not None and os.path.normcase(filename)==os.path.normcase(str(PACKAGE.filename))})
     return {'files':files,'current':workspace_info(),'error':WORKSPACE_ERROR}
-def record_workspace(p):
+def record_workspace(p,remember=True):
     settings=settings_load();filename=str(p);key=os.path.normcase(filename)
     settings['workspace']=filename
-    settings['recent']=[filename]+[x for x in settings.get('recent',[]) if isinstance(x,str) and os.path.normcase(x)!=key]
+    if remember:settings['recent']=[filename]+[x for x in settings.get('recent',[]) if isinstance(x,str) and os.path.normcase(x)!=key]
     settings_save(settings)
-def open_workspace(filename):
+def forget_workspace(filename):
+    if not isinstance(filename,str) or not filename:raise ValueError('Invalid recent path')
+    settings=settings_load();key=os.path.normcase(filename)
+    settings['recent']=[x for x in settings.get('recent',[]) if isinstance(x,str) and os.path.normcase(x)!=key]
+    settings_save(settings)
+    return workspace_catalog()
+def open_workspace(filename,remember=True):
     global PACKAGE,WORKSPACE_ERROR
     p=workspace_path(filename)
     candidate=Document(p,validate_document_state)
@@ -44,7 +50,7 @@ def open_workspace(filename):
     try:
         PACKAGE=candidate
         initialize_data();state()
-        record_workspace(p)
+        record_workspace(p,remember)
         settings=settings_load()
         old_key=sha(str(p))[:24]
         if old_key in settings.get('reading',{}) and candidate.id not in settings['reading']:
@@ -54,28 +60,24 @@ def open_workspace(filename):
         PACKAGE,WORKSPACE_ERROR=previous,previous_error
         raise
     return workspace_info()
+def example_content():
+    # Read the tracked fixture without modifying it. Each new document has
+    # its own identity and history at the requested path.
+    template=Package(ROOT/'example.json')
+    with template.transaction():
+        initial={space:[dict(n,body=template.read(n['file']).decode('utf-8').replace('/assets/demo.png','/assets/'+EXAMPLE_IMAGE)) for n in json.loads(template.read(index))] for space,index in [('thesis','outline.json'),('blocks','blocks.json')]}
+    start,method=initial['thesis']
+    start['title']='示例：正文与对象'
+    start['body']=start['body'].replace('Synthetic color swatches','示例图：可复制整图或子图').replace('\n:::\n\n:::table','\n\n![Second swatch](/assets/'+EXAMPLE_IMAGE+' "wb-id:demo-subfig-2")\n:::\n\n:::table')
+    method['title']='示例：引用与知识块'
+    method['body']+='\n\n普通段落，**粗体**、*斜体*，行内公式 $a^2+b^2=c^2$。\n\n章节 [[ref:demo-start]]，公式 [[eqref:demo-eq]]，图 [[ref:demo-fig]]，子图 [[ref:demo-subfig]]，表 [[ref:demo-table]]，知识块 [[ref:demo-note]]，文献 [[cite:example2026]]。\n\n[[embed:demo-independent]]\n'
+    initial['blocks'].append(dict(id='demo-independent',title='独立知识块示例',parent=None,level=1,number='',file='blocks/demo-independent.md',source='',order=2,body='独立知识块：可复制正文，也可在本文件中嵌入或引用。'))
+    return initial
+def create_workspace(filename):
+    return create_document(workspace_path(filename),validate_document_state,example_content())
 def new_workspace(filename):
-    p=workspace_path(filename)
-    create_document(p,validate_document_state)
-    return open_workspace(str(p))
-def example_workspace():
-    # Keep the tracked, portable fixture pristine. The editable example and
-    # its private history live in an ignored local directory.
-    directory=CONFIG.parent/'example-workspace'
-    directory.mkdir(exist_ok=True)
-    p=directory/'example.json'
-    if not p.exists():
-        template=Package(ROOT/'example.json')
-        with template.transaction():
-            initial={space:[dict(n,body=template.read(n['file']).decode('utf-8').replace('/assets/demo.png','/assets/'+EXAMPLE_IMAGE)) for n in json.loads(template.read(index))] for space,index in [('thesis','outline.json'),('blocks','blocks.json')]}
-        start,method=initial['thesis']
-        start['title']='示例：正文与对象'
-        start['body']=start['body'].replace('Synthetic color swatches','示例图：可复制整图或子图').replace('\n:::\n\n:::table','\n\n![Second swatch](/assets/'+EXAMPLE_IMAGE+' "wb-id:demo-subfig-2")\n:::\n\n:::table')
-        method['title']='示例：引用与知识块'
-        method['body']+='\n\n普通段落，**粗体**、*斜体*，行内公式 $a^2+b^2=c^2$。\n\n章节 [[ref:demo-start]]，公式 [[eqref:demo-eq]]，图 [[ref:demo-fig]]，子图 [[ref:demo-subfig]]，表 [[ref:demo-table]]，知识块 [[ref:demo-note]]，文献 [[cite:example2026]]。\n\n[[embed:demo-independent]]\n'
-        initial['blocks'].append(dict(id='demo-independent',title='独立知识块示例',parent=None,level=1,number='',file='blocks/demo-independent.md',source='',order=2,body='独立知识块：可复制正文，也可在本文件中嵌入或引用。'))
-        create_document(p,validate_document_state,initial)
-    return open_workspace(str(p))
+    doc=create_workspace(filename)
+    return open_workspace(str(doc.filename))
 def reading_position():
     return settings_load().get('reading',{}).get(workspace_info()['id'])
 def save_reading(position):
@@ -294,8 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:return self.respond(200,open_workspace(payload['path']))
             if self.path=='/api/workspaces/new':
                 with LOCK:return self.respond(200,new_workspace(payload['path']))
-            if self.path=='/api/workspaces/example':
-                with LOCK:return self.respond(200,example_workspace())
+            if self.path=='/api/workspaces/forget':
+                with LOCK:return self.respond(200,forget_workspace(payload['path']))
             if self.path=='/api/reading':
                 with LOCK:
                     if WORKSPACE_ERROR or self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']:return self.respond(409,{'error':'工作区已切换，请刷新。'})
@@ -361,7 +363,7 @@ if __name__=='__main__':
     if not filename:filename=settings.get('workspace')
     if filename:
         try:
-            open_workspace(filename)
+            open_workspace(filename,remember=filename!=settings.get('workspace'))
         except Exception:
             PACKAGE=None;WORKSPACE_ERROR='上次打开的工作区无法读取，请重新选择文件。'
     elif 'PAPEREDITER_DATA_DIR' in os.environ:initialize_data()

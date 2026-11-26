@@ -82,15 +82,16 @@ class CLITests(unittest.TestCase):
         target=self.root/'new document.json'
         new=self.run_cli('new',str(target),explicit=False)
         self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],new['id'])
-        self.assertEqual(self.run_cli('list',explicit=False)['items'],[])
+        self.assertTrue(self.run_cli('list',explicit=False)['items'])
         self.run_cli('new',str(target),explicit=False,success=False)
         self.run_cli('new',explicit=False,success=False)
-        example=self.run_cli('example',explicit=False)
-        self.assertNotEqual(example['id'],new['id'])
-        self.assertTrue(self.run_cli('list',explicit=False)['items'])
+        self.run_cli('example',explicit=False,success=False)
+        self.run_cli('forget',str(target),explicit=False)
+        self.assertTrue(target.exists())
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],new['id'])
         offline=self.run_cli('new',str(self.root/'offline.json'),explicit=False,offline=True)
-        self.assertNotEqual(offline['id'],example['id'])
-        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],example['id'])
+        self.assertNotEqual(offline['id'],new['id'])
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],new['id'])
 
     def test_full_online_and_offline_workflow(self):
         for args in ([], ["--help"], ["edit", "--help"], ["restore", "--help"]):

@@ -35,7 +35,7 @@ jobs:
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --clean-body-only
       - name: Reading position switch regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --reading-switch-only
-      - name: Workspace creation and example regression tests
+      - name: Workspace creation and recent record regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --new-workspace-only
       - name: Concurrent editing and sync regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --sync-only
