@@ -24,18 +24,18 @@ python server.py
 
 ### CLI
 
-在本目录执行 `python paperedit.py --help`。默认操作当前文档；指定 `--workspace` 不切换网页。服务关闭可用 `--offline`。所有日常命令输出 JSON。
+首次安装在本目录执行 `python install_cli.py`。Windows 默认安装到当前 Python 的 Scripts 目录，Linux/macOS 默认为 `~/.local/bin`；如未在 PATH 中，按提示添加即可。安装后在任意目录执行 `paperedit --help`，命令自动使用原代码仓库的最新版本；相对批量文件路径仍相对于调用者当前目录。默认操作当前文档；指定 `--workspace` 不切换网页。服务关闭可用 `--offline`。所有日常命令输出 JSON。
 
 ~~~sh
-python paperedit.py status
-python paperedit.py list --space thesis
-python paperedit.py search "关键词"
-python paperedit.py read OBJECT_ID
-python paperedit.py edit --file changes.json -m "修改说明"
-python paperedit.py history OBJECT_ID
-python paperedit.py diff COMMIT --object OBJECT_ID
-python paperedit.py tag --name "初稿"
-python paperedit.py restore COMMIT --revision REVISION
+paperedit status
+paperedit list --space thesis
+paperedit search "关键词"
+paperedit read OBJECT_ID
+paperedit edit --file changes.json -m "修改说明"
+paperedit history OBJECT_ID
+paperedit diff COMMIT --object OBJECT_ID
+paperedit tag --name "初稿"
+paperedit restore COMMIT --revision REVISION
 ~~~
 
 批量编辑文件示例：
@@ -51,7 +51,7 @@ python paperedit.py restore COMMIT --revision REVISION
 }
 ~~~
 
-支持 `update`、`create`、`move`、`delete`、`bind`、`resource`（name、path、type=image/source）、`upload-directory`（path）、`repath`（old、new）等操作。过期 revision 自动合并不重叠修改，冲突返回 409 和差异，不覆盖数据。损坏或缺失的 v3 文档可用 `python paperedit.py --workspace ABSOLUTE_PATH recover [--version COMMIT]` 显式恢复，保留损坏原件；恢复正常文档请使用 restore。
+支持 `update`、`create`、`move`、`delete`、`bind`、`resource`（name、path、type=image/source）、`upload-directory`（path）、`repath`（old、new）等操作。过期 revision 自动合并不重叠修改，冲突返回 409 和差异，不覆盖数据。损坏或缺失的 v3 文档可用 `paperedit --workspace ABSOLUTE_PATH recover [--version COMMIT]` 显式恢复，保留损坏原件；恢复正常文档请使用 restore。
 
 ## 旧 v2 JSON 工程索引（迁移兼容）
 

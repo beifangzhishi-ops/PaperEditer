@@ -94,12 +94,14 @@ class Client:
 
 
 def emit(value):
-    # UTF-8 irrespective of Windows console codepage.
-    sys.stdout.buffer.write((json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    # Windows PowerShell 5 decodes native pipes using its console codepage.
+    # Escaped JSON remains lossless even if the caller does not select UTF-8.
+    escaped = os.name == "nt" and not sys.stdout.isatty()
+    sys.stdout.buffer.write((json.dumps(value, ensure_ascii=escaped, indent=2) + "\n").encode("utf-8"))
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="paperedit", description=__doc__)
     parser.add_argument("--workspace", help="Absolute server-side path; does not change web selection")
     parser.add_argument("--url", default=os.environ.get("PAPEREDITER_URL", "http://127.0.0.1:" + os.environ.get("PAPEREDITER_PORT", "8191")))
     parser.add_argument("--offline", action="store_true", help="Use the shared locked document core directly")

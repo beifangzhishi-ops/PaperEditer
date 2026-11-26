@@ -37,6 +37,7 @@
 !/thesis-workbench/merge.py
 !/thesis-workbench/paragraphs.py
 !/thesis-workbench/paperedit.py
+!/thesis-workbench/install_cli.py
 !/thesis-workbench/test_document.py
 !/thesis-workbench/example.json
 # All private data, original figures, screenshots, logs, local configuration,

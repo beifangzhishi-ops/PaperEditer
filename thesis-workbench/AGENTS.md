@@ -2,18 +2,18 @@
 
 正式文档为单个 UTF-8 JSON（格式 v3）。正文、目录、知识块、批注、回收站和稳定对象 ID 在文件内；图片、TeX、PPT 等外部资源使用服务端绝对路径（支持 UNC）。正文 Markdown 不是独立工作文件。旧 v2 格式在打开时迁移，保留原索引备份及原数据目录；不要编辑旧副本。
 
-文档默认只读。Agent 可以读取文档，但修改必须通过 PaperEditer CLI 或 API，禁止直接解除只读后覆盖。CLI 与网页共享校验、并发合并和历史记录。默认目标是服务当前工作区；`--workspace ABSOLUTE_PATH` 可操作其他文档而不切换网页。命令从本目录运行（或使用脚本的绝对路径）：
+文档默认只读。Agent 可以读取文档，但修改必须通过 PaperEditer CLI 或 API，禁止直接解除只读后覆盖。CLI 与网页共享校验、并发合并和历史记录。默认目标是服务当前工作区；`--workspace ABSOLUTE_PATH` 可操作其他文档而不切换网页。命令可在任意目录运行；若未安装，先在编辑器目录执行 `python install_cli.py`：
 
 ~~~sh
-python paperedit.py status
-python paperedit.py list --space thesis
-python paperedit.py search "关键词"
-python paperedit.py read OBJECT_ID
-python paperedit.py edit --file changes.json -m "修改说明"
-python paperedit.py history OBJECT_ID
-python paperedit.py diff COMMIT --object OBJECT_ID
-python paperedit.py tag --name "重要版本"
-python paperedit.py restore COMMIT --object OBJECT_ID --revision REVISION
+paperedit status
+paperedit list --space thesis
+paperedit search "关键词"
+paperedit read OBJECT_ID
+paperedit edit --file changes.json -m "修改说明"
+paperedit history OBJECT_ID
+paperedit diff COMMIT --object OBJECT_ID
+paperedit tag --name "重要版本"
+paperedit restore COMMIT --object OBJECT_ID --revision REVISION
 ~~~
 
 edit 批量文件格式：`{"revision":"读取时返回的版本","operations":[{"op":"update","id":"OBJECT_ID","body":"新内容"}]}`。不能用猜测或刷新得到的新 revision 强行覆盖旧草稿；并发冲突时重新读取、合并并提交。每次有效保存自动进入独立本地 Git，不需要额外 commit；tag 只命名版本。历史仓库不设远程，不得推送用户数据。
