@@ -5,10 +5,10 @@
 .workspacePathForm .workspacePath{flex:1;min-width:0;width:100%;font-size:16px;padding:8px;box-sizing:border-box}
 .workspacePathForm button{flex:none;white-space:nowrap}
 .workspaceFileActions{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
-.workspaceRecent{display:flex!important;flex-direction:column;align-items:flex-start!important;text-align:left;gap:4px;white-space:normal!important;max-width:100%;min-width:0}
-.workspaceRecent span{overflow-wrap:anywhere;word-break:break-word;max-width:100%}
-.workspaceRecentRow{display:flex;align-items:center;gap:8px;min-width:0}
-.workspaceRecentRow .workspaceRecent{flex:1}
-.workspaceForget{flex:none;font-size:12px}
+.workspaceRecentList{max-height:45vh;overflow-y:auto;min-width:0}
+.workspaceRecentRow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;margin:4px 0}
+.workspaceRecent{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:4px;white-space:normal;min-width:0;width:100%}
+.workspaceRecent strong,.workspaceRecent span{overflow-wrap:anywhere;max-width:100%}
+.workspaceForget{width:auto;white-space:nowrap;font-size:12px}
 
 .navrow{position:relative}.navrow.drop-before::after,.navrow.drop-after::after{content:'';position:absolute;left:var(--drop-indent,0px);right:0;height:3px;background:#5689b7;border-radius:2px;pointer-events:none;z-index:1}.navrow.drop-before::after{top:-2px}.navrow.drop-after::after{bottom:-2px}.navrow.drop-inside{outline:2px solid #5689b7;background:#e7edf3}
