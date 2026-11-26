@@ -29,6 +29,26 @@ function noteParts(raw){
     }
     return parts;
 }
+// Native MathLive copies a typed LaTeX payload and a $$...$$ text fallback.
+// The context menu uses the same text envelope so even browsers which only
+// permit text clipboard access can distinguish a formula from ordinary prose.
+function formulaClipboardLatex(data,text=data?.getData('text/plain')||''){
+    const typed=data?.getData('application/x-latex');
+    if(typed?.trim())return typed.trim();
+    const s=text.trim();
+    for(const [open,close] of [['$$','$$'],['\\(','\\)'],['\\[','\\]'],['$','$']]){
+        if(!s.startsWith(open)||!s.endsWith(close)||s.length<=open.length+close.length)continue;
+        const body=s.slice(open.length,-close.length).trim();
+        if(body&&!body.includes(close)&&(open!=='$'||!body.includes('\n')))return body
+    }
+    return null
+}
+function formulaClipboardText(tex){return '$$ '+tex+' $$'}
+function inlineFormulaSource(tex){
+    tex=(tex||' ').replace(/\r?\n/g,' ');
+    return tex.includes('$')?'\\('+tex+'\\)':'$'+tex+'$'
+}
+function formulaObjectSource(tex){return ':::equation eq-'+uid()+'\n'+tex+'\n:::'}
 function visualMath(tex,display,onInput){
     const f=document.createElement('math-field');f.className='visualMath'+(display?' displayMath':'');f.setAttribute('contenteditable','true');f.setAttribute('math-virtual-keyboard-policy','auto');
     f.setAttribute('aria-label','可编辑数学公式');f.value=tex;f._texOriginal=tex;f._texChanged=false;f.dataset.tex=tex;
@@ -44,6 +64,22 @@ function visualMath(tex,display,onInput){
     },true);
     f.addEventListener('move-out',e=>{if(editingEnabled&&leaveMathField(f,e.detail.direction,false))e.preventDefault()});
     f.addEventListener('input',e=>{e.stopPropagation();if(!editingEnabled)return;f._texChanged=true;f.dataset.tex=f.value;onInput(f.value)});
+    // MathLive consumes its own contextmenu event inside the shadow DOM.
+    // Route it through the editor menu before the native handler sees it.
+    f.addEventListener('contextmenu',e=>{
+        e.preventDefault();e.stopImmediatePropagation();
+        const items=simpleContextMenu(e);
+        if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,items)}
+        else menuAt(e,items)
+    },true);
+    for(const type of ['copy','cut'])f.addEventListener(type,e=>{
+        if(!e.clipboardData||type==='cut'&&(!editingEnabled||f.selectionIsCollapsed))return;
+        const tex=f.selectionIsCollapsed?f.value:f.getValue(f.selection,'latex');
+        if(!tex)return;
+        // Keep the native MathLive atom/JSON export and paste behavior intact.
+        e.clipboardData.setData('application/x-latex',tex);
+        localClipboard=formulaClipboardText(tex);localClipboardPreferred=false
+    },true);
     return f;
 }
 // MathLive itself must remain editable. The wrapper, not its editor, is
@@ -196,7 +232,7 @@ function richMarkdown(host,fragment=false){
     function walk(n){
         if(n.nodeType===Node.TEXT_NODE)return (n.textContent||'').replace(/\u00a0/g,' ');
         if(n.nodeType!==Node.ELEMENT_NODE)return '';
-        if(n.tagName==='MATH-FIELD')return '$'+((n.dataset.tex??(n._texChanged?n.value:n._texOriginal||n.value||''))||' ')+'$';
+        if(n.tagName==='MATH-FIELD')return inlineFormulaSource(n.dataset.tex??(n._texChanged?n.value:n._texOriginal||n.value||''));
         if(n.dataset.token)return n.dataset.token;
         const inner=[...n.childNodes].map(walk).join('');
         if(n.tagName==='BR')return '\n';
@@ -551,11 +587,11 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!cut)for(const {note} of notes)if(find(note.id))deleteNode(find(note.id));
         if(root.isConnected){const dest=cards().find(c=>c._part===selectedPart)?.querySelector('.part-text .richText');if(dest)placeIn(dest);else root.focus({preventScroll:true})}})
     }
-    function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null)replaceMixed(r,t)}}]]}
+    function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
     root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
     for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
         const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
-        if(type==='paste'){if(editingEnabled)replaceMixed(r,e.clipboardData.getData('text/plain'));return}
+        if(type==='paste'){if(editingEnabled){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
         if(type==='cut'&&!editingEnabled)return;const text=mixedClipboard(r,type==='cut');e.clipboardData.setData('text/plain',text);localClipboard=text;localClipboardPreferred=false;if(type==='cut')replaceMixed(r,'',true)
     },true);
     root.addEventListener('keydown',e=>{
@@ -777,6 +813,18 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         add({kind:'equation',id,flags:'',body:tex,raw:':::equation '+id+'\n'+tex+'\n:::'},anchor);
         cards().find(c=>c._part.id===id)?.querySelector('math-field')?.executeCommand?.('selectAll')
     }
+    function pasteFormula(area,tex,anchor){
+        if(!editingEnabled||!root.isConnected||!tex)return;
+        if(!area){insertPaste(formulaObjectSource(tex),anchor);root.focus({preventScroll:true});return}
+        annotationEdit(()=>{
+            const s=getSelection(),r=s?.rangeCount&&area.contains(s.getRangeAt(0).commonAncestorContainer)?s.getRangeAt(0).cloneRange():document.createRange();
+            if(!area.contains(r.commonAncestorContainer)){r.selectNodeContents(area);r.collapse(false)}
+            const field=visualMath(tex.replace(/\r?\n/g,' '),false,()=>area.dispatchEvent(new Event('input',{bubbles:true})));
+            const atom=inlineMathAtom(field);
+            area.focus({preventScroll:true});r.deleteContents();r.insertNode(atom);r.setStartAfter(atom);r.collapse(true);
+            s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()
+        })
+    }
     function insertMenu(){return internal?[]:[
         ['插入交叉引用',()=>visualPick(s=>{const m=[...s.matchAll(refPattern())][0];if(m)insertInline(visualRef(m[1],m[2]))})]
     ]}
@@ -818,6 +866,8 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         area.addEventListener('focusin',()=>{focused=area;selectedPart=p;clearObject()});
         area.addEventListener('keyup',remember);area.addEventListener('pointerup',remember);
         area.addEventListener('paste',e=>{if(e.target.closest('math-field'))return;const text=e.clipboardData?.getData('text/plain')||'';
+            const tex=formulaClipboardLatex(e.clipboardData,text);
+            if(tex){e.preventDefault();e.stopImmediatePropagation();pasteFormula(area,tex,p);return}
             if(pasteSubfigure(text,p)){e.preventDefault();e.stopImmediatePropagation();return}
             if(pasteImage(e,p))return;
             if(rangeNoteClipboardValue(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
@@ -944,7 +994,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     }
     root._clipboardMenu=e=>{
         const multi=activeMixed();if(multi)return mixedMenu(multi);
-        const card=e.target.closest('.visualCard'),p=card?._part||selectedPart;
+        const card=e.target.closest('.visualCard'),p=card?._part||(e.target===root&&Number.isFinite(e.clientY)?cards().filter(c=>c.getBoundingClientRect().top<=e.clientY).at(-1)?._part||parts[0]:selectedPart);
         const area=e.target.closest('.richText'),math=e.target.closest('math-field');
         const wrap=e.target.closest('.resizeImage');
         if(!e.preview){
@@ -962,7 +1012,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const copyOrCut=async cut=>{
             if(cut&&!requireEditMode())return;
             if(object){const data=objectClipboardData(p,card,cut);await writeEditorClipboard(data.text);if(cut)data.remove();return}
-            if(math){const value=math.getValue?.(math.selection,'latex')||math.value;if(!value)return;await writeEditorClipboard(value);if(cut&&editingEnabled&&math.isConnected){math.executeCommand?.('deleteBackward');math.dispatchEvent(new Event('input',{bubbles:true}))}return}
+            if(math){const value=math.selectionIsCollapsed?math.value:math.getValue(math.selection,'latex');if(!value||cut&&math.selectionIsCollapsed)return;await writeEditorClipboard(formulaClipboardText(value));if(cut&&editingEnabled&&math.isConnected){math.executeCommand?.('deleteBackward');math.dispatchEvent(new Event('input',{bubbles:true}))}return}
             if(!selected)return;await writeEditorClipboard(text());if(cut&&editingEnabled&&restore()){document.execCommand('delete');area.dispatchEvent(new Event('input',{bubbles:true}))}
         };
         const paste=async()=>{
@@ -976,19 +1026,21 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                 }catch{}
                 if(value==null)showToast('无法读取剪贴板，请使用系统粘贴');return
             }
-            if(math?.isConnected){math.focus();math.insert(value,{insertionMode:'replaceSelection'});math.dispatchEvent(new Event('input',{bubbles:true}));return}
+            const tex=formulaClipboardLatex(null,value);
+            if(math?.isConnected){math.focus();math.insert(tex||value,{insertionMode:'replaceSelection',...(tex?{format:'latex'}:{})});math.dispatchEvent(new Event('input',{bubbles:true}));return}
             if(area&&restore()){
                 // Reuse the normal paste handlers, including object/ref parsing.
                 const data=new DataTransfer();data.setData('text/plain',value);
                 area.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));return
             }
+            if(tex){pasteFormula(null,tex,p);return}
             if(!pasteSubfigure(value,p))insertPaste(value,p)
         };
         return [['剪切',()=>copyOrCut(true),!object&&!selected&&!(math&&!math.selectionIsCollapsed)],['复制',()=>copyOrCut(false),!object&&!selected&&!math],['粘贴',paste]]
     };
     root.addEventListener('copy',e=>objectClipboard(e,false));
     root.addEventListener('cut',e=>objectClipboard(e,true));
-    root.addEventListener('paste',e=>{if(e.defaultPrevented)return;if(pasteImage(e,selectedPart))return;if(!e.target.closest('[contenteditable=true],math-field,input,textarea')){const text=e.clipboardData?.getData('text/plain');if(text){e.preventDefault();if(!pasteSubfigure(text,selectedPart))insertPaste(text,selectedPart)}}});
+    root.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;if(pasteImage(e,selectedPart))return;if(!e.target.closest('[contenteditable=true],input,textarea')){const tex=formulaClipboardLatex(e.clipboardData);if(tex){e.preventDefault();pasteFormula(null,tex,selectedPart);return}const text=e.clipboardData?.getData('text/plain');if(text){e.preventDefault();if(!pasteSubfigure(text,selectedPart))insertPaste(text,selectedPart)}}});
     root.addEventListener('click',e=>{if(!e.target.closest('.richText,math-field,input,textarea,button,summary,a,img,.resizeHandle,.visualRef')){selectedPart=e.target.closest('.visualCard')?._part||selectedPart;root.focus({preventScroll:true})}});
     root.tabIndex=0;draw();
     return {root,getValue:value};

@@ -658,6 +658,7 @@ async function load(force=false){
 }
 function mobileClose(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
 function setView(v){
+    $('menu').hidden=true;
     if(panes[active]?.history)closeHistoricalVersion(false);
     captureReading();
     view=v;$('treeTab').classList.toggle('active',v==='thesis');$('blockTab').classList.toggle('active',v==='blocks');search='';$('search').value='';
@@ -901,6 +902,8 @@ function positionFloatingTools(){
     bar.style.maxWidth=Math.max(0,w-16)+'px';
     let x=ox+(w-bar.offsetWidth)/2,y=oy+h-bar.offsetHeight-12;
     if(matchMedia('(pointer: coarse), (max-width: 760px)').matches){
+        const keyboard=window.mathVirtualKeyboard;
+        if(keyboard?.visible&&keyboard.boundingRect?.height>0)y=Math.min(y,keyboard.boundingRect.top-bar.offsetHeight-8);
         bar.style.left=Math.max(ox+8,Math.min(x,ox+w-bar.offsetWidth-8))+'px';
         bar.style.top=Math.max(oy+8,y)+'px';positionToolHint();return
     }
@@ -1074,6 +1077,12 @@ function simpleContextMenu(e,explicit){
     const objectBinding=!draft&&source&&spaceOf(source.owner)==='thesis'?objectAnnotationBinding(source,e):null;
     const binding=objectBinding||(prose?annotationBinding(e,pane):null);
     const result=editorClipboardMenu(e);
+    // Surrounding document whitespace has no editable host. Route its paste
+    // action to the nearest document just like the insertion menu.
+    if(prose&&!rangeDoc&&doc?._clipboardMenu){
+        const paste=doc._clipboardMenu({target:doc,clientX:e.clientX,clientY:e.clientY,preview:true}).find(i=>i[0]==='粘贴');
+        if(paste)result.push(paste)
+    }
     // Insertion lives in the context menu, not a persistent button in the text.
     const insertDoc=e.target.closest('.visualDocument')||(prose?doc:null);
     if(!e.preview&&insertDoc?._contentInsertMenu)result.push(...insertDoc._contentInsertMenu(e));
@@ -1965,6 +1974,8 @@ document.addEventListener('DOMContentLoaded',async()=>{
     // MathLive registers its element asynchronously on some browsers. Do not
     // prevent ordinary text editing while the formula component is loading.
     await Promise.race([customElements.whenDefined('math-field'),new Promise(resolve=>setTimeout(resolve,2500))]);
+    window.mathVirtualKeyboard?.addEventListener?.('geometrychange',positionFloatingTools);
+    window.mathVirtualKeyboard?.addEventListener?.('virtual-keyboard-toggle',()=>requestAnimationFrame(positionFloatingTools));
     await syncShortcuts();
     load();
 });

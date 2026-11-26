@@ -488,6 +488,85 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--math-clipboard-only')){
+            const {p,context,errors}=await fixture(browser);
+            await p.evaluate(()=>select('demo-start'));
+            const source=p.locator('[data-object="demo-eq"] math-field');
+            const area=p.locator('.pane .part-text .richText').first();
+            const fragment='\\frac{a}{b}';
+            await source.evaluate((f,tex)=>{
+                f.focus();f.value='x+'+tex+'+y';
+                f.dispatchEvent(new Event('input',{bubbles:true}));
+                for(let i=0;i<f.lastOffset;i++)for(let j=i+1;j<=f.lastOffset;j++){
+                    if(f.getValue([i,j],'latex')===tex){f.selection={ranges:[[i,j]],direction:'forward'};return}
+                }
+                throw Error('No matching formula fragment');
+            },fragment);
+            assert.equal(await source.evaluate(f=>f.getValue(f.selection,'latex')),fragment);
+            await p.keyboard.press('Control+c');
+            assert.match(await p.evaluate(()=>navigator.clipboard.readText()),/\\frac\{a\}\{b\}/);
+            const setCaret=()=>area.evaluate(a=>{a.focus();const t=a.querySelector('p').firstChild,r=document.createRange();r.setStart(t,2);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r)});
+            await setCaret();
+            await p.keyboard.press('Control+v');
+            const inline=area.locator('math-field');
+            await inline.waitFor();
+            assert.equal(await inline.evaluate(f=>f.value),fragment);
+            assert.equal(await p.evaluate(()=>document.activeElement.classList.contains('richText')),true);
+            assert.match(await p.evaluate(()=>find('demo-start').body),/^A \$\\frac\{a\}\{b\}\$fictional example/);
+            // Native paste into another formula keeps the selected fraction.
+            const other=p.locator('.pane .part-text math-field').last();
+            await other.click();
+            await other.evaluate(f=>f.executeCommand('selectAll'));
+            assert.equal(await other.evaluate(f=>document.activeElement===f),true);
+            await p.keyboard.press('Control+v');
+            assert.equal(await other.evaluate(f=>f.value),fragment);
+            // Right-click copy uses the same recognizable fallback format.
+            await inline.click();
+            await inline.evaluate(f=>f.executeCommand('selectAll'));
+            await contextAt(p,inline);await menu(p,'复制').click();
+            assert.equal(await p.evaluate(()=>navigator.clipboard.readText()),'$$ '+fragment+' $$');
+            await setCaret();await contextAt(p,area);await menu(p,'粘贴').click();
+            await p.waitForFunction(()=>document.querySelector('.pane .part-text .richText').querySelectorAll('math-field').length===2);
+            await other.click();await other.evaluate(f=>{f.value='w';f.dispatchEvent(new Event('input',{bubbles:true}));f.executeCommand('selectAll')});
+            const eqCount=await p.locator('.pane .part-equation').count();
+            await contextAt(p,other);await menu(p,'粘贴').click();
+            await p.waitForFunction(tex=>[...document.querySelectorAll('.pane .part-text math-field')].at(-1)?.value===tex,fragment);
+            assert.equal(await other.evaluate(f=>f.value),fragment);
+            assert.equal(await p.locator('.pane .part-equation').count(),eqCount);
+            const doc=area.locator('xpath=ancestor::div[contains(@class,"visualDocument")]').first();
+            await doc.evaluate(d=>{d.focus();getSelection().removeAllRanges()});
+            await p.keyboard.press('Control+v');
+            const newEq=p.locator('.pane .part-equation:not([data-object="demo-eq"])');
+            await newEq.waitFor();
+            assert.equal(await newEq.locator('math-field').evaluate(f=>f.value),fragment);
+            assert.notEqual(await newEq.getAttribute('data-object'),'demo-eq');
+            // Typed MIME can identify math even when plain text has no delimiters.
+            await setCaret();
+            await area.evaluate(a=>{const d=new DataTransfer();d.setData('application/x-latex','z^2');d.setData('text/plain','z^2');a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))});
+            assert.equal(await area.locator('math-field').first().evaluate(f=>f.value),'z^2');
+            // The same unmarked prose must still be treated as ordinary text.
+            await setCaret();
+            await area.evaluate(a=>{const d=new DataTransfer();d.setData('text/plain','ordinary text');a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))});
+            assert.equal(await area.locator('math-field').count(),3);
+            assert.match(await area.innerText(),/ordinary text/);
+            assert.deepEqual(errors,[]);await context.close();
+            const mobile=await fixture(browser,true),q=mobile.p;
+            await q.evaluate(()=>{select('demo-start');if(!editingEnabled)toggleEditMode()});
+            const mf=q.locator('[data-object="demo-eq"] math-field');
+            await mf.tap();await mf.evaluate(f=>{f.selection={ranges:[[0,1]],direction:'forward'}});
+            const selected=await mf.evaluate(f=>f.getValue(f.selection,'latex'));
+            assert.ok(selected&&selected!=='E=mc^2');
+            await q.locator('#floatingTools [data-tool="复制"]').tap();
+            await q.waitForFunction(tex=>localClipboard==='$$ '+tex+' $$',selected);
+            const dest=q.locator('.pane .part-text .richText').first();
+            await dest.tap();
+            await dest.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a.querySelector('p'));r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r)});
+            await q.locator('#floatingTools [data-tool="粘贴"]').tap();
+            await dest.locator('math-field').waitFor();
+            assert.equal(await dest.locator('math-field').evaluate(f=>f.value),selected);
+            assert.deepEqual(mobile.errors,[]);await mobile.context.close();
+            console.log('PASS: selected formula fragment, native copy/paste to prose and math, context-menu copy/paste, independent equation, typed LaTeX and ordinary text');return
+        }
         if(process.argv.includes('--math-only')){
             const {p,context,errors}=await fixture(browser);
             await p.evaluate(()=>select('demo-start'));

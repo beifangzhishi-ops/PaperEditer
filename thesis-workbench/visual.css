@@ -76,6 +76,7 @@
 .mathPalette button{flex:none;min-width:32px;min-height:32px;padding:3px 7px;font-size:17px;line-height:1.2;white-space:nowrap}
 .visualMath:not(.displayMath):focus-within{outline:1px solid #b4c9d9;outline-offset:2px;background:#fafcfe;min-width:20px!important}
 .inlineMathAtom{display:inline-block;vertical-align:baseline;white-space:nowrap;max-width:100%}
+#toast{pointer-events:none}
 @media(max-width:760px){.mathPalette{width:calc(100vw - 16px);max-height:55px}.mathPalette button{min-height:36px;min-width:36px}}
 /* Native fullscreen and immersive fallback share the same full header. */
 #fullscreenToggle{display:grid;place-items:center;min-width:34px;flex:none}
