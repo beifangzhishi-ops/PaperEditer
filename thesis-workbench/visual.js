@@ -64,6 +64,7 @@ function visualMath(tex,display,onInput){
     },true);
     f.addEventListener('move-out',e=>{if(editingEnabled&&leaveMathField(f,e.detail.direction,false))e.preventDefault()});
     f.addEventListener('input',e=>{e.stopPropagation();if(!editingEnabled)return;f._texChanged=true;f.dataset.tex=f.value;onInput(f.value)});
+    f.addEventListener('paste',()=>{if(editingEnabled)requestAnimationFrame(()=>centerAfterPaste(f))},true);
     // MathLive consumes its own contextmenu event inside the shadow DOM.
     // Route it through the editor menu before the native handler sees it.
     f.addEventListener('contextmenu',e=>{
@@ -225,7 +226,7 @@ function visualRich(raw,changed,compact=false,allowRefs=true){
     if(!host.childNodes.length)host.append(el('p'));
     host.addEventListener('input',()=>{if(editingEnabled)changed()});
     // Avoid pasting untrusted HTML; recognized structured text is handled by the parent.
-    host.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed()});
+    host.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed();centerAfterPaste(host)});
     return host
 }
 function richMarkdown(host,fragment=false){
@@ -253,6 +254,35 @@ let verticalCaretX=null;
 function caretBounds(range){
     const r=[...range.getClientRects()].find(r=>r.height>0)||range.getBoundingClientRect();
     return r.height>0?r:null
+}
+// Scroll the editing pane, not the document or the beginning of the pasted
+// block. Re-measure after layout, and cancel if the user moves the caret.
+function centerAfterPaste(target){
+    if(!target?.isConnected)return;
+    const sel=getSelection(),range=sel?.rangeCount&&target.contains(sel.getRangeAt(0).commonAncestorContainer)?sel.getRangeAt(0).cloneRange():null;
+    if(range)range.collapse(false);
+    const scroller=target.closest('dialog')||target.closest('.pane');
+    if(!scroller)return;
+    scroller._restoringReading=false;
+    const ticket={};scroller._pasteCenter=ticket;
+    function center(){
+        if(!target.isConnected||scroller._pasteCenter!==ticket)return;
+        if(range){const s=getSelection();if(!s?.rangeCount||s.focusNode!==range.endContainer||s.focusOffset!==range.endOffset)return}
+        const rect=(range&&caretBounds(range))||target.getBoundingClientRect();
+        const box=scroller.getBoundingClientRect(),toolbar=scroller.querySelector(':scope > .toolbar'),top=Math.max(box.top,toolbar?.getBoundingClientRect().bottom||box.top);
+        const viewportBottom=Math.min(box.bottom,(window.visualViewport?.offsetTop||0)+(window.visualViewport?.height||innerHeight));
+        const y=(top+Math.max(top,viewportBottom))/2;
+        const desired=scroller.scrollTop+(rect.top+rect.bottom)/2-y;
+        // Leave room below the final paragraph so it can also be centered.
+        const page=target.closest('.page');
+        if(page&&desired>scroller.scrollHeight-scroller.clientHeight){
+            const pad=parseFloat(getComputedStyle(page).paddingBottom)||0;
+            page.style.paddingBottom=Math.ceil(pad+desired-(scroller.scrollHeight-scroller.clientHeight)+2)+'px';
+        }
+        scroller.scrollTop=Math.max(0,desired);
+    }
+    requestAnimationFrame(()=>{center();requestAnimationFrame(center)});
+    for(const type of ['pointerdown','keydown','wheel','touchstart'])scroller.addEventListener(type,()=>{if(scroller._pasteCenter===ticket)scroller._pasteCenter=null},{once:true,passive:true});
 }
 function proseLineRects(area){
     const rects=[];
@@ -573,19 +603,30 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const stripSelected=raw=>raw?.replace(refPattern(),(m,k,id)=>k==='embed'&&noteIds.has(id)?'':m);
         first.before=stripSelected(first.before);last.after=stripSelected(last.after);
         const replacement=text.trim()?parseParts(prepareRangePaste(text,owner)):[];
+        const pastedEnd=replacement.at(-1),pasteMarker='WBPASTE'+uid().replace(/-/g,'')+'END';
         for(const {note} of notes)clearAnnotationPlacement(note);
         if(first.before?.trim()){
             if(replacement[0]?.kind==='text')replacement[0].raw=first.before+replacement[0].raw;
             else replacement.unshift({kind:'text',raw:first.before})
         }
         if(last.after?.trim()){
+            if(pastedEnd?.kind==='text')pastedEnd.raw+=pasteMarker;
             if(replacement.at(-1)?.kind==='text')replacement.at(-1).raw+=last.after;
             else replacement.push({kind:'text',raw:last.after})
         }
         parts.splice(i,j-i+1,...replacement);if(!parts.length)parts=[{kind:'text',raw:''}];
-        selectedPart=parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();flush();
+        selectedPart=pastedEnd||parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();
+        let caret=null;
+        if(pastedEnd?.raw.includes(pasteMarker)){
+            pastedEnd.raw=pastedEnd.raw.replace(pasteMarker,'');
+            const area=cards().find(c=>c._part===pastedEnd)?.querySelector('.richText');
+            if(area){const walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);for(let n=walker.nextNode();n;n=walker.nextNode()){
+                const at=n.data.indexOf(pasteMarker);if(at>=0){n.deleteData(at,pasteMarker.length);caret=document.createRange();caret.setStart(n,at);caret.collapse(true);break}
+            }}
+        }
+        flush();
         if(!cut)for(const {note} of notes)if(find(note.id))deleteNode(find(note.id));
-        if(root.isConnected){const dest=cards().find(c=>c._part===selectedPart)?.querySelector('.part-text .richText');if(dest)placeIn(dest);else root.focus({preventScroll:true})}})
+        if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd);if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
     }
     function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
     root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
@@ -647,7 +688,22 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root.addEventListener('pointerdown',e=>{if(!e.target.closest('.visualCard'))clearObject()},true);
     function placeIn(area,end=false){
         if(!area)return;
-        area.focus({preventScroll:true});const r=document.createRange();r.selectNodeContents(area);r.collapse(!end);const s=getSelection();s.removeAllRanges();s.addRange(r)
+        area.focus({preventScroll:true});const r=document.createRange();r.selectNodeContents(area);r.collapse(!end);
+        if(end){
+            let node=area;
+            while(node.lastChild){
+                let last=node.lastChild;
+                // Marked adds a formatting newline after the final paragraph;
+                // it is not an editable visible caret position.
+                while(last.previousSibling&&last.nodeType===Node.TEXT_NODE&&!last.data.trim())last=last.previousSibling;
+                if(last.parentElement?.closest('[contenteditable=false],math-field')||last.matches?.('[contenteditable=false],math-field,br,img')){r.setStartAfter(last);node=null;break}
+                node=last;
+            }
+            if(node?.nodeType===Node.TEXT_NODE)r.setStart(node,node.length);
+            else if(node&&node!==area)r.setStart(node,node.childNodes.length);
+            r.collapse(true)
+        }
+        const s=getSelection();s.removeAllRanges();s.addRange(r)
     }
     function removePart(p,keepCaret=false){
         const i=parts.indexOf(p);if(i<0)return;
@@ -767,7 +823,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const raw=rangeNoteClipboardValue(text)?.raw||text;
         const collision=[...raw.matchAll(objectPattern())].some(m=>ids.has(m[2])||(m[1]==='figure'&&[...m[4].matchAll(figureImagePattern())].some((img,i)=>ids.has(figureImageId(img[3],m[2],i)))));
         const p=parseParts(prepareRangePaste(text,owner,collision));if(!p.length)return;
-        let i=parts.indexOf(after);if(after?.kind==='text'&&!after.raw.trim()){parts.splice(i,1,...p)}else parts.splice(i<0?parts.length:i+1,0,...p);selectedPart=p.at(-1);draw();flush()})
+        let i=parts.indexOf(after);if(after?.kind==='text'&&!after.raw.trim()){parts.splice(i,1,...p)}else parts.splice(i<0?parts.length:i+1,0,...p);selectedPart=p.at(-1);draw();flush();
+        const card=cards().find(c=>c._part===selectedPart),area=card?.querySelector('.part-text .richText');
+        if(area){placeIn(area,true);centerAfterPaste(area)}else if(card){root.focus({preventScroll:true});centerAfterPaste(card)}})
     }
     const imageMarkup=({url,name})=>figureImageMarkup(name.replace(/[\[\]\r\n]/g,''),url,'','subfig-'+uid());
     function pasteSubfigure(text,after){
@@ -777,26 +835,26 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         let id=figureImageId(m[3],'clipboard',0);
         if(occupiedObjectIds().has(id)||parts.some(p=>p.raw.includes('wb-id:'+id)))id='subfig-'+uid();
         const markup=figureImageMarkup(m[1],m[2],m[3],id),card=[...body.children].find(c=>c._part===after);
-        if(after?.kind==='figure'&&card?._appendImageMarkup)card._appendImageMarkup([markup]);
-        else{const fig='fig-'+uid(),data=m[1]+'\n\n'+markup;add({kind:'figure',id:fig,flags:'',body:data,raw:':::figure '+fig+'\n'+data+'\n:::'},after)}
+        if(after?.kind==='figure'&&card?._appendImageMarkup){card._appendImageMarkup([markup]);centerAfterPaste(card)}
+        else{const fig='fig-'+uid(),data=m[1]+'\n\n'+markup;add({kind:'figure',id:fig,flags:'',body:data,raw:':::figure '+fig+'\n'+data+'\n:::'},after);centerAfterPaste(cards().find(c=>c._part===selectedPart))}
         return true
     }
-    function addImages(images,after=selectedPart){
+    function addImages(images,after=selectedPart,center=false){
         if(!editingEnabled||!images.length||!root.isConnected)return;
         const card=[...body.children].find(c=>c._part===after);
-        if(after?.kind==='figure'&&card?._appendImages){card._appendImages(images);return}
+        if(after?.kind==='figure'&&card?._appendImages){card._appendImages(images);if(center)centerAfterPaste(card);return}
         const id='fig-'+uid(),data=images[0].name.replace(/[\r\n]/g,' ')+'\n\n'+images.map(imageMarkup).join('\n\n');
-        add({kind:'figure',id,flags:'',body:data,raw:':::figure '+id+'\n'+data+'\n:::'},after)
+        add({kind:'figure',id,flags:'',body:data,raw:':::figure '+id+'\n'+data+'\n:::'},after);if(center)centerAfterPaste(cards().find(c=>c._part===selectedPart))
     }
-    async function uploadImages(files,after=selectedPart){
+    async function uploadImages(files,after=selectedPart,center=false){
         const images=[];
         for(const file of files.filter(f=>f?.type?.startsWith('image/'))){const img=await visualImageUpload(file);if(img)images.push(img)}
-        addImages(images,after)
+        addImages(images,after,center)
     }
     function pasteImage(e,after){
         const items=[...(e.clipboardData?.items||[])].filter(x=>x.kind==='file'&&x.type.startsWith('image/')).map(x=>x.getAsFile()).filter(Boolean);
         const files=items.length?items:[...(e.clipboardData?.files||[])].filter(x=>x.type.startsWith('image/'));
-        if(!files.length)return false;e.preventDefault();e.stopImmediatePropagation();uploadImages(files,after);return true
+        if(!files.length)return false;e.preventDefault();e.stopImmediatePropagation();uploadImages(files,after,true);return true
     }
     function pasteInline(area,text){
         return annotationEdit(()=>{
@@ -807,7 +865,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         for(const m of text.matchAll(refPattern())){if(m.index>at)frag.append(document.createTextNode(text.slice(at,m.index)));frag.append(visualRef(m[1],m[2],!internal));at=m.index+m[0].length}
         if(at<text.length)frag.append(document.createTextNode(text.slice(at)));
         const last=frag.lastChild;if(!last)return;
-        r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()})
+        r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember();centerAfterPaste(area)})
     }
     function addFormula(area,caret,anchor,standalone=false){
         if(!requireEditMode()||!root.isConnected)return;
@@ -830,7 +888,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             const field=visualMath(tex.replace(/\r?\n/g,' '),false,()=>area.dispatchEvent(new Event('input',{bubbles:true})));
             const atom=inlineMathAtom(field);
             area.focus({preventScroll:true});r.deleteContents();r.insertNode(atom);r.setStartAfter(atom);r.collapse(true);
-            s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()
+            s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember();centerAfterPaste(area)
         })
     }
     function insertMenu(){return internal?[]:[
@@ -1030,12 +1088,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                 if(!math&&!localClipboardPreferred)try{
                     const items=await navigator.clipboard.read(),files=[];
                     for(const item of items){const type=item.types.find(t=>['image/png','image/jpeg','image/webp','image/gif'].includes(t));if(type)files.push(new File([await item.getType(type)],'clipboard.'+type.split('/')[1],{type}))}
-                    if(files.length){await uploadImages(files,p);return}
+                    if(files.length){await uploadImages(files,p,true);return}
                 }catch{}
                 if(value==null)showToast('无法读取剪贴板，请使用系统粘贴');return
             }
             const tex=formulaClipboardLatex(null,value);
-            if(math?.isConnected){math.focus();math.insert(tex||value,{insertionMode:'replaceSelection',...(tex?{format:'latex'}:{})});math.dispatchEvent(new Event('input',{bubbles:true}));return}
+            if(math?.isConnected){math.focus();math.insert(tex||value,{insertionMode:'replaceSelection',...(tex?{format:'latex'}:{})});math.dispatchEvent(new Event('input',{bubbles:true}));centerAfterPaste(math);return}
             if(area&&restore()){
                 // Reuse the normal paste handlers, including object/ref parsing.
                 const data=new DataTransfer();data.setData('text/plain',value);

@@ -41,6 +41,8 @@ jobs:
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --sync-only
       - name: History UI regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --history-only
+      - name: Paste caret centering regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --paste-center-only
       - name: Selected text annotation regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-highlight-only
       - name: Annotation image and private object regression tests

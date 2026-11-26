@@ -300,7 +300,7 @@ function applySynced(remote,merged,preserveEditor=false){
     Object.assign(db,{revision:remote.revision,originalLabels:remote.originalLabels,importReport:remote.importReport,paragraphs:remote.paragraphs});
     dirty=!syncEqual(local,syncBase);conflict=false;syncConflict=null;syncNeeded=false;version++;
     if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists()}else renderPanes()}
-    persistDraft();syncStatus();if(dirty){clearTimeout(timer);timer=setTimeout(save,100)}
+    refreshHistoryDiff();persistDraft();syncStatus();if(dirty){clearTimeout(timer);timer=setTimeout(save,100)}
 }
 async function mergePlan(base,local,remote,choices={}){
     if(!currentWorkspace?.history||syncEqual(local,remote)||syncEqual(base,local)||syncEqual(base,remote))return mergeSnapshots(base,local,remote,choices);
@@ -407,7 +407,7 @@ function refreshObjectLabels(){
     }
     for(const wrap of document.querySelectorAll('[data-subfigure]')){const t=resolve(wrap.dataset.subfigure);if(t)wrap.title='子图 '+t.number}
 }
-function change(structural=false){dirty=true;version++;reindex();syncStatus();persistDraft();clearTimeout(timer);timer=setTimeout(save,850);if(structural){renderNav();renderPanes()}else{refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists()}scheduleToolbarUpdate()}
+function change(structural=false){dirty=true;version++;reindex();syncStatus();persistDraft();clearTimeout(timer);timer=setTimeout(save,850);if(structural){renderNav();renderPanes()}else{refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists();refreshHistoryDiff()}scheduleToolbarUpdate()}
 async function save(){
     if(!dirty||saving||conflict||workspaceChanged||syncLoading||syncBusy)return;
     if(syncNeeded){await syncNow();return}
@@ -513,17 +513,135 @@ function closeHistoricalVersion(redraw=true){
     active=0;
     if(redraw){renderNav();renderPanes()}
 }
-function openHistoricalVersion(entry,past,objectId=null){
+function openHistoricalVersion(entry,past,objectId=null,mode='version'){
     captureReading();
     const previous=panes[1]?.history?panes[1].history.previous:panes[1]||null;
     const selected=objectId||[...past.thesis,...past.blocks].find(n=>n.id===panes[0]?.id)?.id||past.thesis[0]?.id||past.blocks[0]?.id||null;
-    panes[1]={id:previous?.id||panes[0]?.id||null,edit:false,history:{entry,past,objectId,selected,previous}};
+    panes[1]={id:previous?.id||panes[0]?.id||null,edit:false,history:{entry,past,objectId,selected,previous,mode}};
     if(dialog.open)dialog.close();$('menu').hidden=true;mobileClose();active=1;renderNav();renderPanes();
+}
+function historyPageNodes(doc,id){
+    if(!id)return [];
+    const root=doc.thesis.find(n=>n.id===id);
+    if(!root)return doc.blocks.filter(n=>n.id===id);
+    const result=[],seen=new Set();
+    function visit(n){if(seen.has(n.id))return;seen.add(n.id);result.push(n);for(const child of doc.thesis)if(child.parent===n.id)visit(child)}
+    visit(root);return result;
+}
+// Compare sanitized rendered nodes, not Markdown/TeX syntax. Math and
+// images are atomic; matching table cells and formatted prose are recursive.
+function historyDiffMark(node,kind){
+    const mark=el('span',kind==='add'?'historyAdded':'historyRemoved');
+    mark.append(node.cloneNode(true));return mark;
+}
+function historyDiffText(old,now,host){
+    if(old===now){host.append(document.createTextNode(now));return false}
+    const diff=window.Diff?.diffWordsWithSpace(old,now,{timeout:250});
+    const items=diff||[{value:old,removed:true},{value:now,added:true}];
+    for(const item of items)if(item.value)host.append(item.added||item.removed?historyDiffMark(document.createTextNode(item.value),item.added?'add':'remove'):document.createTextNode(item.value));
+    return true;
+}
+function historyDiffDOM(a,b,host){
+    if(a.isEqualNode(b)){host.append(b.cloneNode(true));return false}
+    if(a.nodeType===3&&b.nodeType===3)return historyDiffText(a.textContent,b.textContent,host);
+    if(a.nodeType===1&&b.nodeType===1&&a.tagName===b.tagName&&!a.matches('.historicalMath,.historicalRef,img,svg,pre')&&
+        a.getAttributeNames().every(k=>a.getAttribute(k)===b.getAttribute(k))&&a.attributes.length===b.attributes.length&&a.childNodes.length===b.childNodes.length){
+        const next=b.cloneNode(false);let changed=false;
+        for(let i=0;i<a.childNodes.length;i++)changed=historyDiffDOM(a.childNodes[i],b.childNodes[i],next)||changed;
+        host.append(next);return changed;
+    }
+    // Do not place spans directly inside table rows or lists.
+    for(const [node,kind] of [[a,'remove'],[b,'add']]){
+        if(node.nodeType===1){const copy=node.cloneNode(true);copy.classList.add(kind==='add'?'historyAdded':'historyRemoved');host.append(copy)}
+        else host.append(historyDiffMark(node,kind));
+    }
+    return true;
+}
+function historyRenderedPart(p){
+    const host=el('div','historyRenderedPart');
+    if(p.kind==='text')historyMarkdown(p.raw,host);
+    else if(p.kind==='embed')host.append(el('p','historicalRef','※ '+p.ref));
+    else{
+        const box=el('section','historicalObject');box.append(el('div','small',({equation:'公式',figure:'图',table:'表'}[p.kind]||'')));
+        if(p.kind==='equation'){const m=el('div','mathscroll historicalMath');math(m,p.body.trim(),true);box.append(m)}
+        else historyMarkdown(p.body,box);
+        host.append(box);
+    }
+    return host;
+}
+function historyDiffBody(old,now,host){
+    const before=visualParts(old||''),after=visualParts(now||'');
+    const identity=p=>p.kind==='text'?'text:'+p.raw:p.kind+':'+(p.id||p.ref);
+    const chunks=window.Diff?.diffArrays(before,after,{comparator:(a,b)=>identity(a)===identity(b),timeout:250})||[{removed:true,value:before},{added:true,value:after}];
+    let i=0,j=0,changed=false;
+    function pair(a,b){
+        if(!a||!b){const node=historyRenderedPart(a||b);node.classList.add(a?'historyRemoved':'historyAdded');host.append(node);changed=true;return}
+        if(a.raw===b.raw){host.append(historyRenderedPart(b));return}
+        changed=true;
+        const x=historyRenderedPart(a),y=historyRenderedPart(b);
+        if(a.kind===b.kind&&a.kind!=='equation')historyDiffDOM(x,y,host);
+        else{ x.classList.add('historyRemoved');y.classList.add('historyAdded');host.append(x,y)}
+    }
+    for(let k=0;k<chunks.length;){
+        const c=chunks[k];
+        if(!c.added&&!c.removed){for(let n=0;n<c.count;n++)pair(before[i++],after[j++]);k++;continue}
+        const a=[],b=[];
+        while(k<chunks.length&&(chunks[k].added||chunks[k].removed)){
+            const part=chunks[k++];if(part.removed){for(const p of part.value)a.push(before[i++])}else{for(const p of part.value)b.push(after[j++])}
+        }
+        // Pair adjacent changed prose paragraphs; objects with different IDs
+        // are deletions/additions, not edits to an unrelated object.
+        while(a.length||b.length){
+            if(a[0]&&b[0]&&a[0].kind==='text'&&b[0].kind==='text')pair(a.shift(),b.shift());
+            else if(a.length)pair(a.shift(),null);else pair(null,b.shift());
+        }
+    }
+    return changed;
+}
+function historyPageNotes(doc,nodes){
+    const ids=new Set(nodes.flatMap(n=>[n.id,...objectIds(n)])),embedded=new Set(nodes.flatMap(n=>[...n.body.matchAll(refPattern())].filter(m=>m[1]==='embed').map(m=>m[2])));
+    return doc.blocks.filter(n=>!ids.has(n.id)&&(embedded.has(n.id)||objectNoteBindings(n).some(b=>ids.has(b.targetId))||freeNotePlacements(n).some(p=>ids.has(p.pageId))));
+}
+function renderHistoryDiff(host,h){
+    const id=panes[0]?.id,oldNodes=historyPageNodes(h.past,id),newNodes=historyPageNodes(db,id);
+    const oldNotes=historyPageNotes(h.past,oldNodes),newNotes=historyPageNotes(db,newNodes);
+    const signature=JSON.stringify([id,oldNodes,newNodes,oldNotes,newNotes]);
+    if(host._diffSignature===signature)return;
+    host._diffSignature=signature;host.replaceChildren();
+    if(!id){host.append(el('p','muted','请在首页打开要比较的章节或批注。'));return}
+    host.append(el('p','small','当前首页：'+(newNodes[0]?.title||oldNodes[0]?.title||id)+' · 历史版本 → 当前版本'));
+    let changes=false;
+    function sections(oldList,newList,notes=false){
+        const before=new Map(oldList.map(n=>[n.id,n])),after=new Map(newList.map(n=>[n.id,n]));
+        for(const key of new Set([...after.keys(),...before.keys()])){
+            const a=before.get(key),b=after.get(key),section=el('section','historyDiffSection'),title=el('h3','historyDiffHeading');
+            if(!notes){let depth=0,parent=(b||a).parent;const seen=new Set();while(parent&&parent!==id&&!seen.has(parent)){seen.add(parent);parent=(after.get(parent)||before.get(parent))?.parent;depth++}section.style.marginInlineStart=Math.min(3,key===id?0:depth+1)*10+'px'}
+            if(!a||!b){title.textContent=(b||a).title||'未命名';section.classList.add(a?'historyRemoved':'historyAdded');historicalBody((b||a).body,section);changes=true;section.prepend(title)}
+            else{
+                changes=historyDiffText(a.title||'',b.title||'',title)||changes;section.append(title);
+                changes=historyDiffBody(a.body,b.body,section)||changes;
+                if(notes&&!syncEqual([a.objectBindings,a.freePlacements],[b.objectBindings,b.freePlacements])){section.append(el('p','small historyAdded','批注位置已修改'));changes=true}
+            }
+            host.append(section);
+        }
+    }
+    sections(oldNodes,newNodes);
+    if(oldNotes.length||newNotes.length){host.append(el('h3','historyDiffHeading','本页批注'));sections(oldNotes,newNotes,true)}
+    if(!changes)host.prepend(el('p','muted','当前页面内容一致'));
+}
+function refreshHistoryDiff(){
+    const h=panes[1]?.history,host=paneBox.children[1]?.querySelector('.historyPageDiff');
+    if(h?.mode==='diff'&&host)renderHistoryDiff(host,h);
 }
 function renderHistoricalPage(pane,p,pi){
     const h=p.history,{entry,past}=h,toolbar=el('div','toolbar historyPageToolbar'),page=el('article','page historyPreview');
-    toolbar.append(btn('切换 首页',()=>{active=0;renderNav();renderPanes()},'mobileOnly'),el('span','historyReadOnly','历史版本 · 只读'),el('div','spacer'),btn('关闭历史',()=>closeHistoricalVersion()));
+    toolbar.append(btn('切换 首页',()=>{active=0;renderNav();renderPanes()},'mobileOnly'),el('span','historyReadOnly',h.mode==='diff'?'历史差异 · 只读':'历史版本 · 只读'),el('div','spacer'),btn(h.mode==='diff'?'查看历史版本':'查看差异',()=>{h.mode=h.mode==='diff'?'version':'diff';h.scrollTop=0;renderPanes()}),btn('关闭历史',()=>closeHistoricalVersion()));
     page.append(el('h2','historyPreviewHeading',entry.tag?.name||new Date(entry.time).toLocaleString()),el('p','small',entry.id.slice(0,12)+' · '+(entry.message||'')));
+    if(h.mode==='diff'){
+        const host=el('div','historyPageDiff');page.append(host);renderHistoryDiff(host,h);
+        pane.append(toolbar,page);paneBox.append(pane);pane.scrollTop=h.scrollTop||0;
+        pane.addEventListener('scroll',()=>{h.scrollTop=pane.scrollTop},{passive:true});return;
+    }
     if(!h.objectId){
         const scope=el('select','historySectionSelect');scope.setAttribute('aria-label','历史章节');
         for(const [space,title] of [['thesis','博论树'],['blocks','批注']]){
@@ -560,29 +678,18 @@ async function showHistory(objectId=null){
     scope.value=objectId||'';scope.onchange=()=>showHistory(scope.value||null);
     const expand=btn('全部展开',()=>{const groups=[...list.querySelectorAll('details.historyGroup')];const opened=groups.every(x=>x.open);groups.forEach(x=>x.open=!opened);expand.textContent=opened?'全部展开':'全部折叠'});
     heading.append(scope,expand);d.append(heading);
-    const list=el('div','historyList'),detail=el('div','historyDetail');d.append(list,detail);
+    const list=el('div','historyList');d.append(list);
     let entries=[],more=true,loading=false,viewSequence=0;
     const valid=()=>dialog.open&&d.contains(list)&&list.isConnected&&workspace===currentWorkspace?.id;
     function date(t){return new Date(t).toLocaleDateString()}
     function clock(t){return new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
     async function preview(entry){
-        const token=++viewSequence;detail.replaceChildren(el('p','small','加载差异…'));
+        const token=++viewSequence;
         try{
             const past=await api(historyURL('/api/history/item',{id:entry.id}));
             if(!valid()||token!==viewSequence)return;
-            const old=historyText(historicalValue(past,objectId)),now=historyText(historicalValue(db,objectId));
-            detail.replaceChildren(el('h3','',entry.tag?.name||clock(entry.time)),el('p','small','历史版本 → 当前版本'));
-            const tools=el('div','historyControls');tools.append(btn('查看历史版本',()=>openHistoricalVersion(entry,past,objectId)),btn('复制历史内容',()=>copy(old)),btn('恢复版本',()=>restoreHistory(entry,objectId)));detail.append(tools);
-            const pre=el('pre','historyDiff');
-            let length=0;const diff=Diff.diffLines(old,now,{timeout:300});
-            if(!diff){pre.textContent='差异较大，请使用 CLI diff 查看完整内容。'}
-            else for(const item of diff){
-                let text=item.value;if(!item.added&&!item.removed&&text.length>1200)text=text.slice(0,450)+'\n… 未变化内容 …\n'+text.slice(-450);
-                if(length+text.length>100000){pre.append(el('span','','\n… 预览已截断，可复制完整历史内容 …'));break}
-                length+=text.length;pre.append(el('span',item.added?'historyAdded':item.removed?'historyRemoved':'',text));
-            }
-            if(old===now)pre.textContent='内容一致';detail.append(pre);
-        }catch(e){if(valid())detail.replaceChildren(el('p','muted',e.message))}
+            openHistoricalVersion(entry,past,objectId,'diff');
+        }catch(e){if(valid())showToast(e.message)}
     }
     function row(entry){
         const r=el('div','historyRow'),name=el('span','historyName',entry.tag?.name||entry.message||'自动保存'),meta=el('span','small',clock(entry.time)+' · '+entry.id.slice(0,8));r.dataset.commit=entry.id;
@@ -592,7 +699,7 @@ async function showHistory(objectId=null){
             try{const past=await api(historyURL('/api/history/item',{id:entry.id}));if(valid()&&token===viewSequence)openHistoricalVersion(entry,past,objectId)}
             catch(e){if(valid())showToast(e.message)}
         }
-        title.onclick=viewVersion;
+        title.onclick=()=>preview(entry);
         async function setName(value,clear=false){
             try{const result=await api('/api/history/tag',{id:entry.id,name:value,clear});entry.tag=result.tag;draw()}
             catch(e){showToast(e.message)}
@@ -603,7 +710,7 @@ async function showHistory(objectId=null){
             input.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();const value=input.value.trim();if(value)setName(value);else showToast('请输入版本名称')}else if(e.key==='Escape'){e.preventDefault();input.replaceWith(name)}};
             input.onblur=()=>{if(input.isConnected)input.replaceWith(name)};
         }
-        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
+        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['复制历史内容',async()=>{try{const past=await api(historyURL('/api/history/item',{id:entry.id}));if(valid())copy(historyText(historicalValue(past,objectId)))}catch(e){if(valid())showToast(e.message)}}],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
         r.addEventListener('contextmenu',e=>{if(e.target.matches('input'))return;e.preventDefault();e.stopPropagation();menuAt(e,menu())});
         r.append(btn('⋯',e=>menuAt(e,menu()),'historyMore'));if(entry.tag)r.classList.add('named');return r;
     }
@@ -692,7 +799,8 @@ async function load(force=false){
 function mobileClose(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
 function setView(v){
     $('menu').hidden=true;
-    if(panes[active]?.history)closeHistoricalVersion(false);
+    if(panes[active]?.history?.mode==='diff')active=0;
+    else if(panes[active]?.history)closeHistoricalVersion(false);
     captureReading();
     view=v;$('treeTab').classList.toggle('active',v==='thesis');$('blockTab').classList.toggle('active',v==='blocks');search='';$('search').value='';
     const p=panes[active];
@@ -707,6 +815,7 @@ function setView(v){
 }
 function select(id,pi=active,object=null){
     if(!find(id))return;
+    if(pi===1&&panes[1]?.history?.mode==='diff')pi=0;
     if(pi>=panes.length)panes.push({id:null,edit:false});
     replacePane(pi,id,object);active=pi;view=spaceOf(id);
     $('treeTab').classList.toggle('active',view==='thesis');$('blockTab').classList.toggle('active',view==='blocks');
@@ -1194,7 +1303,7 @@ function renderNav(){
     $('newNode').hidden=view==='blocks';
     if(view==='blocks'){
         $('sideTools').replaceChildren();$('newNode').title='新建批注';
-        nav.append(btn('批注一览',()=>{replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
+        nav.append(btn('批注一览',()=>{if(panes[active]?.history?.mode==='diff')active=0;replacePane(active,null);renderPanes();mobileClose()},'navlabel'));
         const query=search.trim().toLowerCase();
         for(const n of db.blocks.filter(n=>(n.title+' '+n.body).toLowerCase().includes(query))){
             const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));row.dataset.nodeId=n.id;

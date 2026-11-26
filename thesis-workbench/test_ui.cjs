@@ -678,7 +678,8 @@ async function run(){
         }
         if(process.argv.includes('--history-only')){
             const workspace={...data.state.workspace,history:true},a={id:'a'.repeat(40),time:'2026-11-26T10:00:00Z',source:'editor',message:'Automatic save',tag:null},b={id:'b'.repeat(40),time:'2026-11-26T09:58:00Z',source:'editor',message:'Automatic save',tag:null},c={id:'c'.repeat(40),time:'2026-11-26T09:55:00Z',source:'agent',message:'Agent edit',tag:{id:'v',name:'Named'}};
-            const past=structuredClone(data.state);past.thesis[0].body='Historical body.';
+            const past=structuredClone(data.state);past.thesis[0].body='Historical body.\n\n:::equation history-eq\nx^2\n:::';
+            past.thesis[1].body='**Historical child**.';
             const shared={workspace,state:structuredClone(data.state),reading:{},recent:[],history:[a,b,c],versions:{[a.id]:data.state,[b.id]:past,[c.id]:past},allowRestore:true};
             const {p,context,errors}=await fixture(browser,false,shared);
             await p.locator('#saveVersion').click();
@@ -696,30 +697,59 @@ async function run(){
             await p.locator('.historyRow').filter({hasText:'Renamed'}).locator('.historyTitle').click();
             await p.locator('#panes > .historicalPane').waitFor();
             assert.equal(await p.locator('#panes > .pane').count(),2);
-            assert((await p.locator('.historyPreview').innerText()).includes('Historical body.'));
+            assert((await p.locator('.historyPageDiff').innerText()).includes('Historical body.'));
+            assert.equal(await p.locator('#dialog').isVisible(),false);
+            assert(await p.locator('.historyPageDiff .historyRemoved .katex').count()>0);
+            assert(await p.locator('.historyPageDiff .historyRemoved strong').count()>0);
             assert.equal(await p.locator('.historyPreview [contenteditable=true],.historyPreview math-field').count(),0);
             assert.equal(await p.evaluate(()=>find('demo-start').body),liveBody);
             assert.equal(await p.evaluate(()=>positionSnapshot().panes.length),1);
+            await p.locator('#nav [data-node-id="demo-method"] .navlabel').click();
+            assert((await p.locator('.historyPageDiff').innerText()).includes('Historical child'));
+            assert(!(await p.locator('.historyPageDiff').innerText()).includes('Historical body.'));
+            await p.evaluate(()=>{find('demo-method').body='Live edited child.';change(false)});
+            assert((await p.locator('.historyPageDiff').innerText()).includes('Live edited child.'));
+            await p.evaluate(()=>select('demo-start',0));
+            await p.getByRole('button',{name:'查看历史版本',exact:true}).click();
+            assert.equal(await p.locator('.historyPageDiff').count(),0);
+            assert((await p.locator('.historyPreview').innerText()).includes('Historical body.'));
             await p.getByRole('button',{name:'关闭历史',exact:true}).click();
             assert.equal(await p.locator('#panes > .pane').count(),1);
             await p.locator('#historyButton').click();
             await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
             await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'查看差异').click();
-            await p.locator('.historyDiff').waitFor();assert((await p.locator('.historyDiff').innerText()).includes('Historical body.'));
-            await p.locator('.historyDetail').getByRole('button',{name:'恢复版本',exact:true}).click();
-            await p.waitForFunction(()=>find('demo-start').body==='Historical body.');
+            await p.locator('.historyPageDiff').waitFor();assert((await p.locator('.historyPageDiff').innerText()).includes('Historical body.'));
+            await p.getByRole('button',{name:'关闭历史',exact:true}).click();
+            await p.locator('#historyButton').click();
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'恢复版本').click();
+            await p.waitForFunction(()=>find('demo-start').body.startsWith('Historical body.'));
             assert.equal(shared.restoreCalls,1);assert.deepEqual(errors,[]);await context.close();
             const mobile=await fixture(browser,true,shared);await mobile.p.locator('#historyButton').tap();
             await mobile.p.locator('.historyRow.named').first().waitFor();assert(await mobile.p.locator('#saveVersion').isVisible());
             await mobile.p.locator('.historyRow').filter({hasText:'Renamed'}).locator('.historyTitle').tap();
             await mobile.p.locator('.historicalPane.activepane').waitFor();
             assert(await mobile.p.locator('.historyPreview').isVisible());
+            assert(await mobile.p.locator('.historyPageDiff').isVisible());
             await mobile.p.locator('.historicalPane').getByRole('button',{name:'切换 首页',exact:true}).tap();
             assert(await mobile.p.locator('#panes > .pane').first().isVisible());
             await mobile.p.locator('#dual').tap();
             assert.equal(await mobile.p.locator('#panes > .pane').count(),1);
             assert.deepEqual(mobile.errors,[]);await mobile.context.close();
-            console.log('PASS: direct save tag, grouping, inline rename, diff, restore, mobile history');return
+            console.log('PASS: direct save tag, grouping, inline rename, rendered scoped diff, live updates, restore, mobile history');return
+        }
+        if(process.argv.includes('--paste-center-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                await p.evaluate(()=>{if(!editingEnabled)toggleEditMode();const n=find('demo-method');n.body=Array.from({length:25},(_,i)=>'Paragraph '+i+' '+('some words '.repeat(15))).join('\n\n');select(n.id,0)});
+                const area=p.locator('.pane.activepane .part-text .richText').last();
+                await area.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);const d=new DataTransfer();d.setData('text/plain',' pasted end');a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))});
+                await p.waitForFunction(()=>{const s=getSelection(),r=s.rangeCount&&s.getRangeAt(0),rect=r&&caretBounds(r),pane=document.querySelector('.pane.activepane'),box=pane.getBoundingClientRect(),top=pane.querySelector('.toolbar').getBoundingClientRect().bottom;return rect&&Math.abs((rect.top+rect.bottom)/2-(top+box.bottom)/2)<30},null,{timeout:4000}).catch(async e=>{console.error('Plain paste diagnostic',mobile,errors,await p.evaluate(()=>{const s=getSelection(),r=s.rangeCount&&s.getRangeAt(0),rect=r&&caretBounds(r),pane=document.querySelector('.pane.activepane');return {anchor:s.anchorNode?.textContent?.slice(-200),offset:s.anchorOffset,rect:rect?.toJSON(),scroll:pane.scrollTop,height:pane.scrollHeight,client:pane.clientHeight,pane:pane.getBoundingClientRect().toJSON(),toolbar:pane.querySelector('.toolbar').getBoundingClientRect().toJSON(),viewport:{height:visualViewport.height,top:visualViewport.offsetTop},body:find('demo-method').body.slice(-250)}}));throw e});
+                assert((await p.evaluate(()=>find('demo-method').body)).includes('pasted end'));
+                await area.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);const d=new DataTransfer();d.setData('text/plain',':::equation paste-center-eq\nx^2\n:::\n\nLast pasted paragraph');a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))});
+                await p.waitForFunction(()=>{const s=getSelection(),r=s.rangeCount&&s.getRangeAt(0),rect=r&&caretBounds(r),pane=document.querySelector('.pane.activepane'),box=pane.getBoundingClientRect(),top=pane.querySelector('.toolbar').getBoundingClientRect().bottom;return rect&&s.anchorNode.textContent.includes('Last pasted paragraph')&&Math.abs((rect.top+rect.bottom)/2-(top+box.bottom)/2)<30}).catch(async e=>{console.error('Paste diagnostic',mobile,errors,await p.evaluate(()=>{const s=getSelection(),r=s.rangeCount&&s.getRangeAt(0),rect=r&&caretBounds(r),pane=document.querySelector('.pane.activepane');return {anchor:s.anchorNode?.textContent?.slice(-200),offset:s.anchorOffset,rect:rect?.toJSON(),scroll:pane.scrollTop,height:pane.scrollHeight,client:pane.clientHeight,pane:pane.getBoundingClientRect().toJSON(),toolbar:pane.querySelector('.toolbar').getBoundingClientRect().toJSON(),body:find('demo-method').body.slice(-300)}}));throw e});
+                assert.deepEqual(errors,[]);await context.close()
+            }
+            console.log('PASS: plain and structured paste center the insertion end on desktop and mobile');return
         }
         if(process.argv.includes('--annotation-highlight-only')){
             for(const isMobile of [false,true]){

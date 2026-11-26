@@ -137,6 +137,14 @@
 .historyPreview .historicalRef{color:#516d8a;font-size:.9em}
 .historyPreview table{border-collapse:collapse;max-width:100%}
 .historyPreview td,.historyPreview th{border:1px solid #dce3e9;padding:5px 8px}
+.historyPageDiff{line-height:1.85;overflow-wrap:anywhere}
+.historyDiffSection{border-top:1px solid #e0e5ea;margin:12px 0;padding:8px 0}
+.historyDiffSection h3{font-size:17px;margin:0 0 8px}
+.historyPageDiff .historyAdded,.historyPageDiff .historyRemoved{border-radius:2px}
+.historyPageDiff .historyRenderedPart.historyRemoved,.historyPageDiff .historyRenderedPart.historyAdded,.historyPageDiff .historyDiffSection.historyAdded,.historyPageDiff .historyDiffSection.historyRemoved{padding:4px 8px;border-left:3px solid currentColor}
+.historyPageDiff .historicalMarkdown{overflow-x:auto}
+.historyPageDiff .historicalMath{overflow-x:auto}
+.historyPageDiff .historyRemoved img{opacity:.55}
 @media(max-width:480px){
     body.historyEnabled header{grid-template-columns:repeat(8,minmax(0,1fr))}
     body.historyEnabled header #workspaceName{grid-area:1/2/2/5}
