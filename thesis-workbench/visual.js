@@ -746,8 +746,39 @@ function setupNoteResize(d,size,onResize){
         handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end)
     });
 }
+let textHighlightFrame=0;
+function refreshTextAnnotations(){
+    if(textHighlightFrame)return;
+    textHighlightFrame=requestAnimationFrame(()=>{
+        textHighlightFrame=0;
+        if(!globalThis.CSS?.highlights||typeof Highlight==='undefined')return;
+        const ranges=[];
+        for(const chip of paneBox.querySelectorAll('.richText .inlineAnnotation')){
+            const owner=chip.closest('.visualDocument')?._owner,id=chip.dataset.token?.slice(8,-2),note=find(id);
+            if(!owner||!note)continue;
+            const quotes=[note.annotation,...(note.textBindings||[])].filter(a=>a?.owner===owner&&a.quote).map(a=>a.quote).sort((a,b)=>b.length-a.length);
+            if(!quotes.length)continue;
+            const area=chip.closest('.richText'),walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);
+            const range=document.createRange();range.setStartAfter(chip);range.setEnd(area,area.childNodes.length);
+            const remaining=range.toString(),quote=quotes.find(q=>remaining.startsWith(q));
+            if(!quote)continue; // A changed/deleted quote must not highlight unrelated text.
+            let length=0;
+            for(let n=walker.nextNode();n;n=walker.nextNode()){
+                if(chip.contains(n)||!(chip.compareDocumentPosition(n)&Node.DOCUMENT_POSITION_FOLLOWING))continue;
+                if(length+n.length>=quote.length){
+                    range.setEnd(n,quote.length-length);
+                    if(range.toString()===quote)ranges.push(range);
+                    break;
+                }
+                length+=n.length;
+            }
+        }
+        const highlight=new Highlight(...ranges);highlight.priority=-1;CSS.highlights.set('paper-annotation',highlight);
+    });
+}
 function refreshObjectAnnotations(scope=document){
     if(!db)return;
+    refreshTextAnnotations();
     const selector='.visualCard[data-object],.resizeImage[data-subfigure],.editableHeading[data-bind-object]';
     const objects=[...(scope.matches?.(selector)?[scope]:[]),...scope.querySelectorAll(selector)];
     for(const object of objects){
@@ -771,7 +802,7 @@ function refreshObjectAnnotations(scope=document){
 }
 function refreshFreeNotes(){
     if(!db)return;
-    for(const page of paneBox.querySelectorAll('.pane > .page')){
+    for(const page of paneBox.querySelectorAll('.pane:not(.historicalPane) > .page')){
         const pageId=page.parentElement._readingPane?.id;
         const notes=db.blocks.flatMap(n=>freeNotePlacements(n).filter(p=>p.pageId===pageId).map(placement=>({n,placement})));
         let layer=page.querySelector(':scope > .freeNoteLayer');

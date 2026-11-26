@@ -208,6 +208,30 @@ class CLITests(unittest.TestCase):
         self.assertEqual(Path(self.run_cli("status",explicit=False)["workspace"]["path"]),self.file)
         self.assertEqual(self.file.read_bytes(),before)
 
+    def test_encoding_loss_rejected_atomically(self):
+        initial = self.run_cli("status")
+        original = self.run_cli("read","demo-start")["value"]["node"]["body"]
+        corrupted = original.encode("ascii","replace").decode("ascii")
+        self.assertNotEqual(original,corrupted)
+        for offline in (False, True):
+            error = self.batch(initial["revision"],[
+                {"op":"create","id":"would-be-partial","title":"Do not save"},
+                {"op":"update","id":"demo-start","body":corrupted},
+            ],stdin=True,success=False,offline=offline)
+            self.assertIn("Possible encoding loss",error)
+            self.assertEqual(self.run_cli("status")["head"]["id"],initial["head"]["id"])
+            self.assertEqual(self.run_cli("read","demo-start")["value"]["node"]["body"],original)
+        self.run_cli("read","would-be-partial",success=False)
+        good = original + "\n\n中文与普通问号？ ?? OK?"
+        rev = self.batch(initial["revision"],[{"op":"update","id":"demo-start","body":good}],stdin=True)["revision"]
+        self.assertEqual(self.run_cli("read","demo-start")["value"]["node"]["body"],good)
+        # Browser saves use the same guard; no revision or history change.
+        s = server.state()
+        s["thesis"][0]["body"] = good.encode("ascii","replace").decode("ascii")
+        with self.assertRaisesRegex(ValueError,"Possible encoding loss"):
+            server.save(s)
+        self.assertEqual(self.run_cli("status")["revision"],rev)
+
 
 if __name__ == "__main__":
     unittest.main()

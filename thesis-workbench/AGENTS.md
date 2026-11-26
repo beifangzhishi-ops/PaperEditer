@@ -20,6 +20,8 @@ edit 批量文件格式：`{"revision":"读取时返回的版本","operations":[
 
 Windows 使用原生 `paperedit.exe`，Python 可直接 `subprocess.run(["paperedit", ...], capture_output=True, check=True)`，不需要 shell 或脚本绝对路径。用 `json.loads(result.stdout)` 解析结果；批量文件使用 UTF-8，标准输入使用 UTF-8 JSON 字节。不要将 API 超时或内部错误当成切换工作区的理由。
 
+**严禁把含中文的 PowerShell here-string 直接通过默认管道传给 Python 或 CLI。** Windows PowerShell 5 的默认 `$OutputEncoding` 可能是 ASCII，将正文不可逆地替换为问号。用文件编辑工具写入 UTF-8 JSON，或用 ASCII-only Python 源代码（中文用 Unicode 转义），通过 `json.dumps(batch, ensure_ascii=True).encode("ascii")` 传给 `subprocess.run(["paperedit","edit","--file","-"], input=..., capture_output=True, check=True)`。提交前读取并检查批量文件中的 Unicode 文本是否与草稿一致；提交后重新读取对象、核对内容及历史。不得把乱码提交当成成功。服务端会拒绝明显编码损坏，但启发式检查不能替代逐项核对。
+
 先搜索、读取必要的对象，再按 ID 编辑。正文段落有持久 ID；公式、图、表采用 `:::equation ID`、`:::figure ID`、`:::table ID`，结束行为独立的 `:::`。引用 `[[ref:ID]]`、`[[eqref:ID]]`、`[[embed:ID]]`。显示编号由目录顺序计算，不写死。知识块不等于正式论文正文。外部 TeX、PPT、图片保持原权限，只有明确要求才修改源文件。图片历史记录路径和指纹，不保存二进制内容。
 
 服务关闭可用 `--offline --workspace ABSOLUTE_PATH` 直接调用同一个跨进程加锁的核心。不要使用旧 workspace.py refresh 操作 v3 文件。损坏文件由 `recover` 命令显式恢复，保留损坏原件。数据、外部资源、历史、备份与锁文件均不得提交到编辑器 Public 仓库。

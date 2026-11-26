@@ -38,6 +38,29 @@ def content(doc):
     return {key: copy.deepcopy(doc[key]) for key in (*SPACES, "trash")}
 
 
+def reject_encoding_loss(old, new):
+    """Catch likely lossy text transport, not ordinary question marks."""
+    before = {n["id"]: n for space in SPACES for n in old[space]}
+    for space in SPACES:
+        for node in new[space]:
+            original = before.get(node["id"], {})
+            for field in ("title", "body"):
+                a, b = original.get(field, ""), node.get(field, "")
+                if a == b:
+                    continue
+                loss = sum(ord(c) > 127 for c in a) - sum(ord(c) > 127 for c in b)
+                runs = lambda s: sum(len(m.group()) for m in re.finditer(r"\?{3,}", s))
+                added_runs = runs(b) - runs(a)
+                added_replacements = b.count("\ufffd") - a.count("\ufffd")
+                # Exact ASCII replacement also catches short Chinese titles.
+                exact_loss = a and a.encode("ascii", "replace").decode("ascii") == b and loss >= 2
+                if (exact_loss or (loss >= 5 and added_runs >= 8)
+                        or (added_runs >= 24 and re.search(r"\?{12,}", b))
+                        or (added_replacements >= 3 and loss >= 3)):
+                    raise ValueError("Possible encoding loss in " + node["id"] + ":" + field
+                                     + "; write UTF-8 JSON bytes, verify the draft and retry. No changes saved.")
+
+
 def readonly(path, enabled=True):
     mode = stat.S_IMODE(path.stat().st_mode)
     wanted = mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH) if enabled else mode | stat.S_IWUSR
@@ -649,6 +672,7 @@ class Document:
                     n["order"] = i
             next_doc["paragraphs"] = rebuild(doc, next_doc)
             check_document(next_doc, self.validator)
+            reject_encoding_loss(doc, next_doc)
             if doc != next_doc:
                 self.replace(self.local.raw, next_doc)
                 # If Git fails, the durable current file remains and the next
@@ -665,6 +689,7 @@ class Document:
                 if not base:
                     return 409, {"error": "Document revision changed; read and retry"}
                 local = apply_operations(base, operations)
+                reject_encoding_loss(base, local)
                 plan = merge_content(content(base), content(local), content(doc))
                 if plan["conflicts"]:
                     return 409, {"error": "Concurrent edit conflict; read and resolve", "conflicts": plan["conflicts"]}
@@ -676,6 +701,7 @@ class Document:
                             return 409, {"error": "Concurrent resource registration conflict"}
                         next_doc[key] = local[key]
             check_document(next_doc, self.validator)
+            reject_encoding_loss(doc, next_doc)
             if next_doc != doc:
                 self.replace(self.local.raw, next_doc)
                 self.record(next_doc, message or "Agent edit", "agent")

@@ -62,6 +62,7 @@
 .viewMode .visualCard.selectedObject:not(.part-text),.viewMode .selectedImage{outline:1px solid #b9cbd8}
 /* Whole objects in a prose range are atomic, including their captions. */
 ::highlight(paper-range){background:#315fc6;color:white}
+::highlight(paper-annotation){background-color:#fff0b3;text-decoration:underline;text-decoration-color:#d5a536;text-decoration-thickness:1px}
 .visualCard.rangeSelected{outline:2px solid #315fc6;outline-offset:1px;background:#315fc614}
 .rangeHandle{position:fixed;width:24px;height:28px;z-index:45;transform:translateX(-50%);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}
 .rangeHandle::before{content:'';display:block;width:3px;height:9px;background:#315fc6;margin:0 auto}
@@ -103,6 +104,17 @@
 .historyDiff span{white-space:pre-wrap}
 .historyAdded{background:#e0f2e6;color:#176237}
 .historyRemoved{background:#f9e2e2;color:#9c3030;text-decoration:line-through}
+.historicalPane{background:#f8fafc}
+.historyPageToolbar{gap:8px;align-items:center;flex-wrap:wrap}
+.historyReadOnly{font-size:12px;font-weight:600;color:#765c24;background:#f9efce;padding:4px 8px;border-radius:4px}
+.historyPreviewHeading{font-size:20px;margin:0 0 6px}
+.historySectionSelect{width:100%;max-width:100%;margin:8px 0 16px;padding:7px}
+.historyPreview .historicalMarkdown{line-height:1.85;overflow-wrap:anywhere;overflow-x:auto}
+.historyPreview .historicalMarkdown img{max-width:100%;height:auto}
+.historyPreview .historicalObject{border:1px solid #dce3e9;border-radius:6px;margin:12px 0;padding:10px;overflow:auto}
+.historyPreview .historicalRef{color:#516d8a;font-size:.9em}
+.historyPreview table{border-collapse:collapse;max-width:100%}
+.historyPreview td,.historyPreview th{border:1px solid #dce3e9;padding:5px 8px}
 @media(max-width:480px){
     body.historyEnabled header{grid-template-columns:repeat(8,minmax(0,1fr))}
     body.historyEnabled header #workspaceName{grid-area:1/2/2/5}

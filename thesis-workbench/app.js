@@ -62,7 +62,10 @@ function readPosition(){
 }
 function panePosition(p){return {id:p.id,reading:p.reading||null}}
 function thesisPosition(p){return p?.id&&db.thesis.some(n=>n.id===p.id)?panePosition(p):null}
-function positionSnapshot(){return {view,active,open:[...open],panes:panes.map(p=>({...panePosition(p),thesisReading:thesisPosition(p.thesisReading)})),pageFolds:pageFoldStates}}
+function positionSnapshot(){
+    const live=panes.map(p=>p.history?p.history.previous:p).filter(Boolean);
+    return {view,active:Math.min(panes[active]?.history?0:active,live.length-1),open:[...open],panes:live.map(p=>({...panePosition(p),thesisReading:thesisPosition(p.thesisReading)})),pageFolds:pageFoldStates}
+}
 function replacePane(pi,id,object=null){
     const previous=panes[pi],old=paneBox.children[pi];
     if(old&&old._readingPane===previous)capturePane(old);
@@ -89,7 +92,7 @@ function readingInteraction(e){if(e.target.closest?.('#panes,#nav,#sideTools,#tr
 for(const type of ['pointerdown','wheel','touchstart','keydown'])document.addEventListener(type,readingInteraction,{capture:true,passive:true});
 function capturePane(pane){
     const p=pane._readingPane;
-    if(!p||pane._readingId!==p.id||pane._restoringReading||!pane.clientHeight)return;
+    if(!p||p.history||pane._readingId!==p.id||pane._restoringReading||!pane.clientHeight)return;
     const top=pane.getBoundingClientRect().top;
     const cards=[...pane.querySelectorAll('.visualCard')].filter(c=>c.getClientRects().length);
     const card=cards.find(c=>c.getBoundingClientRect().bottom>top+8);
@@ -438,6 +441,69 @@ function historyText(value){
     if(typeof value.body==='string'){const {body,...meta}=value;return JSON.stringify(meta,null,2)+'\n\n'+body}
     return JSON.stringify(value,null,2);
 }
+function historyMarkdown(raw,host){
+    if(!raw?.trim())return;
+    const tokens=[];
+    const hold=(kind,value)=>'<span data-history-token="'+(tokens.push({kind,value})-1)+'"></span>';
+    const src=raw.replace(/(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\$([^\n$]+?)\$|\\\[([\s\S]+?)\\\]|\\\(([^\n]+?)\\\)|\[\[(ref|eqref|embed|cite):([^\]\n]+)\]\]/g,(m,dm,im,bd,bi,k,id)=>dm!=null?hold('display',dm):im!=null?hold('math',im):bd!=null?hold('display',bd):bi!=null?hold('math',bi):hold(k,id));
+    const fragment=el('div','historicalMarkdown');
+    fragment.innerHTML=DOMPurify.sanitize(marked.parse(src,{gfm:true}),{ADD_ATTR:['data-history-token'],FORBID_TAGS:['input','textarea','button','select','form'],FORBID_ATTR:['contenteditable','autofocus','tabindex']});
+    for(const marker of fragment.querySelectorAll('[data-history-token]')){
+        const t=tokens[Number(marker.dataset.historyToken)];
+        if(!t){marker.remove();continue}
+        if(t.kind==='math'||t.kind==='display'){const span=el(t.kind==='display'?'div':'span','historicalMath');math(span,t.value,t.kind==='display');marker.replaceWith(span)}
+        else marker.replaceWith(el('span','historicalRef',t.kind==='cite'?'['+t.value+']':t.kind==='embed'?'※ '+t.value:'〔'+t.value+'〕'));
+    }
+    for(const a of fragment.querySelectorAll('a'))a.removeAttribute('href');
+    host.append(fragment)
+}
+function historicalBody(raw,host){
+    for(const part of visualParts(raw||'')){
+        if(part.kind==='text')historyMarkdown(part.raw,host);
+        else if(part.kind==='embed')host.append(el('p','historicalRef','※ '+part.ref));
+        else{
+            const box=el('section','historicalObject');
+            box.append(el('div','small',({equation:'公式',figure:'图',table:'表'}[part.kind]||'')+' · '+part.id));
+            if(part.kind==='equation'){const m=el('div','mathscroll');math(m,part.body.trim(),true);box.append(m)}
+            else historyMarkdown(part.body,box);
+            host.append(box)
+        }
+    }
+}
+function closeHistoricalVersion(redraw=true){
+    const h=panes[1]?.history;if(!h)return;
+    if(h.previous)panes[1]=h.previous;else panes.splice(1,1);
+    active=0;
+    if(redraw){renderNav();renderPanes()}
+}
+function openHistoricalVersion(entry,past,objectId=null){
+    captureReading();
+    const previous=panes[1]?.history?panes[1].history.previous:panes[1]||null;
+    const selected=objectId||[...past.thesis,...past.blocks].find(n=>n.id===panes[0]?.id)?.id||past.thesis[0]?.id||past.blocks[0]?.id||null;
+    panes[1]={id:previous?.id||panes[0]?.id||null,edit:false,history:{entry,past,objectId,selected,previous}};
+    if(dialog.open)dialog.close();$('menu').hidden=true;mobileClose();active=1;renderNav();renderPanes();
+}
+function renderHistoricalPage(pane,p,pi){
+    const h=p.history,{entry,past}=h,toolbar=el('div','toolbar historyPageToolbar'),page=el('article','page historyPreview');
+    toolbar.append(btn('切换 首页',()=>{active=0;renderNav();renderPanes()},'mobileOnly'),el('span','historyReadOnly','历史版本 · 只读'),el('div','spacer'),btn('关闭历史',()=>closeHistoricalVersion()));
+    page.append(el('h2','historyPreviewHeading',entry.tag?.name||new Date(entry.time).toLocaleString()),el('p','small',entry.id.slice(0,12)+' · '+(entry.message||'')));
+    if(!h.objectId){
+        const scope=el('select','historySectionSelect');scope.setAttribute('aria-label','历史章节');
+        for(const [space,title] of [['thesis','博论树'],['blocks','知识块']]){
+            const group=el('optgroup');group.label=title;
+            for(const n of past[space]){const o=el('option','','　'.repeat(Math.max(0,Math.min(8,(n.level||1)-1)))+(n.title||'未命名'));o.value=n.id;group.append(o)}
+            scope.append(group)
+        }
+        scope.value=h.selected||'';scope.onchange=()=>{h.selected=scope.value;h.scrollTop=0;renderPanes()};page.append(scope);
+    }
+    const value=h.selected?historicalValue(past,h.selected):null;
+    if(value==null)page.append(el('p','muted','此版本中不存在该对象。'));
+    else if(typeof value==='string')historicalBody(value,page);
+    else if(typeof value.body==='string'){page.append(el('h3','',value.title||'未命名'));historicalBody(value.body,page)}
+    page.append(el('p','small muted','历史文本为只读；外部图片仍使用当前登记的资源。'));
+    pane.append(toolbar,page);paneBox.append(pane);pane.scrollTop=h.scrollTop||0;
+    pane.addEventListener('scroll',()=>{h.scrollTop=pane.scrollTop},{passive:true});
+}
 async function restoreHistory(entry,objectId){
     if(!requireEditMode()||!confirm('恢复此'+(objectId?'对象':'文档')+'版本？当前版本仍会保留在历史中。'))return;
     if(!await flushDocument())return;
@@ -469,7 +535,7 @@ async function showHistory(objectId=null){
             if(!valid()||token!==viewSequence)return;
             const old=historyText(historicalValue(past,objectId)),now=historyText(historicalValue(db,objectId));
             detail.replaceChildren(el('h3','',entry.tag?.name||clock(entry.time)),el('p','small','历史版本 → 当前版本'));
-            const tools=el('div','historyControls');tools.append(btn('复制历史内容',()=>copy(old)),btn('恢复版本',()=>restoreHistory(entry,objectId)));detail.append(tools);
+            const tools=el('div','historyControls');tools.append(btn('查看历史版本',()=>openHistoricalVersion(entry,past,objectId)),btn('复制历史内容',()=>copy(old)),btn('恢复版本',()=>restoreHistory(entry,objectId)));detail.append(tools);
             const pre=el('pre','historyDiff');
             let length=0;const diff=Diff.diffLines(old,now,{timeout:300});
             if(!diff){pre.textContent='差异较大，请使用 CLI diff 查看完整内容。'}
@@ -484,7 +550,12 @@ async function showHistory(objectId=null){
     function row(entry){
         const r=el('div','historyRow'),name=el('span','historyName',entry.tag?.name||entry.message||'自动保存'),meta=el('span','small',clock(entry.time)+' · '+entry.id.slice(0,8));r.dataset.commit=entry.id;
         const title=el('div','historyTitle');title.append(name,meta);r.append(title);
-        title.onclick=()=>preview(entry);
+        async function viewVersion(){
+            const token=++viewSequence;
+            try{const past=await api(historyURL('/api/history/item',{id:entry.id}));if(valid()&&token===viewSequence)openHistoricalVersion(entry,past,objectId)}
+            catch(e){if(valid())showToast(e.message)}
+        }
+        title.onclick=viewVersion;
         async function setName(value,clear=false){
             try{const result=await api('/api/history/tag',{id:entry.id,name:value,clear});entry.tag=result.tag;draw()}
             catch(e){showToast(e.message)}
@@ -495,7 +566,7 @@ async function showHistory(objectId=null){
             input.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();const value=input.value.trim();if(value)setName(value);else showToast('请输入版本名称')}else if(e.key==='Escape'){e.preventDefault();input.replaceWith(name)}};
             input.onblur=()=>{if(input.isConnected)input.replaceWith(name)};
         }
-        const menu=()=>[['查看差异',()=>preview(entry)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
+        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
         r.addEventListener('contextmenu',e=>{if(e.target.matches('input'))return;e.preventDefault();e.stopPropagation();menuAt(e,menu())});
         r.append(btn('⋯',e=>menuAt(e,menu()),'historyMore'));if(entry.tag)r.classList.add('named');return r;
     }
@@ -583,6 +654,7 @@ async function load(force=false){
 }
 function mobileClose(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
 function setView(v){
+    if(panes[active]?.history)closeHistoricalVersion(false);
     captureReading();
     view=v;$('treeTab').classList.toggle('active',v==='thesis');$('blockTab').classList.toggle('active',v==='blocks');search='';$('search').value='';
     const p=panes[active];
@@ -635,11 +707,12 @@ let floatingToolsEnabled=(()=>{try{const stored=localStorage.getItem(FLOATING_TO
 // A fresh mobile page opens for reading. Editing always requires an explicit switch.
 let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
-const readOnlyActions=new Set(['复制','复制交叉引用','复制知识块','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','查看关联网','查看原图','打开知识块','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看差异','设置版本名称','清除版本名称']);
+const readOnlyActions=new Set(['复制','复制交叉引用','复制知识块','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','查看关联网','查看原图','打开知识块','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看历史版本','查看差异','设置版本名称','清除版本名称']);
 function modeMenuItems(items){
     return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
 }
 function requireEditMode(){
+    if(!dialog.open&&panes[active]?.history){showToast('历史版本只读，请切换到当前文档');return false}
     if(editingEnabled)return true;
     showToast('当前为查看模式，请先切换到编辑模式');return false
 }
@@ -776,6 +849,7 @@ function rememberToolbarTarget(e){
     if(e.target.closest('.pane,.navrow,#dialog')){toolbarTarget=e.target;toolbarPoint={x:e.clientX,y:e.clientY}}
 }
 function toolbarContext(){
+    if(!dialog.open&&panes[active]?.history)return null;
     const scope=dialog.open?dialog:paneBox.children[active];
     if(!scope)return null;
     const usable=t=>t?.isConnected&&scope.contains(t)&&t.getClientRects().length;
@@ -809,6 +883,7 @@ function toolbarAction(label){
     else showToast(['剪切','复制'].includes(label)?'请先选中文本或对象':'请先定位正文或对象');
 }
 function toolbarUndo(redo){
+    if(!dialog.open&&panes[active]?.history)return;
     if(!requireEditMode())return;
     const root=dialog.open&&dialog.querySelector('.visualDocument');
     if(root?._draftHistory)root._draftHistory(redo);
@@ -819,6 +894,10 @@ function positionFloatingTools(){
     const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,ox=v?.offsetLeft||0,oy=v?.offsetTop||0;
     bar.style.maxWidth=Math.max(0,w-16)+'px';
     let x=ox+(w-bar.offsetWidth)/2,y=oy+h-bar.offsetHeight-12;
+    if(matchMedia('(pointer: coarse), (max-width: 760px)').matches){
+        bar.style.left=Math.max(ox+8,Math.min(x,ox+w-bar.offsetWidth-8))+'px';
+        bar.style.top=Math.max(oy+8,y)+'px';positionToolHint();return
+    }
     const scope=dialog.open?dialog:paneBox.children[active],s=getSelection(),r=s?.rangeCount?s.getRangeAt(0):null;
     const a=r&&(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
     const selected=scope?.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
@@ -845,6 +924,7 @@ function scheduleToolbarUpdate(){
         const items=currentToolbarItems(true);
         for(const b of bar.querySelectorAll('[data-tool]')){
             const label=b.dataset.tool;
+            if(!dialog.open&&panes[active]?.history){b.setAttribute('aria-disabled','true');continue}
             if(label===MODE_TOOL){b.setAttribute('aria-disabled','false');continue}
             if(!editingEnabled&&!readOnlyActions.has(label)){b.setAttribute('aria-disabled','true');continue}
             if(label==='撤销'||label==='重做'){
@@ -940,7 +1020,7 @@ function freeNoteLocation(e){
     return {id:'place-'+uid(),pageId,x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.round(e.clientY-r.top)),floatOffset:{x:14,y:8}}
 }
 function freeNoteAnchor(placement,pane=null){
-    const pages=[...paneBox.querySelectorAll('.pane > .page')].filter(p=>p.parentElement._readingPane?.id===placement.pageId&&p.getClientRects().length);
+    const pages=[...paneBox.querySelectorAll('.pane:not(.historicalPane) > .page')].filter(p=>p.parentElement._readingPane?.id===placement.pageId&&p.getClientRects().length);
     const page=pages.find(p=>p.parentElement===pane)||pages[0];
     if(!page)return null;
     const r=page.getBoundingClientRect(),x=r.left+Math.min(Math.max(0,r.width-18),Math.max(0,r.width*placement.x)),y=r.top+Math.min(Math.max(0,r.height-18),Math.max(0,placement.y));
@@ -989,7 +1069,15 @@ function simpleContextMenu(e,explicit){
     const anchor=doc?._annotationAnchor?.(e.clientY);
     const attach=objectBinding?(id=>bindNoteToObject(id,objectBinding)):owner&&!draft? (id=>{
         if(id===owner.id)return;
-        if(binding){if(!binding.doc._insertBoundAnnotation(id,binding))showToast('原文字位置已变化，知识块已保留但未绑定');return}
+        if(binding){
+            if(!binding.doc._insertBoundAnnotation(id,binding)){showToast('原文字位置已变化，知识块已保留但未绑定');return}
+            const note=find(id);
+            if(note&&binding.mode==='selection'&&binding.quote){
+                const bindings=note.textBindings||[];
+                if(!bindings.some(b=>b.owner===binding.owner.id&&b.quote===binding.quote)){note.textBindings=[...bindings,{owner:binding.owner.id,quote:binding.quote}];change(false)}
+            }
+            return
+        }
         if(freePlacement){placeExistingFreeNote(id,freePlacement);return}
         if(doc?._owner===owner.id&&doc._insertAnnotation&&doc.isConnected)doc._insertAnnotation(id,anchor);
         else{checkpoint();owner.body=owner.body.trimEnd()+'\n\n[[embed:'+id+']]\n';change(true)}
@@ -1443,6 +1531,7 @@ function renderPanes(){
     paneBox.replaceChildren();
     panes.forEach((p,pi)=>{
         const pane=el('section','pane'+(pi===active?' activepane':''));pane._readingPane=p;pane._readingId=p.id;pane.addEventListener('scroll',()=>{capturePane(pane);rememberPosition()},{passive:true});pane.addEventListener('pointerdown',()=>{if(active!==pi){active=pi;for(let i=0;i<paneBox.children.length;i++)paneBox.children[i].classList.toggle('activepane',i===pi);renderNav()}});
+        if(p.history){pane.classList.add('historicalPane');renderHistoricalPage(pane,p,pi);return}
         const toolbar=el('div','toolbar');const page=el('article','page');
         if(panes.length>1)toolbar.append(btn('切换 '+(pi===0?'右页':'左页'),()=>{active=pi===0?1:0;renderNav();renderPanes()},'mobileOnly'));
         const n=find(p.id);
@@ -1469,7 +1558,7 @@ function renderPanes(){
 $('treeTab').onclick=()=>setView('thesis');$('blockTab').onclick=()=>setView('blocks');
 $('drawer').onclick=()=>{$('sidebar').classList.toggle('open');$('overlay').classList.toggle('show')};$('overlay').onclick=mobileClose;
 $('search').oninput=e=>{search=e.target.value;renderNav()};$('newNode').onclick=()=>newNode(view);
-$('dual').onclick=()=>{if(panes.length===1){panes.push({id:panes[0].id,edit:false,thesisReading:thesisPosition(panes[0].thesisReading)});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
+$('dual').onclick=()=>{if(panes[1]?.history){closeHistoricalVersion();return}if(panes.length===1){panes.push({id:panes[0].id,edit:false,thesisReading:thesisPosition(panes[0].thesisReading)});active=1}else{panes=[panes[active]];active=0}renderPanes();renderNav()};
 $('refresh').onclick=()=>{if(dialog._commitNote)closeWorkbenchDialog();if(conflict){showSyncConflict();return}if(workspaceChanged||!db){load();return}syncNow(true)};$('closeDialog').onclick=()=>closeWorkbenchDialog();
 $('saveVersion').onclick=markVersion;$('historyButton').onclick=()=>showHistory();
 $('shortcutSettings').onclick=shortcutSettings;

@@ -39,6 +39,10 @@ jobs:
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --sync-only
       - name: History UI regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --history-only
+      - name: Selected text annotation regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-highlight-only
+      - name: Mobile reading mode and dock regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --view-mode-only
   windows-cli:
     runs-on: windows-latest
     timeout-minutes: 15

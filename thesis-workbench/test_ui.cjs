@@ -335,6 +335,18 @@ async function run(){
             await row.click({button:'right'});await menu(p,'设置版本名称').click();
             const rename=p.getByRole('textbox',{name:'版本名称'});await rename.fill('Renamed');await rename.press('Enter');
             await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
+            const liveBody=await p.evaluate(()=>find('demo-start').body);
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).locator('.historyTitle').click();
+            await p.locator('#panes > .historicalPane').waitFor();
+            assert.equal(await p.locator('#panes > .pane').count(),2);
+            assert((await p.locator('.historyPreview').innerText()).includes('Historical body.'));
+            assert.equal(await p.locator('.historyPreview [contenteditable=true],.historyPreview math-field').count(),0);
+            assert.equal(await p.evaluate(()=>find('demo-start').body),liveBody);
+            assert.equal(await p.evaluate(()=>positionSnapshot().panes.length),1);
+            await p.getByRole('button',{name:'关闭历史',exact:true}).click();
+            assert.equal(await p.locator('#panes > .pane').count(),1);
+            await p.locator('#historyButton').click();
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
             await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'查看差异').click();
             await p.locator('.historyDiff').waitFor();assert((await p.locator('.historyDiff').innerText()).includes('Historical body.'));
             await p.locator('.historyDetail').getByRole('button',{name:'恢复版本',exact:true}).click();
@@ -342,8 +354,49 @@ async function run(){
             assert.equal(shared.restoreCalls,1);assert.deepEqual(errors,[]);await context.close();
             const mobile=await fixture(browser,true,shared);await mobile.p.locator('#historyButton').tap();
             await mobile.p.locator('.historyRow.named').first().waitFor();assert(await mobile.p.locator('#saveVersion').isVisible());
+            await mobile.p.locator('.historyRow').filter({hasText:'Renamed'}).locator('.historyTitle').tap();
+            await mobile.p.locator('.historicalPane.activepane').waitFor();
+            assert(await mobile.p.locator('.historyPreview').isVisible());
+            await mobile.p.locator('.historicalPane').getByRole('button',{name:'切换 首页',exact:true}).tap();
+            assert(await mobile.p.locator('#panes > .pane').first().isVisible());
+            await mobile.p.locator('#dual').tap();
+            assert.equal(await mobile.p.locator('#panes > .pane').count(),1);
             assert.deepEqual(mobile.errors,[]);await mobile.context.close();
             console.log('PASS: direct save tag, grouping, inline rename, diff, restore, mobile history');return
+        }
+        if(process.argv.includes('--annotation-highlight-only')){
+            for(const isMobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,isMobile);
+                if(isMobile)await p.locator('#editModeToggle').tap();
+                await p.evaluate(()=>select('demo-start'));
+                const area=p.locator('.pane .part-text .richText').first();
+                const original=await p.evaluate(()=>find('demo-start').body);
+                const selectQuote=()=>area.evaluate(a=>{
+                    a.focus();const t=a.querySelector('p').firstChild,r=document.createRange();
+                    r.setStart(t,0);r.setEnd(t,9);getSelection().removeAllRanges();getSelection().addRange(r);
+                    const b=r.getBoundingClientRect(),e=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:b.left+2,clientY:b.top+2});e.useCurrentSelection=true;a.dispatchEvent(e);return r.toString();
+                });
+                const quote=await selectQuote();
+                assert(quote.length);
+                await menu(p,'插入批注/知识块').click();
+                await p.locator('#dialog .visualPickList button').filter({hasText:'Independent note'}).click();
+                await p.waitForFunction(quote=>[...(CSS.highlights.get('paper-annotation')||[])].some(r=>r.toString()===quote),quote);
+                assert(await p.evaluate(()=>find('demo-free').textBindings.some(b=>b.owner==='demo-start')));
+                assert((await p.evaluate(()=>find('demo-start').body)).includes('[[embed:demo-free]]'));
+                await p.evaluate(()=>renderPanes());
+                await p.waitForFunction(quote=>[...(CSS.highlights.get('paper-annotation')||[])].some(r=>r.toString()===quote),quote);
+                await p.evaluate(()=>undo(false));
+                await p.waitForFunction(original=>find('demo-start').body===original,original);
+                await p.waitForFunction(()=>!CSS.highlights.get('paper-annotation')?.size);
+                await selectQuote();
+                await menu(p,'新建批注/知识块').click();
+                await p.locator('#dialog .richText').first().fill('New selected-text note');
+                await p.evaluate(()=>closeWorkbenchDialog());
+                await p.waitForFunction(quote=>[...(CSS.highlights.get('paper-annotation')||[])].some(r=>r.toString()===quote),quote);
+                assert(await p.evaluate(quote=>db.blocks.some(n=>n.annotation?.owner==='demo-start'&&n.annotation.quote===quote),quote));
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: selected text annotation highlights, rerender and undo on desktop/mobile');return
         }
         if(process.argv.includes('--sync-only')){
             const shared={workspace:data.state.workspace,state:structuredClone(data.state),reading:{},recent:[]};
@@ -493,9 +546,10 @@ async function run(){
         assert.equal(await q.locator('header').evaluate(e=>e.offsetHeight),originalHeight);
         assert.equal(await fullMobile.getAttribute('aria-pressed'),'true');
         const fullscreenTouch=await mobile.context.newCDPSession(q);
-        let swipeId=0;
         async function swipe(x,y,dx,dy){
-            const id=++swipeId;
+            // Reuse the single finger's CDP touch ID across completed gestures;
+            // changing IDs can deliver stale coordinates in Chromium emulation.
+            const id=0;
             await fullscreenTouch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y,id}]});
             for(let i=1;i<=5;i++){
                 await fullscreenTouch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+dx*i/5,y:y+dy*i/5,id}]});
@@ -590,6 +644,12 @@ async function run(){
         assert.equal(await q.evaluate(()=>document.activeElement?.isContentEditable),false);
         await q.waitForFunction(()=>Array.from(document.querySelectorAll('math-field')).every(f=>!f.readOnly&&f.mathVirtualKeyboardPolicy==='auto'));
         if(process.argv.includes('--view-mode-only')){
+            await q.evaluate(()=>{document.activeElement?.blur();getSelection().removeAllRanges();scheduleToolbarUpdate()});
+            await q.waitForFunction(()=>document.querySelector('#floatingTools').getBoundingClientRect().bottom>=innerHeight-25);
+            const dock=await tools.boundingBox();
+            await target.evaluate(a=>{a.focus();const r=document.createRange(),t=a.querySelector('p').firstChild;r.setStart(t,0);r.setEnd(t,9);getSelection().removeAllRanges();getSelection().addRange(r)});
+            await q.waitForTimeout(120);
+            assert(Math.abs((await tools.boundingBox()).y-dock.y)<3);
             await target.tap();
             assert(await target.evaluate(a=>a===document.activeElement&&a.isContentEditable));
             await mode.tap();
@@ -611,16 +671,15 @@ async function run(){
             a.focus();const r=document.createRange(),t=a.querySelector('p').firstChild;
             r.setStart(t,0);r.setEnd(t,9);getSelection().removeAllRanges();getSelection().addRange(r)
         });
-        await q.waitForFunction(y=>Math.abs(document.querySelector('#floatingTools').getBoundingClientRect().top-y)>30,dock.y);
+        await q.waitForFunction(y=>Math.abs(document.querySelector('#floatingTools').getBoundingClientRect().top-y)<3,dock.y);
         const selectionPosition=await tools.boundingBox();
         assert(selectionPosition.y>=0&&selectionPosition.y+selectionPosition.height<=844);
         const cdp=await mobile.context.newCDPSession(q);
         async function hold(locator,label){
-            // The floating toolbar follows the caret asynchronously. Wait for
-            // its layout to settle before sending raw touch coordinates.
+            // Wait for the fixed mobile toolbar layout before raw touch input.
             await locator.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
             const rect=await locator.boundingBox(),x=Math.round(rect.x+rect.width/2),y=Math.round(rect.y+rect.height/2);
-            await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y,id:0}]});
             await q.locator('#toolHint').waitFor({state:'visible'});
             assert.equal(await q.locator('#toolHint').innerText(),label);
             await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
@@ -646,7 +705,7 @@ async function run(){
         assert.equal(await tool('更多操作').count(),0);
         const rect=await target.boundingBox();
         const x=Math.round(rect.x+20),y=Math.round(rect.y+10);
-        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y,id:0}]});
         await q.locator('#menu').waitFor({state:'visible'});
         await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
         assert(await menu(q,'新建批注/知识块').isVisible());
