@@ -8,6 +8,27 @@ function visualParts(raw){
     prose(raw.slice(end));
     return list;
 }
+// Old notes can contain bare Markdown images. Give standalone image lines the
+// same internal figure representation as pasted files, without rewriting a
+// note merely by opening it. Do not reinterpret Markdown inside code or links.
+function noteParts(raw){
+    const parts=[];
+    for(const p of visualParts(raw)){
+        if(p.kind!=='text'){parts.push(p);continue}
+        const tokens=marked.lexer(p.raw);
+        if(tokens.length!==1||tokens[0].type!=='paragraph'||!tokens[0].tokens?.some(t=>t.type==='image'&&figureImagePattern().test(t.raw))){parts.push(p);continue}
+        let pending='';
+        const flush=()=>{if(pending.trim())parts.push({kind:'text',raw:pending.trim()});pending=''};
+        for(const t of tokens[0].tokens||[]){
+            const m=t.type==='image'&&[...t.raw.matchAll(figureImagePattern())][0];
+            if(!m||m[0]!==t.raw){pending+=t.raw;continue}
+            flush();const id='fig-'+uid(),image=figureImageMarkup(m[1],m[2],m[3],'subfig-'+uid()),body='\n\n'+image;
+            parts.push({kind:'figure',id,flags:'',body,raw:':::figure '+id+'\n'+body+'\n:::'});
+        }
+        flush();
+    }
+    return parts;
+}
 function visualMath(tex,display,onInput){
     const f=document.createElement('math-field');f.className='visualMath'+(display?' displayMath':'');f.setAttribute('contenteditable','false');f.setAttribute('math-virtual-keyboard-policy','auto');
     f.setAttribute('aria-label','可编辑数学公式');f.value=tex;f._texOriginal=tex;f._texChanged=false;f.dataset.tex=tex;
@@ -153,10 +174,11 @@ function visualPick(onSelect){
     }}q.addEventListener('input',draw);draw();q.focus()
 }
 function visualDocument(raw,onUpdate,owner=null,pi=null){
-    let parts=visualParts(raw),focused=null,selection=null;
+    const internal=owner===null||spaceOf(owner)==='blocks',parseParts=internal?noteParts:visualParts;
+    let parts=parseParts(raw),focused=null,selection=null;
     if(!parts.length)parts=[{kind:'text',raw:''}];
     const root=el('div','visualDocument'),body=el('div','visualBody');
-    root.append(body);root._owner=owner;
+    root.append(body);root._owner=owner;root._internalObjects=internal;
     let selectedPart=parts[0],selectedObject=null;
     const value=()=>parts.map(p=>p.raw).filter(x=>x.trim()).join('\n\n')+'\n';
     let lastValue=value(),draftUndo=[],draftRedo=[];
@@ -168,7 +190,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function draftHistory(redo){
         if(!requireEditMode())return;
         const from=redo?draftRedo:draftUndo,to=redo?draftUndo:draftRedo;if(!from.length)return;
-        to.push(value());lastValue=from.pop();parts=visualParts(lastValue);if(!parts.length)parts=[{kind:'text',raw:''}];selectedPart=parts[0];selectedObject=null;draw();onUpdate(lastValue);root.focus({preventScroll:true})
+        to.push(value());lastValue=from.pop();parts=parseParts(lastValue);if(!parts.length)parts=[{kind:'text',raw:''}];selectedPart=parts[0];selectedObject=null;draw();onUpdate(lastValue);root.focus({preventScroll:true})
     }
     root._draftHistory=draftHistory;
     root._canDraftHistory=redo=>!!(redo?draftRedo:draftUndo).length;
@@ -286,7 +308,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!editingEnabled||!root.isConnected)return;
         const pieces=selectedPieces(r,true);if(!pieces.length)return;
         const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
-        const replacement=text.trim()?visualParts(remapCopiedObjects(text,owner)):[];
+        const replacement=text.trim()?parseParts(remapCopiedObjects(text,owner)):[];
         if(first.before?.trim()){
             if(replacement[0]?.kind==='text')replacement[0].raw=first.before+replacement[0].raw;
             else replacement.unshift({kind:'text',raw:first.before})
@@ -467,7 +489,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function insertPaste(text,after){
         const ids=new Set(parts.flatMap(p=>[p.id,...(p.kind==='figure'?[...p.raw.matchAll(figureImagePattern())].map((m,i)=>figureImageId(m[3],p.id,i)):[])].filter(Boolean)));
         const collision=[...text.matchAll(objectPattern())].some(m=>ids.has(m[2])||(m[1]==='figure'&&[...m[4].matchAll(figureImagePattern())].some((img,i)=>ids.has(figureImageId(img[3],m[2],i)))));
-        const p=visualParts(remapCopiedObjects(text,owner,collision));if(!p.length)return;
+        const p=parseParts(remapCopiedObjects(text,owner,collision));if(!p.length)return;
         let i=parts.indexOf(after);if(after?.kind==='text'&&!after.raw.trim()){parts.splice(i,1,...p)}else parts.splice(i<0?parts.length:i+1,0,...p);selectedPart=p.at(-1);draw();flush()
     }
     const imageMarkup=({url,name})=>figureImageMarkup(name.replace(/[\[\]\r\n]/g,''),url,'','subfig-'+uid());
@@ -476,7 +498,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!match)return false;
         const m=[...match[1].matchAll(figureImagePattern())][0];if(!m)return false;
         let id=figureImageId(m[3],'clipboard',0);
-        if(targets.has(id)||parts.some(p=>p.raw.includes('wb-id:'+id)))id='subfig-'+uid();
+        if(occupiedObjectIds().has(id)||parts.some(p=>p.raw.includes('wb-id:'+id)))id='subfig-'+uid();
         const markup=figureImageMarkup(m[1],m[2],m[3],id),card=[...body.children].find(c=>c._part===after);
         if(after?.kind==='figure'&&card?._appendImageMarkup)card._appendImageMarkup([markup]);
         else{const fig='fig-'+uid(),data=m[1]+'\n\n'+markup;add({kind:'figure',id:fig,flags:'',body:data,raw:':::figure '+fig+'\n'+data+'\n:::'},after)}
@@ -545,7 +567,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         area.addEventListener('paste',e=>{const text=e.clipboardData?.getData('text/plain')||'';
             if(pasteSubfigure(text,p)){e.preventDefault();e.stopImmediatePropagation();return}
             if(pasteImage(e,p))return;
-            if(/(^:::(equation|figure|table)\s|^\s*\[\[embed:[^\]\n]+\]\]\s*$)/m.test(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
+            if(/(^:::(equation|figure|table)\s|^\s*\[\[embed:[^\]\n]+\]\]\s*$)/m.test(text)||(internal&&figureImagePattern().test(text))){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
             if(/\[\[(ref|eqref|cite):[^\]\n]+\]\]/.test(text)&&!/\[\[embed:/.test(text)){e.preventDefault();e.stopImmediatePropagation();pasteInline(area,text);return}
             if(/(\[\[embed:|\$[^$\n]+\$)/m.test(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p)}
         },true)
@@ -565,7 +587,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             if(p.id||p.ref)card.dataset.object=p.id||p.ref;card.classList.add('part-'+p.kind);
             if(p.kind==='text')card.dataset.paragraphIndex=paragraphIndex++;
             head.append(handle,el('span','small partLabel',p.kind==='text'?'':title),el('div','spacer'));
-            if(p.id){const t=resolve(p.id);head.append(el('span','visualNum small',t?.number||''))}
+            if(p.id&&!internal){const t=resolve(p.id);head.append(el('span','visualNum small',t?.number||''))}
             const content=el('div','visualCardContent');
             const foldKey=p.id||p.ref?'object:'+owner+':'+(p.id||p.ref):null;
             const fold=btn('▾',()=>card._setFolded(!content.hidden),'partFold');fold.title='折叠／展开';
@@ -600,7 +622,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                     const records=[...imageSource.matchAll(figureImagePattern())];
                     [...imgs.querySelectorAll('.resizeImage')].forEach((wrap,i)=>{
                         const m=records[i];if(!m)return;
-                        const id=figureImageId(m[3],p.id,i);wrap.dataset.object=id;wrap.dataset.subfigure=id;wrap.title='子图 '+(resolve(id)?.number||subfigureLetter(i));
+                        const id=figureImageId(m[3],p.id,i);wrap.dataset.object=id;wrap.dataset.subfigure=id;wrap.title=internal?(m[1]||'图片'):'子图 '+(resolve(id)?.number||subfigureLetter(i));
                         wrap.addEventListener('contextmenu',()=>card._selectImage(wrap),true)
                     });
                     if(!imgs.querySelector('img'))imgs.append(btn('添加图片',()=>chooseImages(p),'emptyFigureAdd'));
@@ -785,7 +807,8 @@ function refreshObjectAnnotations(scope=document){
         const id=object.dataset.object||object.dataset.bindObject;
         const parent=object.matches('.visualCard')?object.querySelector(':scope > .visualCardHead'):object;
         if(!parent)continue;
-        const notes=db.blocks.flatMap(n=>objectNoteBindings(n).filter(b=>b.targetId===id).map(binding=>({n,binding})));
+        const privateObject=!object.matches('.editableHeading')&&object.closest('.visualDocument')?._internalObjects;
+        const notes=privateObject?[]:db.blocks.flatMap(n=>objectNoteBindings(n).filter(b=>b.targetId===id).map(binding=>({n,binding})));
         let group=parent.querySelector(':scope > .objectNoteMarkers');
         if(!notes.length){group?.remove();continue}
         if(!group){group=el('span','objectNoteMarkers');parent.append(group)}
