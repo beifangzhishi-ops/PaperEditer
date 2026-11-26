@@ -464,13 +464,6 @@ function historicalValue(doc,id){
     }
     return null;
 }
-async function showParagraphHistory(owner,index,raw){
-    if(!await flushDocument())return;
-    const texts=visualParts(find(owner)?.body||'').filter(p=>p.kind==='text');
-    if(raw!=null&&texts[index]?.raw!==raw){const matches=texts.map((p,i)=>p.raw===raw?i:-1).filter(i=>i>=0);index=matches.length===1?matches[0]:-1}
-    const id=db.paragraphs?.[owner]?.[index]?.id;
-    showHistory(id||owner);
-}
 function historyMarkdown(raw,host){
     if(!raw?.trim())return;
     const tokens=[];
@@ -850,7 +843,7 @@ let floatingToolsEnabled=(()=>{try{const stored=localStorage.getItem(FLOATING_TO
 // A fresh mobile page opens for reading. Editing always requires an explicit switch.
 let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
-const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','历史版本','查看历史版本','查看差异','复制版本 ID','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
+const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','查看历史版本','查看差异','复制版本 ID','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
 function modeMenuItems(items){
     return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
 }
@@ -1228,10 +1221,6 @@ function simpleContextMenu(e,explicit){
     if(texTarget(source)&&!draft&&spaceOf(owner?.id)!=='blocks')result.push(['复制交叉引用',()=>copy(refToken(source))]);
     const noteId=draft?dialog._noteId:(source?.kind==='node'&&spaceOf(source.id)==='blocks'?source.id:pane&&owner&&spaceOf(owner.id)==='blocks'?owner.id:null);
     if(noteId&&find(noteId))result.push(['删除批注',()=>deleteNode(find(noteId))]);
-    if(currentWorkspace?.history&&(source||owner)){
-        const card=e.target.closest('.visualCard[data-paragraph-index]');
-        result.push(['历史版本',()=>card&&!source?showParagraphHistory(owner.id,Number(card.dataset.paragraphIndex),card._part?.raw):showHistory(source?.actualId||source?.id||owner.id)]);
-    }
     return modeMenuItems(result);
 }
 function newAnnotation(binding,e){
@@ -1245,8 +1234,8 @@ function newAnnotation(binding,e){
     },{floating:true,x:e.clientX,y:e.clientY,annotation:true,binding,freePlacement,anchorRect:binding?.mode==='object'?binding.anchorRect:binding?()=>binding.area.isConnected?binding.range.getBoundingClientRect():null:freePlacement?()=>freeNoteAnchor(freePlacement):null});
 }
 function refToken(t){return '[['+(t.kind==='equation'?'eqref':'ref')+':'+(t.actualId||t.id)+']]'}
-function refMenu(t){return [...(texTarget(t)?[['复制交叉引用',()=>copy(refToken(t))]]:[]),['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(t.actualId||t.id)]]:[])]}
-function nodeMenu(n){return spaceOf(n.id)==='blocks'?[...annotationLocationMenu(n),['删除批注',()=>deleteNode(n)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(n.id)]]:[])]:treeNodeMenu(n)}
+function refMenu(t){return [...(texTarget(t)?[['复制交叉引用',()=>copy(refToken(t))]]:[]),['当前页定位',()=>jump(t.id)],['另一页打开',()=>jump(t.id,true)]]}
+function nodeMenu(n){return spaceOf(n.id)==='blocks'?[...annotationLocationMenu(n),['删除批注',()=>deleteNode(n)]]:treeNodeMenu(n)}
 function createEmptyThesis(parent=null,after=null){
     if(!requireEditMode())return;
     checkpoint();const id='sec-'+uid(),n={id,title:'',parent,level:1,number:'',file:'thesis/'+id+'.md',source:'',order:db.thesis.length,body:''};
@@ -1254,7 +1243,7 @@ function createEmptyThesis(parent=null,after=null){
     if(after){const sibling=find(after),last=descendants('thesis',after).at(-1)||sibling;list.splice(list.indexOf(last)+1,0,n)}else list.push(n);
     normalizeOrder('thesis');change(false);select(id);
 }
-function treeNodeMenu(n){return [['新建同级目录',()=>createEmptyThesis(n.parent||null,n.id)],['新建子目录',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)],...(currentWorkspace?.history?[['历史版本',()=>showHistory(n.id)]]:[])]}
+function treeNodeMenu(n){return [['新建同级目录',()=>createEmptyThesis(n.parent||null,n.id)],['新建子目录',()=>createEmptyThesis(n.id)],['删除',()=>deleteNode(n)]]}
 const TREE_NEST_DELAY=600;
 let treeDrop=null;
 function clearTreeDrop(){

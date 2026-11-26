@@ -682,6 +682,15 @@ async function run(){
             past.thesis[1].body='**Historical child**.';
             const shared={workspace,state:structuredClone(data.state),reading:{},recent:[],history:[a,b,c],versions:{[a.id]:data.state,[b.id]:past,[c.id]:past},allowRestore:true};
             const {p,context,errors}=await fixture(browser,false,shared);
+            const historyLabel='历史版本';
+            for(const selector of ['.pane .part-text .richText','.pane [data-object="demo-eq"] .partLabel','.pane [data-subfigure="demo-subfig"] img','#nav [data-node-id="demo-start"] .navlabel']){
+                await contextAt(p,p.locator(selector).first());
+                assert(!(await p.locator('#menu button').allTextContents()).includes(historyLabel),selector);
+            }
+            await p.evaluate(()=>{setView('blocks')});
+            await contextAt(p,p.locator('.annotationRow').first());
+            assert(!(await p.locator('#menu button').allTextContents()).includes(historyLabel));
+            await p.evaluate(()=>{setView('thesis');select('demo-start',0);$('menu').hidden=true});
             await p.locator('#saveVersion').click();
             await p.waitForFunction(()=>document.querySelector('#status').textContent==='已保存版本');
             assert.equal(shared.tagCalls,1);assert.equal(await p.locator('#dialog').isVisible(),false);
