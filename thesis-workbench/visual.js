@@ -596,6 +596,14 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     },true);
     root.addEventListener('keydown',e=>{
         if(e.isComposing||e.keyCode===229)return;
+        if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&e.key.toLowerCase()==='a'){
+            // Preserve local selection inside a formula or a native control.
+            if(e.composedPath().some(n=>n.matches?.('math-field,input,textarea,select')))return;
+            e.preventDefault();e.stopImmediatePropagation();
+            const list=cards();
+            if(list.length)setRange(edge(list[0],false),edge(list.at(-1),true));
+            return
+        }
         const r=activeMixed();
         if(r&&(e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&['c','x','v'].includes(e.key.toLowerCase())){
             e.preventDefault();e.stopImmediatePropagation();
