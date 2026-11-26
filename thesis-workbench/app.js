@@ -1603,15 +1603,15 @@ $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
     if(dialog._commitNote)closeWorkbenchDialog();
     const d=showDialog('打开文件');
-    d.append(el('p','small','输入服务器上的 .json 文件绝对路径，打开已有文件，或在指定位置新建包含各类对象示例的文件（不覆盖已有文件）。支持本地磁盘和 UNC 网络共享路径。'));
+    d.append(el('p','small','输入服务器上的 .json 文件绝对路径打开或新建文件。新建时可留空，自动在项目的私有 workspaces 目录创建包含各类对象示例的文件，不覆盖已有文件。支持本地磁盘和 UNC 网络共享路径。'));
     const form=el('form','workspacePathForm'),input=el('input','workspacePath');input.type='text';input.required=true;input.autocomplete='off';input.autocapitalize='off';input.spellcheck=false;input.placeholder='C:\\项目\\文件.json 或 \\\\服务器\\共享\\文件.json';input.setAttribute('aria-label','服务器文件路径');
     const submit=el('button','','打开');submit.type='submit';form.append(input,submit);d.append(form);
-    const create=btn('新建文件',()=>{if(input.reportValidity())openPath(input.value,'new')});
+    const create=btn('新建文件',()=>openPath(input.value,'new'));
     const actions=el('div','workspaceFileActions');actions.append(create);d.append(actions);
     const message=el('p','small');d.append(message,el('h3','','最近打开'));
     const list=el('div','visualPickList');d.append(list);
     async function openPath(path,mode='open'){
-        if(!path.trim()||submit.disabled)return;
+        if((mode!=='new'&&!path.trim())||submit.disabled)return;
         input.disabled=submit.disabled=create.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;message.textContent=mode==='new'?'正在新建…':'正在打开…';
         try{
             clearTimeout(timer);

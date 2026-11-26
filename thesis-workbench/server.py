@@ -6,6 +6,7 @@ from workspace import Package
 from document import Document, content, object_value, create_document, EXAMPLE_IMAGE, validate_annotation_locations
 from merge import merge_content
 ROOT=Path(__file__).resolve().parent
+DEFAULT_WORKSPACE_DIR=ROOT.parent/'workspaces'
 DATA=Path(os.environ.get('PAPEREDITER_DATA_DIR',str(ROOT/'data'))).expanduser().resolve()
 PACKAGE=None
 CONFIG=ROOT/'workspace.local.json'
@@ -99,7 +100,12 @@ def example_content():
     initial['blocks'].append(dict(id='demo-object',title='对象批注示例',parent=None,level=1,number='',file='blocks/demo-object.md',source='',order=3,body='这是公式对象上的批注。',objectBindings=[{'targetId':'demo-eq','floatOffset':{'x':14,'y':8}}]))
     return initial
 def create_workspace(filename):
-    return create_document(workspace_path(filename),validate_document_state,example_content())
+    if isinstance(filename,str) and not filename.strip():
+        DEFAULT_WORKSPACE_DIR.mkdir(parents=True,exist_ok=True)
+        path=DEFAULT_WORKSPACE_DIR/('Untitled-'+uuid.uuid4().hex+'.json')
+    else:
+        path=workspace_path(filename)
+    return create_document(path,validate_document_state,example_content())
 def new_workspace(filename):
     doc=create_workspace(filename)
     return open_workspace(str(doc.filename))

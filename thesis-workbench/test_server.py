@@ -81,6 +81,28 @@ class WorkspaceTests(unittest.TestCase):
             server.open_workspace(str(new))
             self.assertEqual(len(server.workspace_catalog()['files']),1)
 
+    def test_default_workspace_creation(self):
+        root=Path(self.tmp.name)
+        directory=root/'workspaces'
+        with patch.object(server,'DEFAULT_WORKSPACE_DIR',directory), patch.object(server,'CONFIG',root/'settings.json'), patch.object(server,'PACKAGE',None), patch.object(server,'WORKSPACE_ERROR',None):
+            first=server.new_workspace('')
+            original=Path(first['path']).read_bytes()
+            second=server.new_workspace('   ')
+            for info in (first,second):
+                path=Path(info['path'])
+                self.assertEqual(path.parent,directory)
+                self.assertEqual(path.suffix,'.json')
+                self.assertTrue(path.with_name(path.name+'.history.git').is_dir())
+            self.assertNotEqual(first['id'],second['id'])
+            self.assertNotEqual(first['path'],second['path'])
+            self.assertEqual(Path(first['path']).read_bytes(),original)
+            self.assertEqual(server.workspace_info()['id'],second['id'])
+            self.assertEqual(len(server.state()['thesis']),2)
+            self.assertEqual(server.PACKAGE.history_list()['total'],1)
+            self.assertEqual([f['path'] for f in server.workspace_catalog()['files']],[second['path'],first['path']])
+            with self.assertRaises(ValueError):server.open_workspace('')
+            self.assertEqual(server.workspace_info(),second)
+
     def test_initialization_and_save(self):
         server.initialize_data()
         state = server.state()
