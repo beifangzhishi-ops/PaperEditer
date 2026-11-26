@@ -80,6 +80,38 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(server.state()["thesis"][0]["body"], "Example edit.\n")
         self.assertEqual(server.save(state)[0], 409)
 
+    def test_shared_shortcuts_http(self):
+        config=Path(self.tmp.name)/'settings.json'
+        with patch.object(server,'CONFIG',config), patch.object(server,'WORKSPACE_ERROR','No document open'):
+            server.settings_save({'recent':['synthetic.json'],'reading':{'demo':{'view':'thesis'}}})
+            with server.WorkbenchServer(('127.0.0.1',0),server.Handler) as http:
+                thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+                try:
+                    url=f'http://127.0.0.1:{http.server_port}/api/shortcuts'
+                    def request(payload=None,workspace='a'):
+                        req=urllib.request.Request(url,data=None if payload is None else json.dumps(payload).encode(),headers={'Content-Type':'application/json','X-PaperEditer-Workspace':workspace})
+                        try:
+                            with urllib.request.urlopen(req,timeout=5) as r:return r.status,json.load(r)
+                        except urllib.error.HTTPError as r:return r.code,json.load(r)
+                    empty={'revision':None,'shortcuts':None}
+                    self.assertEqual(request(),(200,empty))
+                    values=dict.fromkeys(server.SHORTCUT_TOOLS)
+                    values['复制']={'ctrl':True,'alt':True,'shift':False,'key':'b'}
+                    code,first=request({'revision':None,'shortcuts':values});self.assertEqual(code,200)
+                    self.assertEqual(request(workspace='b'),(200,first))
+                    self.assertEqual(server.shortcut_settings(server.settings_load()),first)
+                    self.assertEqual(request({'revision':None,'shortcuts':values},'b')[0],409)
+                    for invalid in ({**values,'剪切':values['复制']},{**values,'复制':{'ctrl':True,'alt':False,'shift':False,'key':'s'}},{**values,'复制':{'ctrl':1,'alt':True,'shift':False,'key':'b'}},{}):
+                        self.assertEqual(request({'revision':first['revision'],'shortcuts':invalid})[0],400)
+                    self.assertEqual(request(),(200,first))
+                    code,second=request({'revision':first['revision'],'shortcuts':dict.fromkeys(values)},'b')
+                    self.assertEqual(code,200);self.assertNotEqual(second['revision'],first['revision'])
+                    self.assertEqual(request(),(200,second))
+                    self.assertEqual(server.settings_load()['recent'],['synthetic.json'])
+                    self.assertEqual(server.settings_load()['reading'],{'demo':{'view':'thesis'}})
+                finally:
+                    http.shutdown();thread.join(timeout=5)
+
     def test_conditional_state_detects_external_edits(self):
         server.initialize_data()
         with patch.object(server,'CONFIG',Path(self.tmp.name)/'settings.json'), patch.object(server,'PACKAGE',None), patch.object(server,'WORKSPACE_ERROR',None):

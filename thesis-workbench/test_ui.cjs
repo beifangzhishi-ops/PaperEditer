@@ -8,16 +8,27 @@ const data=JSON.parse(execFileSync('python',['-c',
     "import server,json,base64;from workspace import Package;server.PACKAGE=Package('example.json');s=server.state();s.update(workspace={'id':'test','name':'example.json'},originalLabels={},importReport={});print(json.dumps({'state':s,'image':base64.b64encode(server.PACKAGE.read('assets/demo.png')).decode()}))"
 ],{cwd:__dirname,encoding:'utf8'}));
 const origin='http://127.0.0.1:18761';
-async function fixture(browser,mobile=false,shared=null){
+async function fixture(browser,mobile=false,shared=null,legacy=null){
     const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1280,height:900},hasTouch:mobile,isMobile:mobile,permissions:['clipboard-read','clipboard-write']});
     const p=await context.newPage(),errors=[];
     let ownState=structuredClone(data.state),rev=0;
+    const shortcutStore=shared||{};
+    if(legacy)await context.addInitScript(values=>{if(!localStorage.getItem('wb:tool-shortcuts:v2'))localStorage.setItem('wb:tool-shortcuts:v2',JSON.stringify(values))},legacy);
     function currentState(){return shared?{...(shared.state||data.state),workspace:shared.workspace,readingPosition:shared.reading[shared.workspace.id]||null}:ownState}
     p.setDefaultTimeout(12000);
     p.on('pageerror',e=>errors.push(e.message));
     p.on('dialog',d=>{if(d.type()!=='beforeunload'&&!(shared?.allowRestore&&d.message().startsWith('恢复此')))errors.push('Unexpected dialog: '+d.message());d.accept()});
     await p.route(origin+'/**',async r=>{
         const u=new URL(r.request().url()),name=u.pathname;
+        if(name==='/api/shortcuts'){
+            const current=shortcutStore.shortcuts||{revision:null,shortcuts:null};
+            if(r.request().method()==='GET')return r.fulfill({json:current});
+            if(shortcutStore.failShortcutSave)return r.fulfill({status:500,json:{error:'Test save failure'}});
+            const payload=r.request().postDataJSON();
+            if(payload.revision!==current.revision)return r.fulfill({status:409,json:{error:'其他设备已修改快捷键，请重新打开设置后再修改。'}});
+            shortcutStore.shortcuts={revision:String(Number(current.revision||0)+1),shortcuts:payload.shortcuts};
+            return r.fulfill({json:shortcutStore.shortcuts});
+        }
         if(name==='/api/state'){
             const state=currentState();if(u.searchParams.get('since')===state.revision&&u.searchParams.get('workspace')===state.workspace.id)return r.fulfill({json:{unchanged:true,revision:state.revision,workspace:state.workspace}});
             return r.fulfill({json:state});
@@ -331,6 +342,36 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--shortcuts-only')||process.argv.length===2){
+            const shared={workspace:data.state.workspace,reading:{},recent:[]};
+            const desktop=await fixture(browser,false,shared,{'复制':{ctrl:true,alt:true,shift:false,key:'b'}});
+            const mobile=await fixture(browser,true,shared,{'复制':{ctrl:true,alt:true,shift:false,key:'d'}});
+            const a=desktop.p,b=mobile.p;
+            const open=p=>p.locator('#shortcutSettings').click();
+            const copy=p=>p.getByRole('textbox',{name:'复制快捷键',exact:true});
+            const save=p=>p.locator('#dialog').getByRole('button',{name:'保存',exact:true}).click();
+            assert.equal(await b.evaluate(()=>shortcutLabel(toolShortcuts['复制'])),'Ctrl+Alt+B');
+            await open(a);await open(b);
+            await copy(a).press('Control+Alt+G');await save(a);await a.waitForFunction(()=>!dialog.open);
+            await b.waitForFunction(()=>toolShortcuts['复制'].key==='g');
+            await copy(b).press('Control+Alt+H');await save(b);
+            await b.getByText(/保存失败：其他设备已修改快捷键/).waitFor();
+            assert.equal(shared.shortcuts.shortcuts['复制'].key,'g');
+            await b.evaluate(()=>dialog.close());await open(b);
+            assert.equal(await copy(b).inputValue(),'Ctrl+Alt+G');
+            await b.locator('.shortcutRow').filter({has:copy(b)}).getByRole('button',{name:'清除',exact:true}).click();
+            shared.failShortcutSave=true;await save(b);await b.getByText(/Test save failure/).waitFor();
+            assert.equal(shared.shortcuts.shortcuts['复制'].key,'g');
+            shared.failShortcutSave=false;await save(b);await b.waitForFunction(()=>!dialog.open);
+            await a.waitForFunction(()=>toolShortcuts['复制']===null);
+            await a.reload();await a.waitForFunction(()=>db?.thesis?.length===2);assert.equal(await a.evaluate(()=>toolShortcuts['复制']),null);
+            await open(a);await a.getByRole('button',{name:'恢复默认',exact:true}).click();await save(a);await a.waitForFunction(()=>!dialog.open);
+            await b.waitForFunction(()=>shortcutLabel(toolShortcuts['复制'])==='Ctrl+C');
+            assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);
+            await desktop.context.close();await mobile.context.close();
+            console.log('PASS: shared shortcuts migration, desktop/mobile live sync, stale save conflict, failed save, clearing, reload and reset');
+            if(process.argv.includes('--shortcuts-only'))return;
+        }
         if(process.argv.includes('--history-only')){
             const workspace={...data.state.workspace,history:true},a={id:'a'.repeat(40),time:'2026-11-26T10:00:00Z',source:'editor',message:'Automatic save',tag:null},b={id:'b'.repeat(40),time:'2026-11-26T09:58:00Z',source:'editor',message:'Automatic save',tag:null},c={id:'c'.repeat(40),time:'2026-11-26T09:55:00Z',source:'agent',message:'Agent edit',tag:{id:'v',name:'Named'}};
             const past=structuredClone(data.state);past.thesis[0].body='Historical body.';

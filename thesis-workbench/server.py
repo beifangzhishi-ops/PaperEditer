@@ -16,6 +16,26 @@ def settings_load():
 def settings_save(settings):
     settings.pop('roots',None)
     dump(CONFIG,settings)
+SHORTCUT_TOOLS={'切换查看/编辑模式','剪切','复制','粘贴','新建批注/知识块','插入批注/知识块','复制交叉引用','撤销','重做','显示/隐藏工具栏'}
+def shortcut_settings(settings):
+    values=settings.get('toolShortcuts')
+    return {'shortcuts':values,'revision':None if values is None else sha(json.dumps(values,sort_keys=True))}
+def save_shortcuts(payload):
+    if not isinstance(payload,dict) or set(payload)!={'revision','shortcuts'}:raise ValueError('Invalid shortcut settings')
+    values=payload['shortcuts']
+    if not isinstance(values,dict) or set(values)!=SHORTCUT_TOOLS:raise ValueError('Invalid shortcut tools')
+    seen=set()
+    for value in values.values():
+        if value is None:continue
+        if not isinstance(value,dict) or set(value)!={'ctrl','alt','shift','key'} or any(type(value[k]) is not bool for k in ('ctrl','alt','shift')) or not isinstance(value['key'],str) or not re.fullmatch(r'[a-z0-9]',value['key']) or not (value['ctrl'] or value['alt']):raise ValueError('Invalid shortcut')
+        combo=(value['ctrl'],value['alt'],value['shift'],value['key'])
+        if combo in seen or (combo[:3]==(True,False,False) and combo[3] in 'srwtln'):raise ValueError('Duplicate or reserved shortcut')
+        seen.add(combo)
+    with LOCK:
+        settings=settings_load();current=shortcut_settings(settings)
+        if current['revision']!=payload['revision']:return 409,{'error':'其他设备已修改快捷键，请重新打开设置后再修改。'}
+        settings['toolShortcuts']=values;settings_save(settings)
+        return 200,shortcut_settings(settings)
 def workspace_path(filename):
     if not isinstance(filename,str):raise ValueError('请输入 .json 文件绝对路径')
     filename=filename.strip()
@@ -234,6 +254,8 @@ class Handler(BaseHTTPRequestHandler):
             u=urlparse(self.path);p=unquote(u.path)
             if p=='/api/workspaces':
                 with LOCK:return self.respond(200,workspace_catalog())
+            if p=='/api/shortcuts':
+                with LOCK:return self.respond(200,shortcut_settings(settings_load()))
             if p=='/api/state':
                 with LOCK,workspace_tx():
                     if WORKSPACE_ERROR:return self.respond(409,{'error':WORKSPACE_ERROR})
@@ -290,6 +312,8 @@ class Handler(BaseHTTPRequestHandler):
             n=int(self.headers.get('Content-Length',0))
             if not 0<n<=32*1024*1024:return self.respond(413,{'error':'Invalid request size'})
             payload=json.loads(self.rfile.read(n))
+            if self.path=='/api/shortcuts':
+                code,result=save_shortcuts(payload);return self.respond(code,result)
             if self.path=='/api/workspaces/open':
                 with LOCK:return self.respond(200,open_workspace(payload['path']))
             if self.path=='/api/workspaces/new':
