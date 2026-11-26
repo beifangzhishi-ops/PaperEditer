@@ -230,6 +230,7 @@ async function checkMixedRange(browser,mobile){
         await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
         await p.locator('.rangeEnd:visible').waitFor();
         await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        assert(!(await p.locator('#menu').isVisible()));
         await p.waitForTimeout(550);
         // Keep both the initial handle and target visible on the phone.
         await p.evaluate(()=>{for(const c of document.querySelectorAll('.pane .part-table,.pane .part-embed'))c._setFolded(true,false)});
@@ -520,6 +521,36 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--selection-toolbar-only')){
+            const {p,context,errors}=await fixture(browser,true);
+            await p.evaluate(()=>{find('demo-start').body=find('demo-start').body.replace('A fictional example','Alpha beta gamma');reindex();select('demo-start')});
+            const area=p.locator('.pane .part-text .richText').first(),more=p.locator('#toolbarMore');
+            const cdp=await context.newCDPSession(p);
+            const point=await area.evaluate(a=>{const t=a.querySelector('p').firstChild,r=document.createRange();r.setStart(t,2);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}});
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});
+            await p.locator('.rangeEnd:visible').waitFor();
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+            await p.waitForTimeout(600);
+            assert(!(await p.locator('#menu').isVisible()));
+            assert.equal(await more.getAttribute('aria-disabled'),'true');
+            await p.locator('#floatingTools [data-tool="复制"]').tap();
+            await p.waitForFunction(()=>localClipboard==='Alpha');
+            await p.locator('#editModeToggle').tap();
+            const caret=()=>area.evaluate(a=>{a.closest('.visualDocument')._clearMixed();a.focus();const t=a.querySelector('p').firstChild,r=document.createRange();r.setStart(t,1);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r);scheduleToolbarUpdate()});
+            await caret();
+            await p.waitForFunction(()=>document.querySelector('#toolbarMore').getAttribute('aria-disabled')==='false');
+            await more.tap();await p.locator('#menu').waitFor({state:'visible'});
+            assert.deepEqual(await p.locator('#menu button').allTextContents(),['添加公式','添加独立公式','插入交叉引用']);
+            const n=await area.locator('math-field').count();
+            await menu(p,'添加公式').tap();assert.equal(await area.locator('math-field').count(),n+1);
+            await caret();await more.tap();await menu(p,'添加独立公式').tap();
+            assert.equal(await p.locator('.pane .part-equation').count(),2);
+            await caret();await more.tap();await menu(p,'插入交叉引用').tap();
+            await p.locator('#dialog .visualPickList button').filter({hasText:'Example measurements'}).tap();
+            await p.waitForFunction(()=>find('demo-start').body.includes('[[ref:demo-table]]'));
+            assert.deepEqual(errors,[]);await context.close();
+            console.log('PASS: touch selection without popup, copy in view mode, toolbar more and all three insertion actions');return
+        }
         if(process.argv.includes('--toolbar-zoom-only')){
             for(const screenWidth of [320,390,414,0]){
                 const mobile=!!screenWidth;
@@ -1159,8 +1190,8 @@ async function run(){
         const tools=q.locator('#floatingTools'),toggle=q.locator('#headerActions'),tool=name=>tools.getByRole('button',{name,exact:true});
         await tools.waitFor({state:'visible'});
         assert.equal(await toggle.getAttribute('aria-pressed'),'true');
-        assert.equal(await tools.locator('button').count(),8);
-        assert.equal(await tools.locator('button svg').count(),8);
+        assert.equal(await tools.locator('button').count(),9);
+        assert.equal(await tools.locator('button svg').count(),9);
         assert.equal((await tools.innerText()).trim(),'');
         assert.equal(await tools.getByRole('button',{name:'历史',exact:true}).count(),0);
         await toggle.tap();await tools.waitFor({state:'hidden'});
@@ -1258,13 +1289,13 @@ async function run(){
         assert.equal(await q.evaluate(()=>localClipboard),'A fiction');
         const bar=await tools.boundingBox();
         assert(bar.x>=0&&bar.x+bar.width<=390&&bar.y>=0&&bar.y+bar.height<=844);
-        assert.equal(await tool('更多操作').count(),0);
+        assert.equal(await tool('更多操作').count(),1);
         const rect=await target.boundingBox();
         const x=Math.round(rect.x+20),y=Math.round(rect.y+10);
         await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y,id:0}]});
-        await q.locator('#menu').waitFor({state:'visible'});
+        await q.locator('.rangeEnd:visible').waitFor();
         await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-        assert(await menu(q,'新建批注').isVisible());
+        assert(!(await q.locator('#menu').isVisible()));
         await q.waitForTimeout(550);
         await q.locator('#shortcutSettings').tap();
         await tools.waitFor({state:'hidden'});

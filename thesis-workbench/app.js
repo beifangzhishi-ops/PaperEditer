@@ -813,13 +813,16 @@ function select(id,pi=active,object=null){
 }
 function jump(id,other=false){const t=resolve(id);if(!t){showToast('未找到引用：'+id);return}select(t.owner,other?(active===0?1:0):active,t.kind==='node'?null:(t.actualId||t.id))}
 async function copy(s){await writeEditorClipboard(s);showToast('已复制，可直接粘贴')}
-function menuAt(e,items){
+function menuAt(e,items,anchor=null){
     items=modeMenuItems(items);
     const m=$('menu');(dialog.open?dialog:document.body).append(m);m.replaceChildren();for(const [s,fn,disabled] of items){const b=btn(s,()=>{m.hidden=true;fn()});b.disabled=!!disabled;m.append(b)}m.hidden=!items.length;if(!items.length)return;
+    m._toolbarAnchor=anchor;m.style.transform='';m.style.transformOrigin='top left';m.style.width='';m.style.maxWidth='';
+    if(anchor){positionToolbarMore();return}
     const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,ox=v?.offsetLeft||0,oy=v?.offsetTop||0;
     m.style.maxHeight=Math.max(60,h-8)+'px';const x=e.clientX??15,y=e.clientY??70;m.style.left=Math.max(ox+4,Math.min(x,ox+w-m.offsetWidth-5))+'px';m.style.top=Math.max(oy+4,Math.min(y,oy+h-m.offsetHeight-5))+'px';
 }
-let localClipboard=null, localClipboardPreferred=false, touchMenuAt=0;
+let localClipboard=null, localClipboardPreferred=false, touchMenuAt=0,lastTouchPointerAt=0;
+function touchContextEvent(e){return e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents||Date.now()-lastTouchPointerAt<1800}
 const isActionSurface=e=>!!e?.closest?.('#menu,#floatingTools,#headerActions,.mathPalette,.ML__keyboard');
 async function writeEditorClipboard(value){
     localClipboard=value;
@@ -843,6 +846,8 @@ let floatingToolsEnabled=(()=>{try{const stored=localStorage.getItem(FLOATING_TO
 // A fresh mobile page opens for reading. Editing always requires an explicit switch.
 let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
+const MORE_TOOL='更多操作';
+const MORE_ACTIONS=new Set(['添加公式','添加独立公式','插入交叉引用']);
 const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','查看历史版本','查看差异','复制版本 ID','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
 function modeMenuItems(items){
     return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
@@ -912,6 +917,7 @@ const toolPaths={
     link:'<path d="M10 13a4 4 0 0 0 6 1l4-4a4 4 0 0 0-6-6l-2 2m2 5a4 4 0 0 0-6-1l-4 4a4 4 0 0 0 6 6l2-2"/>',
     undo:'<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>',
     redo:'<path d="m15 14 5-5-5-5m5 5H10a6 6 0 0 0 0 12h3"/>',
+    more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
     toolbar:'<rect x="3" y="6" width="18" height="12" rx="3"/><path d="M7 10v4m5-4v4m5-4v4"/>'
 };
 function setToolIcon(button,name){
@@ -987,6 +993,11 @@ function rememberToolbarTarget(e){
     if(!e.target?.closest||isActionSurface(e.target))return;
     if(e.target.closest('.pane,.navrow,#dialog')){toolbarTarget=e.target;toolbarPoint={x:e.clientX,y:e.clientY}}
 }
+function localRangeArea(r){
+    if(!r)return null;
+    const a=(r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement)?.closest('.richText');
+    return a?.contains(r.endContainer)?a:null
+}
 function toolbarContext(){
     if(!dialog.open&&panes[active]?.history)return null;
     const scope=dialog.open?dialog:paneBox.children[active];
@@ -998,13 +1009,13 @@ function toolbarContext(){
     const mixedDoc=[...scope.querySelectorAll('.visualDocument')].find(d=>d._mixedRange?.());
     const selected=scope.querySelector('.selectedNoteLabel')||scope.querySelector('.selectedImage,.selectedObject'),focus=document.activeElement;
     if(selected?.classList.contains('selectedNoteLabel')&&usable(selected))target=selected;
-    else if(mixedDoc&&usable(mixedDoc))target=mixedDoc;
+    else if(mixedDoc&&usable(mixedDoc))target=localRangeArea(mixedDoc._mixedRange())||mixedDoc;
     else if(selected&&usable(selected))target=selected;
     else if(usable(rangeTarget)&&(!target||target.closest('.richText')===rangeTarget||focus===rangeTarget))target=rangeTarget;
     else if(usable(focus)&&focus.matches('input,textarea,math-field,.richText'))target=focus;
     else if(!target||target.closest('.toolbar,button:not(.objectNoteMarker,.freeNoteMarker),.noteResizeHandle'))target=[...scope.querySelectorAll('.richText,.visualDocument,.page')].find(t=>usable(t)&&t.matches('.richText'))||scope.querySelector('.visualDocument,.page')||scope;
     const rect=target.getBoundingClientRect();
-    const rr=r&&rangeTarget===target?r.getBoundingClientRect():null;
+    const rr=mixedDoc?._mixedRange()?.getBoundingClientRect()||(r&&rangeTarget===target?r.getBoundingClientRect():null);
     const x=rr?.height?rr.left+rr.width/2:target===toolbarTarget&&toolbarPoint?toolbarPoint.x:rect.left+Math.min(rect.width/2,60);
     const y=rr?.height?rr.top+rr.height/2:target===toolbarTarget&&toolbarPoint?toolbarPoint.y:rect.top+Math.min(rect.height/2,16);
     let explicit=null;
@@ -1029,6 +1040,24 @@ function toolbarUndo(redo){
     if(root?._draftHistory)root._draftHistory(redo);
     else if(!dialog.open)undo(redo)
 }
+function toolbarMore(){
+    const m=$('menu'),anchor=$('toolbarMore');
+    if(!m.hidden&&m._toolbarAnchor===anchor){m.hidden=true;return}
+    menuAt({},currentToolbarItems().filter(i=>MORE_ACTIONS.has(i[0])),anchor)
+}
+function positionToolbarMore(){
+    const m=$('menu'),anchor=m._toolbarAnchor;if(m.hidden||!anchor)return;
+    if(!anchor.getClientRects().length){m.hidden=true;return}
+    const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,ox=v?.offsetLeft||0,oy=v?.offsetTop||0;
+    const scale=matchMedia('(pointer: coarse), (max-width: 760px)').matches?1/(v?.scale||1):1;
+    const r=anchor.getBoundingClientRect(),pad=4*scale,gap=6*scale;
+    m.style.transform=scale===1?'':`scale(${scale})`;
+    m.style.width='max-content';m.style.maxWidth=Math.max(0,w/scale-8)+'px';
+    m.style.maxHeight=Math.max(0,Math.max(r.top-oy,oy+h-r.bottom)/scale-10)+'px';
+    const mw=m.offsetWidth*scale,mh=m.offsetHeight*scale,above=r.top-mh-gap;
+    m.style.left=Math.max(ox+pad,Math.min(r.right-mw,ox+w-mw-pad))+'px';
+    m.style.top=Math.max(oy+pad,Math.min(above>=oy+pad?above:r.bottom+gap,oy+h-mh-pad))+'px'
+}
 function positionFloatingTools(){
     const bar=$('floatingTools');if(bar.hidden)return;
     const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,ox=v?.offsetLeft||0,oy=v?.offsetTop||0;
@@ -1046,7 +1075,7 @@ function positionFloatingTools(){
         const keyboard=window.mathVirtualKeyboard;
         if(keyboard?.visible&&keyboard.boundingRect?.height>0)y=Math.min(y,keyboard.boundingRect.top-bh-pad);
         bar.style.left=Math.max(ox+pad,Math.min(x,ox+w-bw-pad))+'px';
-        bar.style.top=Math.max(oy+pad,y)+'px';positionToolHint();return
+        bar.style.top=Math.max(oy+pad,y)+'px';positionToolHint();positionToolbarMore();return
     }
     bar.style.maxWidth=Math.max(0,w-16)+'px';
     let x=ox+(w-bar.offsetWidth)/2,y=oy+h-bar.offsetHeight-12;
@@ -1064,7 +1093,7 @@ function positionFloatingTools(){
     }
     bar.style.left=Math.max(ox+8,Math.min(x,ox+w-bar.offsetWidth-8))+'px';
     bar.style.top=Math.max(oy+8,Math.min(y,oy+h-bar.offsetHeight-8))+'px';
-    positionToolHint()
+    positionToolHint();positionToolbarMore()
 }
 let toolbarFrame=0;
 function scheduleToolbarUpdate(){
@@ -1078,6 +1107,7 @@ function scheduleToolbarUpdate(){
             const label=b.dataset.tool;
             if(!dialog.open&&panes[active]?.history){b.setAttribute('aria-disabled','true');continue}
             if(label===MODE_TOOL){b.setAttribute('aria-disabled','false');continue}
+            if(label===MORE_TOOL){b.setAttribute('aria-disabled',String(!items.some(i=>MORE_ACTIONS.has(i[0])&&!i[2])));continue}
             if(!editingEnabled&&!readOnlyActions.has(label)){b.setAttribute('aria-disabled','true');continue}
             if(label==='撤销'||label==='重做'){
                 const draft=dialog.open&&dialog.querySelector('.visualDocument');
@@ -1105,6 +1135,13 @@ function toggleFloatingTools(){
 function showFloatingTools(e,items){
     rememberToolbarTarget(e);
     if(floatingToolsEnabled)refreshFloatingTools();
+    const doc=e.target.closest('.visualDocument');
+    // Touch range selection uses the dock, not an automatic context popup.
+    // Keep explicit object/structure menus for targets without text selection.
+    const s=getSelection();
+    if(doc?._mixedRange?.()||(doc&&s&&!s.isCollapsed&&doc.contains(s.anchorNode)&&doc.contains(s.focusNode))||(e.target.closest('.richText')&&!e.target.closest('.resizeImage,.visualRef,.inlineAnnotation'))||e.target.closest('math-field')?.selectionIsCollapsed===false){
+        $('menu').hidden=true;scheduleToolbarUpdate();return
+    }
     menuAt(e,items)
 }
 function initFloatingTools(){
@@ -1112,6 +1149,7 @@ function initFloatingTools(){
     const mode=toolIcon(btn('',toggleEditMode),'eye',MODE_TOOL);mode.id='editModeToggle';bar.append(mode);
     for(const [name,label] of [['cut','剪切'],['copy','复制'],['paste','粘贴'],['note','新建批注'],['link','复制交叉引用']])bar.append(toolIcon(btn('',()=>toolbarAction(label)),name,label));
     bar.append(toolIcon(btn('',()=>toolbarUndo(false)),'undo','撤销'),toolIcon(btn('',()=>toolbarUndo(true)),'redo','重做'));
+    const more=toolIcon(btn('',toolbarMore),'more',MORE_TOOL);more.id='toolbarMore';more.setAttribute('aria-haspopup','menu');bar.append(more);
     for(const b of bar.querySelectorAll('button'))b.dataset.tool=b.getAttribute('aria-label');
     toolIcon($('headerActions'),'toolbar','显示工具栏');
     syncEditMode();
@@ -1122,7 +1160,7 @@ for(const id of ['menu','floatingTools','headerActions'])$(id).addEventListener(
 function context(e,items,target=null,exact=false){
     if(target)e._contextTarget=()=>typeof target==='function'?target():target;
     const get=ev=>exact?items(ev):simpleContextMenu(ev,typeof target==='function'?target():target);
-    const show=ev=>{hideFloatingTools();if(ev.pointerType==='touch'||ev.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(ev,get(ev))}else menuAt(ev,get(ev))};
+    const show=ev=>{hideFloatingTools();if(touchContextEvent(ev)){touchMenuAt=Date.now();ev.target.closest('.visualDocument')?._prepareTouchRange?.(ev);ev.useCurrentSelection=true;showFloatingTools(ev,get(ev))}else menuAt(ev,get(ev))};
     e.addEventListener('contextmenu',ev=>{if(isActionSurface(ev.target))return;ev.preventDefault();ev.stopPropagation();clearTimeout(longTimer);show(ev)});
     let start=null;
     e.addEventListener('pointerdown',ev=>{
@@ -1134,7 +1172,7 @@ function context(e,items,target=null,exact=false){
     e.addEventListener('pointermove',ev=>{if(start&&Math.hypot(ev.clientX-start.x,ev.clientY-start.y)>10){clearTimeout(longTimer);start=null}});
     for(const type of ['pointerup','pointercancel'])e.addEventListener(type,()=>{if(start?.fired)touchMenuAt=Date.now();clearTimeout(longTimer);start=null});
 }
-document.addEventListener('pointerdown',e=>{if(!isActionSurface(e.target)){hideToolHint();rememberToolbarTarget(e);$('menu').hidden=true}},true);
+document.addEventListener('pointerdown',e=>{lastTouchPointerAt=e.pointerType==='touch'?Date.now():0;if(!isActionSurface(e.target)){hideToolHint();rememberToolbarTarget(e);$('menu').hidden=true}},true);
 document.addEventListener('click',e=>{if(Date.now()-touchMenuAt<500&&!isActionSurface(e.target)){e.preventDefault();e.stopImmediatePropagation()}},true);
 document.addEventListener('pointerup',e=>{if(e.button===0)rememberToolbarTarget(e)});
 for(const type of ['selectionchange','focusin','focusout','input','pointerup','click','keyup','scroll'])document.addEventListener(type,scheduleToolbarUpdate,true);
@@ -1151,7 +1189,8 @@ function annotationBinding(e,pane){
     if(!pane)return null;
     const near=(r,pad)=>r&&(r.height||r.width)&&e.clientX>=r.left-pad&&e.clientX<=r.right+pad&&e.clientY>=r.top-pad&&e.clientY<=r.bottom+pad;
     const s=window.getSelection(),prior=e.useCurrentSelection?null:previousContextSelection;
-    const r=prior&&Date.now()-prior.time<2000&&Math.hypot(e.clientX-prior.x,e.clientY-prior.y)<32?prior.range:s?.rangeCount?s.getRangeAt(0).cloneRange():null;
+    const logical=e.target.closest('.visualDocument')?._mixedRange?.();
+    const r=logical?.cloneRange()||(prior&&Date.now()-prior.time<2000&&Math.hypot(e.clientX-prior.x,e.clientY-prior.y)<32?prior.range:s?.rangeCount?s.getRangeAt(0).cloneRange():null);
     if(!r||!pane.contains(r.startContainer)||!pane.contains(r.endContainer))return null;
     const startElement=r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement;
     const area=startElement?.closest('.richText'),doc=area?.closest('.visualDocument');
@@ -1204,7 +1243,7 @@ function simpleContextMenu(e,explicit){
     const noteLabel=e.target.closest(noteLabelSelector);
     if(noteLabel?._openNote)return modeMenuItems(noteLabelMenu(noteLabel));
     const rangeDoc=e.target.closest('.visualDocument');
-    if(rangeDoc?._mixedRange?.())return modeMenuItems(rangeDoc._clipboardMenu(e));
+    if(rangeDoc?._mixedRange?.()&&!localRangeArea(rangeDoc._mixedRange()))return modeMenuItems(rangeDoc._clipboardMenu(e));
     const pane=e.target.closest('.pane'),pi=pane?[...paneBox.children].indexOf(pane):active;
     const docs=pane?[...pane.querySelectorAll('.visualDocument')].filter(d=>d.getClientRects().length):[];
     const distance=d=>{const r=d.getBoundingClientRect();return Math.max(r.top-e.clientY,0,e.clientY-r.bottom)};
@@ -1228,7 +1267,7 @@ function simpleContextMenu(e,explicit){
     }
     // Insertion lives in the context menu, not a persistent button in the text.
     const insertDoc=e.target.closest('.visualDocument')||(prose?doc:null);
-    if(!e.preview&&insertDoc?._contentInsertMenu)result.push(...insertDoc._contentInsertMenu(e));
+    if(insertDoc?._contentInsertMenu)result.push(...insertDoc._contentInsertMenu(e));
     if(prose||objectBinding)result.push(['新建批注',()=>newAnnotation(binding,e)]);
     if(texTarget(source)&&!draft&&spaceOf(owner?.id)!=='blocks')result.push(['复制交叉引用',()=>copy(refToken(source))]);
     const noteId=draft?dialog._noteId:(source?.kind==='node'&&spaceOf(source.id)==='blocks'?source.id:pane&&owner&&spaceOf(owner.id)==='blocks'?owner.id:null);

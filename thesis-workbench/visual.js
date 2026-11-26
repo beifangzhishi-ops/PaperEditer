@@ -70,7 +70,7 @@ function visualMath(tex,display,onInput){
     f.addEventListener('contextmenu',e=>{
         e.preventDefault();e.stopImmediatePropagation();
         const items=simpleContextMenu(e);
-        if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,items)}
+        if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,items)}
         else menuAt(e,items)
     },true);
     for(const type of ['copy','cut'])f.addEventListener(type,e=>{
@@ -581,12 +581,14 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end);h.addEventListener('lostpointercapture',end)
     });
     root._prepareTouchRange=e=>{
-        if(!e.target.closest('.part-text .richText')||activeMixed()||nativeRange()?.collapsed===false)return;
+        if(!e.target.closest('.part-text .richText')||mixed)return;
+        const existing=nativeRange();
+        if(existing&&!existing.collapsed){setRange(point(existing.startContainer,existing.startOffset),point(existing.endContainer,existing.endOffset));return}
         const r=document.caretRangeFromPoint?.(e.clientX,e.clientY),n=r?.startContainer;
         if(n?.nodeType!==Node.TEXT_NODE||!body.contains(n)||!n.textContent.trim())return;
         const segments=[...new Intl.Segmenter(undefined,{granularity:'word'}).segment(n.textContent)];
         const word=segments.find(x=>x.index<=r.startOffset&&x.index+x.segment.length>r.startOffset&&x.isWordLike);if(!word)return;
-        const s=getSelection();s.setBaseAndExtent(n,word.index,n,word.index+word.segment.length);syncRange()
+        setRange(point(n,word.index),point(n,word.index+word.segment.length))
     };
     function mixedClipboard(r,cut){
         const pieces=selectedPieces(r,true),notes=selectedRangeNotes(r,pieces),map=new Map();
@@ -629,7 +631,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd);if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
     }
     function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
-    root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(e.pointerType==='touch'||e.sourceCapabilities?.firesTouchEvents){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
+    root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
     for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
         const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
         if(type==='paste'){if(editingEnabled){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
@@ -898,7 +900,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const cards=[...body.children],clicked=e.target.closest('.visualCard'),area=e.target.closest('.richText');
         const card=clicked&&body.contains(clicked)?clicked:cards.filter(c=>c.getBoundingClientRect().top<=e.clientY).at(-1)||cards[0];
         const anchor=card?._part||parts.at(-1);
-        const range=getSelection()?.rangeCount?getSelection().getRangeAt(0):null;
+        const range=activeMixed()||(getSelection()?.rangeCount?getSelection().getRangeAt(0):null);
         const caret=area&&range&&area.contains(range.commonAncestorContainer)?range.cloneRange():null;
         const hit=!e.useCurrentSelection&&area&&document.caretRangeFromPoint?.(e.clientX,e.clientY);
         const position=caret&&!caret.collapsed?caret:hit&&area.contains(hit.startContainer)&&!hit.startContainer.parentElement?.closest('math-field')?hit:caret;
@@ -907,6 +909,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             ...(area?[['添加独立公式',()=>addFormula(null,null,anchor,true)]]:[])
         ];
         return [...formulas,...insertMenu().map(([name,action])=>[name,()=>{
+            clearMixed();
             selectedPart=anchor;focused=area&&root.contains(area)?area:null;selection=focused?caret:null;
             action()
         }])]
