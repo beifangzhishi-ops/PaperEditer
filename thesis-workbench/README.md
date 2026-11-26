@@ -33,7 +33,7 @@ python server.py
 首次安装在本目录执行 `python install_cli.py`。Windows 默认在当前 Python 的 Scripts 目录安装原生 `paperedit.exe`（需要 pip 自带的 distlib 或独立 distlib），Linux/macOS 默认为 `~/.local/bin`；如未在 PATH 中，按提示添加即可。安装后在任意目录执行 `paperedit`（无参显示帮助），命令自动使用原代码仓库的最新版本；相对批量文件路径仍相对于调用者当前目录。Python 可直接用 `subprocess.run(["paperedit", "status"], capture_output=True, check=True)`，无需 shell。默认操作当前文档；指定绝对路径 `--workspace` 不切换网页。服务关闭可用 `--offline`。仅本机连接被拒绝时允许自动回退到本地核心；远程 API 失败、超时、服务器内部错误不会静默回退。所有日常命令输出 JSON，Windows 管道输出使用兼容旧 PowerShell 的 ASCII 转义（JSON 解码后仍为原始 Unicode）。`edit --file -` 支持 UTF-8 JSON 字节输入；文件输入支持 UTF-8 和 UTF-8 BOM。
 
 ~~~sh
-paperedit new ABSOLUTE_PATH
+paperedit new [ABSOLUTE_PATH]
 paperedit forget ABSOLUTE_PATH
 paperedit status
 paperedit list --space thesis
@@ -79,7 +79,7 @@ pack 会创建普通文件目录与索引，不覆盖已有文件；migrate 从�
 
 最近打开、当前工作区及每份文档的阅读位置、导航和页面折叠状态由服务端记录在 `workspace.local.json`（不提交到 Git），所有设备共享。切换前保存当前浏览器的修改；其他客户端须刷新后再编辑。刷新或再次打开文档时恢复共享阅读位置，正在阅读的页面不会实时被其他设备滚动位置打断。文件缺失时提示重新选择。备份时须包含 .json 及其引用的文件。
 
-「新建文件」要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次在指定位置生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new ABSOLUTE_PATH` 行为相同，`paperedit --offline new ABSOLUTE_PATH` 仅创建文件而不切换网页。
+「新建文件」可留空，自动创建项目根目录下 Git 忽略的 `workspaces/` 目录，并生成唯一的 `Untitled-<UUID>.json` 文件。指定路径时仍要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new [ABSOLUTE_PATH]` 行为相同，`paperedit --offline new [ABSOLUTE_PATH]` 仅创建文件而不切换网页。
 
 每份新文档从仓库内的 `example.json` 和 `example-data/` 模板生成，包含章节、子章节、段落、粗斜体、行内及独立公式、图和子图、表格、交叉引用、文本、对象、独立标签批注及自由放置标记。模板不被改写，工作文件及其历史不进入 Git。示例图可直接复制到其他文档；正式交叉引用和图片资源仍属于各自文档，跨文档复制时需重新建立对应引用或登记资源。没有独立的打开示例入口。
 

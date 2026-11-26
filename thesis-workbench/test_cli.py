@@ -26,7 +26,7 @@ class CLITests(unittest.TestCase):
         self.root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=".test-cli-", dir=Path(__file__).resolve().parent)))
         self.cwd = self.root / "caller dir"
         self.cwd.mkdir()
-        for name, value in (("DATA", self.root / "data"), ("CONFIG", self.root / "config.json"), ("PACKAGE", None), ("WORKSPACE_ERROR", None)):
+        for name, value in (("DATA", self.root / "data"), ("CONFIG", self.root / "config.json"), ("DEFAULT_WORKSPACE_DIR", self.root / "workspaces"), ("PACKAGE", None), ("WORKSPACE_ERROR", None)):
             stack.enter_context(patch.object(server, name, value))
         server.initialize_data()
         self.file = self.root / "论文 & 测试.json"
@@ -84,7 +84,6 @@ class CLITests(unittest.TestCase):
         self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],new['id'])
         self.assertTrue(self.run_cli('list',explicit=False)['items'])
         self.run_cli('new',str(target),explicit=False,success=False)
-        self.run_cli('new',explicit=False,success=False)
         self.run_cli('example',explicit=False,success=False)
         self.run_cli('forget',str(target),explicit=False)
         self.assertTrue(target.exists())
@@ -92,6 +91,10 @@ class CLITests(unittest.TestCase):
         offline=self.run_cli('new',str(self.root/'offline.json'),explicit=False,offline=True)
         self.assertNotEqual(offline['id'],new['id'])
         self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],new['id'])
+        auto=self.run_cli('new',explicit=False)
+        self.assertEqual(Path(auto['path']).parent,self.root/'workspaces')
+        self.assertTrue(Path(auto['path']).is_file())
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],auto['id'])
 
     def test_full_online_and_offline_workflow(self):
         for args in ([], ["--help"], ["edit", "--help"], ["restore", "--help"]):

@@ -39,7 +39,8 @@ async function fixture(browser,mobile=false,shared=null,legacy=null){
         }
         if(shared&&name==='/api/workspaces')return r.fulfill({json:{files:shared.recent.map(x=>({...x,active:x.id===shared.workspace.id})),current:shared.workspace}});
         if(shared&&name==='/api/workspaces/new'){
-            const filename=r.request().postDataJSON().path;shared.requestedNew=filename;
+            const requested=r.request().postDataJSON().path;shared.requestedNew=requested;
+            const filename=requested||'C:/PaperEditer/workspaces/Untitled-test.json';
             if(shared.recent.some(x=>x.path===filename))return r.fulfill({status:400,json:{error:'文件已存在'}});
             shared.workspace={id:filename,name:filename.split(/[\\/]/).pop(),path:filename,history:true};shared.recent=[shared.workspace,...shared.recent];
             shared.state=structuredClone(data.state);shared.state.revision='new-example';
@@ -685,7 +686,7 @@ async function run(){
                 const shared={workspace:{id:initial,name:'existing.json',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
                 const {p,context,errors}=await fixture(browser,mobile,shared);
                 await p.locator('#openWorkspace').click();
-                await p.getByRole('button',{name:'新建文件',exact:true}).click();assert.equal(shared.requestedNew,undefined);
+                await p.locator('.workspacePathForm button').click();assert.equal(shared.requested,undefined);
                 await p.getByRole('textbox',{name:'服务器文件路径'}).fill(initial);
                 await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.getByText('文件已存在',{exact:true}).waitFor();
                 assert.equal(await p.evaluate(()=>currentWorkspace.name),'existing.json');
@@ -693,11 +694,17 @@ async function run(){
                 await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.waitForFunction(()=>currentWorkspace?.name==='new.json'&&db.thesis.length===2&&db.blocks.length>0);
                 assert.equal(shared.requestedNew,target);
                 await p.locator('#openWorkspace').click();assert.equal(await p.getByRole('button',{name:'打开示例文件',exact:true}).count(),0);
+                await p.getByRole('textbox',{name:'服务器文件路径'}).fill('   ');
+                await p.getByRole('button',{name:'新建文件',exact:true}).click();
+                await p.waitForFunction(()=>currentWorkspace?.name==='Untitled-test.json');
+                assert.equal(shared.requestedNew,'');
+                await p.locator('#openWorkspace').click();
+                await p.getByRole('button',{name:'删除打开记录 Untitled-test.json',exact:true}).click();
                 await p.getByRole('button',{name:'删除打开记录 existing.json',exact:true}).click();await p.waitForFunction(()=>!document.querySelector('.workspaceRecentRow [aria-label="删除打开记录 existing.json"]'));
                 await p.getByRole('button',{name:'删除打开记录 new.json',exact:true}).click();await p.getByText('暂无打开记录。',{exact:true}).waitFor();
-                assert.equal(shared.recent.length,0);assert.equal(await p.evaluate(()=>currentWorkspace.name),'new.json');assert.deepEqual(errors,[]);await context.close();
+                assert.equal(shared.recent.length,0);assert.equal(await p.evaluate(()=>currentWorkspace.name),'Untitled-test.json');assert.deepEqual(errors,[]);await context.close();
             }
-            console.log('PASS: desktop/mobile required new path, collision preserves current document, seeded creation and deleting recent records');return;
+            console.log('PASS: desktop/mobile default and explicit new paths, collision preserves current document, seeded creation and deleting recent records');return;
         }
         const {p,context,errors}=await fixture(browser);
         if(process.argv.includes('--section-menu-only')){await checkSectionMenu(p);assert.deepEqual(errors,[]);await context.close();console.log('PASS: heading and collapsed child menus, blank creation and subtree deletion');return}
