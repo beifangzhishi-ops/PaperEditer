@@ -272,6 +272,58 @@ async function checkMixedRange(browser,mobile){
     }
     await context.close();
 }
+async function checkMouseRange(browser){
+    const {p,context,errors}=await fixture(browser);
+    const original='Alpha start\n\nMiddle paragraph\n\n:::equation drag-eq\nx^2\n:::\n\nOmega end\n';
+    await p.evaluate(raw=>{find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start')},original);
+    const doc=p.locator('.pane .visualDocument').first(),areas=doc.locator('.part-text .richText');
+    const at=(i,offset)=>areas.nth(i).evaluate((a,i)=>{const r=document.createRange();r.setStart(a.querySelector('p').firstChild,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},offset);
+    const drag=async(i,a,j,b)=>{const start=await at(i,a),end=await at(j,b);await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(end.x,end.y,{steps:15});await p.mouse.up()};
+    const mixed=()=>doc.evaluate(d=>!!d._mixedRange());
+    await drag(0,0,0,5);assert.equal(await mixed(),false);assert.equal(await p.evaluate(()=>getSelection().toString()),'Alpha');
+    await drag(0,6,1,6);assert.equal(await mixed(),true);await p.keyboard.press('Control+C');
+    await p.waitForFunction(()=>localClipboard==='start\n\nMiddle');
+    await drag(2,5,0,6);assert.equal(await mixed(),true);assert.equal(await doc.locator('.part-equation.rangeSelected').count(),1);
+    await p.keyboard.press('Control+X');await p.waitForFunction(()=>find('demo-start').body==='Alpha  end\n');
+    assert((await p.evaluate(()=>localClipboard)).includes(':::equation drag-eq'));
+    await p.evaluate(()=>undo(false));await p.waitForFunction(raw=>find('demo-start').body===raw,original);
+    const start=await at(0,0),far=await at(1,6),back=await at(0,5);
+    await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(far.x,far.y,{steps:10});assert.equal(await mixed(),true);
+    await p.mouse.move(back.x,back.y,{steps:10});await p.mouse.up();assert.equal(await mixed(),false);assert.equal(await p.evaluate(()=>getSelection().toString()),'Alpha');
+    await drag(0,6,2,5);await p.keyboard.press('Delete');await p.waitForFunction(()=>find('demo-start').body==='Alpha  end\n');
+    assert.deepEqual(errors,[]);await context.close();
+}
+async function checkRangeAnnotations(browser){
+    const {p,context,errors}=await fixture(browser);
+    const raw='Alpha start [[embed:demo-note]]\n\n:::equation drag-eq\nx^2\n:::\n\n:::figure drag-fig\nCaption\n\n![Demo](/assets/demo.png "wb-id:drag-sub")\n:::\n\n:::table drag-tab\nCaption\n\n| A |\n| --- |\n| 1 |\n:::\n\n[[embed:standalone-note]]\n\nOmega end\n';
+    await p.evaluate(raw=>{
+        const make=(id,body,extra={})=>db.blocks.push({id,title:body,body,parent:null,level:1,order:db.blocks.length,file:'blocks/'+id+'.md',...extra});
+        make('standalone-note','Standalone note');make('bound-note','Bound note',{objectBindings:[{targetId:'drag-sub'}]});
+        find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start');
+        for(const card of document.querySelectorAll('.pane .visualCard:not(.part-text):not(.part-embed)'))card._setFolded(true,false);
+        const page=document.querySelector('.pane .page'),card=page.querySelector('.part-table');find('demo-free').freePlacements=[{id:'free-range',pageId:'demo-start',x:.03,y:card.getBoundingClientRect().top-page.getBoundingClientRect().top+8}];refreshFreeNotes();
+    },raw);
+    const doc=p.locator('.pane .visualDocument').first(),areas=doc.locator('.part-text .richText');
+    const at=(i,offset)=>areas.nth(i).evaluate((a,i)=>{const r=document.createRange();r.setStart(a.querySelector('p').firstChild,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},offset);
+    const drag=async()=>{const start=await at(0,6),end=await at(1,5);await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(end.x,end.y,{steps:20});await p.mouse.up()};
+    const ids=['demo-note','standalone-note','bound-note','demo-free'];
+    await drag();await p.waitForFunction(()=>document.querySelectorAll('.visualCard.rangeSelected').length===4);
+    assert(await p.evaluate(()=>['demo-note','standalone-note','demo-free'].every(id=>document.querySelector('.rangeNoteSelected[data-note-id="'+id+'"]'))));
+    await p.keyboard.press('Control+C');await p.waitForFunction(()=>rangeNoteClipboardValue(localClipboard)?.notes.length===4);
+    const copy=await p.evaluate(()=>localClipboard);assert(copy.includes(':::equation ')&&copy.includes(':::figure ')&&copy.includes(':::table '));
+    const paste=async()=>{await p.evaluate(()=>select('demo-method'));await p.locator('.pane .richText').first().evaluate(a=>{a.focus();const data=new DataTransfer();data.setData('text/plain',localClipboard);a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})};
+    await paste();await p.waitForFunction(()=>db.blocks.length===8);
+    assert(await p.evaluate(ids=>ids.every(id=>annotationLocations(find(id)).length===1)&&db.blocks.every(n=>annotationLocations(n).length===1)&&db.blocks.filter(n=>n.body==='Bound note').some(n=>n.id!=='bound-note'&&resolve(n.objectBindings[0].targetId)?.owner==='demo-method'),ids));
+    await p.evaluate(()=>undo(false));await p.waitForFunction(()=>db.blocks.length===4);await p.evaluate(()=>{select('demo-start');for(const card of document.querySelectorAll('.pane .visualCard:not(.part-text):not(.part-embed)'))card._setFolded(true,false)});
+    await drag();await p.keyboard.press('Control+X');await p.waitForFunction(()=>find('demo-start').body==='Alpha  end\n');
+    assert(await p.evaluate(ids=>ids.every(id=>!annotationLocations(find(id)).length),ids));
+    await paste();await p.waitForFunction(()=>find('demo-method').body.includes(':::equation drag-eq'));
+    assert(await p.evaluate(ids=>db.blocks.length===4&&ids.every(id=>annotationLocations(find(id)).length===1)&&resolve(find('bound-note').objectBindings[0].targetId)?.owner==='demo-method',ids));
+    await p.evaluate(()=>{undo(false);undo(false);select('demo-start');for(const card of document.querySelectorAll('.pane .visualCard:not(.part-text):not(.part-embed)'))card._setFolded(true,false)});
+    await drag();await p.keyboard.press('Delete');await p.waitForFunction(()=>db.trash.length===4&&db.blocks.length===0);
+    await p.evaluate(()=>undo(false));assert.equal(await p.evaluate(()=>find('demo-start').body),raw);assert.equal(await p.evaluate(()=>db.blocks.length),4);
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function checkNewlineDeletion(browser,mobile){
     const {p,context,errors}=await fixture(browser,mobile);
     if(mobile)await p.evaluate(()=>{if(!editingEnabled)toggleEditMode()});
@@ -519,6 +571,7 @@ async function run(){
         }
         if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
+        if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--workspace-only')){
             const initial='C:\\Projects\\example.json',network='\\\\server\\share\\network.json';

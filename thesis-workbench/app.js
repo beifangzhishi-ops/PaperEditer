@@ -1338,8 +1338,8 @@ function showDialog(title,options={}){
     }
     return d
 }
-function remapCopiedObjects(s,own=null,force=false){
-    const map=new Map(),occupied=occupiedObjectIds();
+function remapCopiedObjects(s,own=null,force=false,map=new Map()){
+    const occupied=occupiedObjectIds();
     s=s.replace(objectPattern(),(m,k,id)=>{
         if(force||occupied.has(id))map.set(id,k+'-'+uid());
         if(k==='figure'){
@@ -1442,6 +1442,31 @@ function annotationClipboardValue(text){
     try{const n=JSON.parse(text.slice(ANNOTATION_CLIPBOARD.length));return typeof n.body==='string'&&typeof n.title==='string'?n:null}catch{return null}
 }
 function clearAnnotationPlacement(n){delete n.annotation;delete n.textBindings;delete n.objectBindings;delete n.freePlacements}
+// Keep the Markdown clipboard readable, with a private trailer for the
+// selected annotations. Their content is snapshotted, not a live link.
+const RANGE_NOTE_TRAILER='\n\n<!-- PaperEditer-range-annotations-v1:';
+function rangeNoteClipboard(raw,notes,cut,map){
+    if(!notes.length)return raw;
+    return raw+RANGE_NOTE_TRAILER+encodeURIComponent(JSON.stringify({workspace:currentWorkspace?.id,cut,notes:notes.map(({note,binding})=>({id:note.id,title:note.title,body:note.body,floatSize:note.floatSize,binding:binding?{...binding,targetId:map.get(binding.targetId)||binding.targetId}:null}))}))+' -->'
+}
+function rangeNoteClipboardValue(text){
+    const i=text.lastIndexOf(RANGE_NOTE_TRAILER);if(i<0||!text.endsWith(' -->'))return null;
+    try{const payload=JSON.parse(decodeURIComponent(text.slice(i+RANGE_NOTE_TRAILER.length,-4)));if(!Array.isArray(payload.notes)||!payload.notes.every(n=>typeof n.id==='string'&&typeof n.title==='string'&&typeof n.body==='string'))return null;return {...payload,raw:text.slice(0,i)}}catch{return null}
+}
+function prepareRangePaste(text,owner,force=false){
+    const payload=rangeNoteClipboardValue(text);
+    if(!payload)return remapCopiedObjects(prepareAnnotationPaste(text,owner),owner,force);
+    const map=new Map(),raw=remapCopiedObjects(payload.raw,owner,force,map),notes=new Map();
+    const internal=spaceOf(owner)!=='thesis';
+    for(const n of payload.notes){
+        if(internal){notes.set(n.id,n.title);continue}
+        const source=payload.workspace===currentWorkspace?.id&&db.blocks.find(x=>x.id===n.id);
+        const note=payload.cut&&source&&!annotationLocations(source).length?source:annotationCopy(n);
+        clearAnnotationPlacement(note);notes.set(n.id,note.id);
+        if(n.binding){const targetId=map.get(n.binding.targetId)||n.binding.targetId;note.objectBindings=[{...clone(n.binding),targetId}]}
+    }
+    return raw.replace(refPattern(),(m,k,id)=>k==='embed'&&notes.has(id)?(internal?notes.get(id):'[[embed:'+notes.get(id)+']]'):m)
+}
 function annotationCopy(n){
     const id='block-'+uid(),body=remapCopiedObjects(n.body.replace(refPattern(),(m,k,target)=>k==='embed'||(['ref','eqref'].includes(k)&&db.blocks.some(x=>x.id===target))?(find(target)?.title||target):m),null,true);
     const copy={id,title:n.title||blockLabel(body),body,parent:null,level:1,order:db.blocks.length,number:'',file:'blocks/'+id+'.md',source:''};
