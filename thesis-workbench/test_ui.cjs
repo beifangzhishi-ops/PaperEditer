@@ -284,6 +284,38 @@ async function checkMixedRange(browser,mobile){
     }
     await context.close();
 }
+async function checkSelectAllRange(browser){
+    const {p,context,errors}=await fixture(browser);
+    const original='Alpha start $a+b$\n\n:::equation all-eq\nx^2\n:::\n\n:::figure all-fig\nA figure\n\n![Swatches](/assets/demo.png)\n:::\n\n[[embed:demo-free]]\n\nOmega end\n';
+    await p.evaluate(raw=>{find('demo-start').body=raw;reindex();select('demo-start')},original);
+    const doc=p.locator('.pane .visualDocument').first(),first=doc.locator('.part-text .richText').first();
+    await first.evaluate(a=>{a.focus();getSelection().collapse(a.querySelector('p').firstChild,3)});
+    await p.keyboard.press('Control+A');
+    await p.waitForFunction(()=>document.querySelectorAll('.pane .rangeSelected').length===3);
+    assert.equal(await doc.evaluate(d=>{const r=d._mixedRange();return !!r&&r.startContainer===d.querySelector('.part-text .richText')&&r.startOffset===0&&r.endContainer===[...d.querySelectorAll('.part-text .richText')].at(-1)&&r.endOffset===r.endContainer.childNodes.length}),true);
+    await p.keyboard.press('Control+C');
+    await p.waitForFunction(()=>localClipboard?.includes('Omega end'));
+    const copied=await p.evaluate(()=>localClipboard);
+    assert(copied.includes('Alpha start $a+b$')&&copied.includes(':::equation ')&&copied.includes(':::figure ')&&copied.includes('[[embed:'));
+    assert(!copied.includes(':::equation all-eq'));
+    await p.keyboard.press('Control+X');
+    await p.waitForFunction(()=>!find('demo-start').body.trim());
+    assert((await p.evaluate(()=>localClipboard)).includes(':::equation all-eq'));
+    await p.evaluate(()=>undo(false));await p.waitForFunction(raw=>find('demo-start').body===raw,original);
+    await first.focus();await p.keyboard.press('Control+A');await p.keyboard.press('Delete');
+    await p.waitForFunction(()=>!find('demo-start').body.trim());
+    await p.evaluate(()=>undo(false));await p.waitForFunction(raw=>find('demo-start').body===raw,original);
+    const formula=doc.locator('.part-equation math-field').first();
+    await formula.focus();await p.keyboard.press('Control+A');
+    assert.equal(await doc.evaluate(d=>!!d._mixedRange()),false);
+    assert.equal(await formula.evaluate(f=>f.getValue(f.selection,'latex')),await formula.evaluate(f=>f.value));
+    const title=p.locator('.pane .editableTitle').first();await title.focus();await p.keyboard.press('Control+A');
+    assert.equal(await title.evaluate(t=>t.selectionStart===0&&t.selectionEnd===t.value.length),true);
+    await p.evaluate(()=>{find('demo-start').body='Only one paragraph\n';reindex();select('demo-start')});
+    await first.focus();await p.keyboard.press('Control+A');await p.keyboard.press('Backspace');
+    await p.waitForFunction(()=>!find('demo-start').body.trim());
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function checkMouseRange(browser){
     const {p,context,errors}=await fixture(browser);
     const original='Alpha start\n\nMiddle paragraph\n\n:::equation drag-eq\nx^2\n:::\n\nOmega end\n';
@@ -691,6 +723,7 @@ async function run(){
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--local-annotation-range-only')){await checkLocalRangeAnnotations(browser);console.log('PASS: same-paragraph annotation highlight selection, copy, cut, delete and undo');return}
         if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);await checkLocalRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}
+        if(process.argv.includes('--select-all-range-only')){await checkSelectAllRange(browser);console.log('PASS: full document range, copy, cut, delete, undo, single paragraph and native controls');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--recent-layout-only')){
             const initial='C:\\Projects\\'+('LongDirectory\\'.repeat(8))+'example.json';
