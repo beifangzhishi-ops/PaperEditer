@@ -1609,7 +1609,7 @@ async function openWorkspaceDialog(){
     const create=btn('新建文件',()=>{if(input.reportValidity())openPath(input.value,'new')});
     const actions=el('div','workspaceFileActions');actions.append(create);d.append(actions);
     const message=el('p','small');d.append(message,el('h3','','最近打开'));
-    const list=el('div','visualPickList');d.append(list);
+    const list=el('div','workspaceRecentList');d.append(list);
     async function openPath(path,mode='open'){
         if(!path.trim()||submit.disabled)return;
         input.disabled=submit.disabled=create.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;message.textContent=mode==='new'?'正在新建…':'正在打开…';

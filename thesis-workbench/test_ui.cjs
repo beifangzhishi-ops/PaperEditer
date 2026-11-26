@@ -632,6 +632,33 @@ async function run(){
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
+        if(process.argv.includes('--recent-layout-only')){
+            const initial='C:\\Projects\\'+('LongDirectory\\'.repeat(8))+'example.json';
+            const network='\\\\server\\share\\'+('LongDirectory\\'.repeat(8))+'network.json';
+            for(const [mobile,width] of [[false,1280],[true,390],[true,320]]){
+                const workspace={id:initial,name:'example.json',path:initial};
+                const shared={workspace,recent:[workspace,{id:network,name:'network.json',path:network}],reading:{}};
+                const {p,context,errors}=await fixture(browser,mobile,shared);
+                await p.setViewportSize({width,height:844});
+                await p.locator('#openWorkspace').click();
+                await p.locator('.workspaceRecentRow').nth(1).waitFor();
+                const layout=await p.locator('.workspaceRecentRow').evaluateAll(rows=>rows.map(row=>{
+                    const list=row.parentElement,open=row.querySelector('.workspaceRecent'),remove=row.querySelector('.workspaceForget'),label=open.querySelector('span');
+                    const a=open.getBoundingClientRect(),b=remove.getBoundingClientRect(),r=row.getBoundingClientRect();
+                    return {listWidth:list.clientWidth,scrollWidth:list.scrollWidth,openWidth:a.width,removeWidth:b.width,removeRight:b.right,rowRight:r.right,openRight:a.right,removeLeft:b.left,pathHeight:label.offsetHeight,pathWidth:label.offsetWidth,rowHeight:r.height};
+                }));
+                for(const x of layout){
+                    assert(x.openWidth>x.removeWidth,JSON.stringify(x));
+                    assert(x.removeRight<=x.rowRight+1&&x.openRight<=x.removeLeft,JSON.stringify(x));
+                    assert(x.scrollWidth<=x.listWidth+1,JSON.stringify(x));
+                    assert(x.pathWidth>100&&x.pathHeight<180&&x.rowHeight<230,JSON.stringify(x));
+                }
+                await p.locator('.workspaceRecentRow').nth(1).locator('.workspaceForget').click();
+                await p.locator('.workspaceRecentRow').nth(1).waitFor({state:'detached'});
+                assert.equal(shared.recent.length,1);assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: recent file layout with long local and UNC paths at desktop, 390px and 320px widths; delete remains usable');return;
+        }
         if(process.argv.includes('--workspace-only')){
             const initial='C:\\Projects\\example.json',network='\\\\server\\share\\network.json';
             const shared={workspace:{id:initial,name:'example.json',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
