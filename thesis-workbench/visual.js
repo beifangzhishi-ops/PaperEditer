@@ -293,11 +293,18 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             }
             if(!piece.local)for(const id of objectIds({body:piece.raw}))ids.add(id);
         }
+        for(const {chip,range} of textAnnotationRanges){
+            if(!chip.isConnected||!body.contains(chip)||!range.toString())continue;
+            const piece=pieces.find(p=>p.local&&p.card.contains(chip));
+            if(!piece||piece.local.compareBoundaryPoints(Range.END_TO_START,range)>=0||piece.local.compareBoundaryPoints(Range.START_TO_END,range)<=0)continue;
+            const note=db.blocks.find(n=>n.id===chip.dataset.noteId);
+            if(note&&!selected.has(note.id))selected.set(note.id,{note,piece,highlightOnly:true});
+        }
         for(const note of db.blocks)for(const binding of objectNoteBindings(note))if(ids.has(binding.targetId)&&!selected.has(note.id))selected.set(note.id,{note,binding});
         // Free annotations have no text anchor. Include only markers whose
         // page coordinates lie between the selected range endpoints.
         const page=root.closest('.page'),first=pieces[0],last=pieces.at(-1);
-        if(page&&page.parentElement?._readingPane?.id===owner){
+        if(pieces.length>1&&page&&page.parentElement?._readingPane?.id===owner){
             const bounds=(piece,end)=>{if(!piece.local)return piece.card.getBoundingClientRect();const range=piece.local.cloneRange();range.collapse(!end);return caretBounds(range)||piece.card.getBoundingClientRect()};
             const top=bounds(first,false).top,bottom=bounds(last,true).bottom;
             for(const marker of page.querySelectorAll(':scope > .freeNoteLayer .freeNoteMarker')){
@@ -313,13 +320,13 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function nativeRange(){const s=getSelection();return s?.rangeCount&&body.contains(s.anchorNode)&&body.contains(s.focusNode)?s.getRangeAt(0):null}
     function activeMixed(){
         if(mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer))return mixed;
-        const r=nativeRange();return r&&!r.collapsed&&cardOf(r.startContainer)!==cardOf(r.endContainer)?r:null
+        const r=nativeRange();return r&&!r.collapsed&&(cardOf(r.startContainer)!==cardOf(r.endContainer)||selectedRangeNotes(r).length)?r:null
     }
     root._mixedRange=activeMixed;
     const handles=[el('span','rangeHandle rangeStart'),el('span','rangeHandle rangeEnd')];
     for(const h of handles){h.hidden=true;root.append(h);h.setAttribute('aria-hidden','true')}
     let ownsHighlight=false;
-    function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');ownsHighlight=false}}
+    function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');CSS.highlights.delete('paper-range-annotation');ownsHighlight=false}}
     let highlightedNotes=[];
     function clearRangeNotes(){for(const chip of highlightedNotes)chip.classList.remove('rangeNoteSelected');highlightedNotes=[]}
     function clearMixed(){mixed=null;anchorPoint=focusPoint=null;for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearRangeNotes();clearHighlight()}
@@ -328,8 +335,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const cross=activeMixed(),r=cross||nativeRange(),pieces=selectedPieces(r);
         for(const c of cards())c.classList.toggle('rangeSelected',cross&&pieces.some(x=>x.card===c&&!x.local));
         clearRangeNotes();
-        if(cross){const ids=new Set(selectedRangeNotes(cross).map(x=>x.note.id));highlightedNotes=[...(root.closest('.page')||root).querySelectorAll(noteLabelSelector)].filter(chip=>ids.has(chip.dataset.noteId));for(const chip of highlightedNotes)chip.classList.add('rangeNoteSelected')}
-        if(cross&&window.CSS?.highlights&&window.Highlight){CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));ownsHighlight=true}else clearHighlight();
+        const ids=new Set(cross?selectedRangeNotes(cross).map(x=>x.note.id):[]);
+        if(cross){highlightedNotes=[...(root.closest('.page')||root).querySelectorAll(noteLabelSelector)].filter(chip=>ids.has(chip.dataset.noteId));for(const chip of highlightedNotes)chip.classList.add('rangeNoteSelected')}
+        if(cross&&window.CSS?.highlights&&window.Highlight){CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));const h=new Highlight(...textAnnotationRanges.filter(x=>body.contains(x.chip)&&ids.has(x.chip.dataset.noteId)).map(x=>x.range));h.priority=1;CSS.highlights.set('paper-range-annotation',h);ownsHighlight=true}else clearHighlight();
         if(!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length||(!cross&&!pieces[0].local)){for(const h of handles)h.hidden=true;return}
         for(let i=0;i<2;i++){
             const piece=i?pieces.at(-1):pieces[0],rr=piece.local?.cloneRange();if(rr)rr.collapse(!i);
@@ -384,10 +392,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             if(!root.isConnected||!root.contains(a.node))return;
             const rect=scroller.getBoundingClientRect(),x=Math.max(0,Math.min(innerWidth-1,Math.max(rect.left,Math.min(rect.right-1,latest.x)))),y=Math.max(0,Math.min(innerHeight-1,Math.max(rect.top,Math.min(rect.bottom-1,latest.y))));
             const b=pointAt(x,y,a);if(!b)return;
-            if(!crossed&&!atomic&&cardOf(b.node)===startCard)return;
+            const sameCard=!atomic&&cardOf(b.node)===startCard;
+            const includesNote=sameCard&&selectedRangeNotes(rangeOf(a,b)).length;
+            if(!crossed&&sameCard&&!includesNote)return;
             if(atomic){a=compare(b,lo)<0?hi:lo;if(compare(b,a)===0)return}
             crossed=true;dragging=true;
-            if(!atomic&&cardOf(b.node)===startCard){
+            if(sameCard&&!includesNote){
                 // Returning to the original paragraph restores native editing.
                 clearMixed();if(editingEnabled)area.focus({preventScroll:true});
                 getSelection().setBaseAndExtent(a.node,a.offset,b.node,b.offset);
@@ -421,7 +431,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             let a=selectionAnchor();
             if(!a&&selectedObject){const c=cards().find(c=>c._part===selectedObject);if(c)a=edge(c,e.clientY<c.getBoundingClientRect().top)}
             const b=a&&pointAt(e.clientX,e.clientY,a);
-            if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node))){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}
+            if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node)||selectedRangeNotes(rangeOf(a,b)).length)){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}
         }
         if(e.button===0){clearMixed();if(!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey)beginMouseRange(e)}
     },true);
@@ -453,7 +463,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     };
     function mixedClipboard(r,cut){
         const pieces=selectedPieces(r,true),notes=selectedRangeNotes(r,pieces),map=new Map();
-        const raw=pieces.map(p=>[p.raw,...notes.filter(n=>n.free&&n.piece===p).map(n=>'[[embed:'+n.note.id+']]')].filter(x=>x.trim()).join('\n\n')).filter(Boolean).join('\n\n');
+        const raw=pieces.map(p=>[notes.filter(n=>n.highlightOnly&&n.piece===p).map(n=>'[[embed:'+n.note.id+']] ').join('')+p.raw,...notes.filter(n=>n.free&&n.piece===p).map(n=>'[[embed:'+n.note.id+']]')].filter(x=>x.trim()).join('\n\n')).filter(Boolean).join('\n\n');
         return rangeNoteClipboard(cut?raw:remapCopiedObjects(raw,owner,true,map),notes,cut,map)
     }
     function replaceMixed(r,text='',cut=false){
@@ -462,6 +472,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
         return annotationEdit(()=>{
         const notes=selectedRangeNotes(r,pieces);
+        const noteIds=new Set(notes.map(n=>n.note.id));
+        const stripSelected=raw=>raw?.replace(refPattern(),(m,k,id)=>k==='embed'&&noteIds.has(id)?'':m);
+        first.before=stripSelected(first.before);last.after=stripSelected(last.after);
         const replacement=text.trim()?parseParts(prepareRangePaste(text,owner)):[];
         for(const {note} of notes)clearAnnotationPlacement(note);
         if(first.before?.trim()){

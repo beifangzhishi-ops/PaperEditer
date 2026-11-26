@@ -336,6 +336,25 @@ async function checkRangeAnnotations(browser){
     await p.evaluate(()=>undo(false));assert.equal(await p.evaluate(()=>find('demo-start').body),raw);assert.equal(await p.evaluate(()=>db.blocks.length),4);
     assert.deepEqual(errors,[]);await context.close();
 }
+async function checkLocalRangeAnnotations(browser){
+    const {p,context,errors}=await fixture(browser);
+    const raw='Alpha [[embed:demo-note]]marked words Omega\n';
+    await p.evaluate(raw=>{clearAnnotationPlacement(find('demo-free'));const note=find('demo-note');clearAnnotationPlacement(note);note.annotation={owner:'demo-start',quote:'marked words',mode:'selection'};find('demo-start').body=raw;reindex();select('demo-start')},raw);
+    await p.waitForFunction(()=>textAnnotationRanges.some(x=>x.chip.dataset.noteId==='demo-note'));
+    const at=offset=>p.evaluate(offset=>{const {range}=textAnnotationRanges.find(x=>x.chip.dataset.noteId==='demo-note');const r=document.createRange();r.setStart(range.endContainer,offset);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},offset);
+    const drag=async(a,b)=>{const start=await at(a),end=await at(b);await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(end.x,end.y,{steps:12});await p.mouse.up();await p.waitForFunction(()=>document.querySelector('.rangeNoteSelected[data-note-id="demo-note"]'))};
+    await drag(2,9);assert.equal(await p.evaluate(()=>dialog.open),false);
+    assert.equal(await p.evaluate(()=>CSS.highlights.get('paper-range-annotation')?.size),1);
+    await p.keyboard.press('Control+C');await p.waitForFunction(()=>rangeNoteClipboardValue(localClipboard)?.notes.some(n=>n.id==='demo-note'));
+    assert((await p.evaluate(()=>rangeNoteClipboardValue(localClipboard).raw)).includes('[[embed:demo-note]]'));
+    await drag(9,2);await p.keyboard.press('Control+X');await p.waitForFunction(()=>!annotationLocations(find('demo-note')).length);
+    assert(!(await p.evaluate(()=>find('demo-start').body)).includes('[[embed:demo-note]]'));
+    await p.evaluate(()=>undo(false));await p.waitForFunction(raw=>find('demo-start').body===raw,raw);
+    await p.waitForFunction(()=>textAnnotationRanges.some(x=>x.chip.dataset.noteId==='demo-note'));
+    await drag(2,9);await p.keyboard.press('Delete');await p.waitForFunction(()=>!find('demo-note')&&db.trash.some(t=>t.nodes.some(n=>n.id==='demo-note')));
+    await p.evaluate(()=>undo(false));await p.waitForFunction(raw=>find('demo-start').body===raw&&!!find('demo-note'),raw);
+    assert.deepEqual(errors,[]);await context.close();
+}
 async function checkNewlineDeletion(browser,mobile){
     const {p,context,errors}=await fixture(browser,mobile);
     if(mobile)await p.evaluate(()=>{if(!editingEnabled)toggleEditMode()});
@@ -631,7 +650,8 @@ async function run(){
         }
         if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
-        if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}
+        if(process.argv.includes('--local-annotation-range-only')){await checkLocalRangeAnnotations(browser);console.log('PASS: same-paragraph annotation highlight selection, copy, cut, delete and undo');return}
+        if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);await checkLocalRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
         if(process.argv.includes('--recent-layout-only')){
             const initial='C:\\Projects\\'+('LongDirectory\\'.repeat(8))+'example.json';
