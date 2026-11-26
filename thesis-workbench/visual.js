@@ -30,19 +30,80 @@ function noteParts(raw){
     return parts;
 }
 function visualMath(tex,display,onInput){
-    const f=document.createElement('math-field');f.className='visualMath'+(display?' displayMath':'');f.setAttribute('contenteditable','false');f.setAttribute('math-virtual-keyboard-policy','auto');
+    const f=document.createElement('math-field');f.className='visualMath'+(display?' displayMath':'');f.setAttribute('contenteditable','true');f.setAttribute('math-virtual-keyboard-policy','auto');
     f.setAttribute('aria-label','可编辑数学公式');f.value=tex;f._texOriginal=tex;f._texChanged=false;f.dataset.tex=tex;
     setEditorControlMode(f);
-    function removeBuiltinMenu(){if(!f.isConnected)return;try{f.menuItems=[];f.popoverPolicy='off'}catch(err){/* Wait for MathLive to mount its internal editor. */}}
-    customElements.whenDefined('math-field').then(()=>requestAnimationFrame(removeBuiltinMenu));f.addEventListener('focusin',removeBuiltinMenu);
+    function configure(){if(!f.isConnected)return;try{
+        f.menuItems=[];f.popoverPolicy='off';f.smartFence=true;f.smartSuperscript=true;
+        f.inlineShortcuts={...f.inlineShortcuts,'>=':'\\ge','<=':'\\le','!=':'\\ne'};
+    }catch(err){/* Wait for MathLive to mount its internal editor. */}}
+    customElements.whenDefined('math-field').then(()=>requestAnimationFrame(configure));
+    f.addEventListener('focusin',()=>{configure();if(editingEnabled)showMathPalette(f)});
+    f.addEventListener('keydown',e=>{
+        if(e.key==='Escape'&&editingEnabled){e.preventDefault();e.stopPropagation();leaveMathField(f,'forward',true)}
+    },true);
+    f.addEventListener('move-out',e=>{if(editingEnabled&&leaveMathField(f,e.detail.direction,false))e.preventDefault()});
     f.addEventListener('input',e=>{e.stopPropagation();if(!editingEnabled)return;f._texChanged=true;f.dataset.tex=f.value;onInput(f.value)});
     return f;
 }
+// MathLive itself must remain editable. The wrapper, not its editor, is
+// atomic to the surrounding contenteditable prose.
+function inlineMathAtom(field){
+    const atom=el('span','inlineMathAtom');atom.contentEditable='false';field.dataset.inline='1';atom.append(field);return atom
+}
+let activeMathField=null,activeMathPalette=null;
+function hideMathPalette(){activeMathPalette?.remove();activeMathPalette=null;activeMathField=null}
+function positionMathPalette(){
+    const bar=activeMathPalette,field=activeMathField;
+    if(!bar||!field?.isConnected||!editingEnabled){hideMathPalette();return}
+    const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,x=v?.offsetLeft||0,y=v?.offsetTop||0;
+    const r=field.getBoundingClientRect(),mobile=matchMedia('(pointer:coarse), (max-width:760px)').matches;
+    bar.style.maxWidth=Math.max(0,w-16)+'px';
+    const left=mobile?x+8:Math.max(x+8,Math.min(r.left+r.width/2-bar.offsetWidth/2,x+w-bar.offsetWidth-8));
+    const above=r.top-bar.offsetHeight-8;
+    const top=mobile?y+56:above>=y+56?above:Math.min(r.bottom+8,y+h-bar.offsetHeight-8);
+    bar.style.left=left+'px';bar.style.top=Math.max(y+8,top)+'px'
+}
+function showMathPalette(field){
+    if(activeMathField===field&&activeMathPalette?.isConnected)return;
+    hideMathPalette();activeMathField=field;activeMathPalette=mathPanel(field);
+    (dialog.open&&dialog.contains(field)?dialog:document.body).append(activeMathPalette);positionMathPalette()
+}
+document.addEventListener('focusin',e=>{if(!e.target.closest('math-field,.mathPalette,.ML__keyboard'))hideMathPalette()},true);
+document.addEventListener('pointerdown',e=>{if(!e.target.closest('math-field,.mathPalette,.ML__keyboard,#floatingTools,#menu'))hideMathPalette()},true);
+document.addEventListener('scroll',positionMathPalette,true);
+window.addEventListener('resize',positionMathPalette);
+window.visualViewport?.addEventListener('resize',positionMathPalette);
+window.visualViewport?.addEventListener('scroll',positionMathPalette);
+function leaveMathField(field,direction,selectWhole){
+    const area=field.closest('.richText'),card=field.closest('.visualCard');
+    const backwards=direction==='backward'||direction==='upward';
+    if(area){
+        area.focus({preventScroll:true});const r=document.createRange();
+        const atom=field.closest('.inlineMathAtom')||field;
+        if(backwards)r.setStartBefore(atom);else r.setStartAfter(atom);
+        r.collapse(true);const s=getSelection();s.removeAllRanges();s.addRange(r);hideMathPalette();return true
+    }
+    if(!card)return false;
+    if(!selectWhole){
+        const next=backwards?card.previousElementSibling:card.nextElementSibling,target=next?.querySelector('.richText');
+        if(target){target.focus({preventScroll:true});const r=document.createRange();r.selectNodeContents(target);r.collapse(!backwards);const s=getSelection();s.removeAllRanges();s.addRange(r);hideMathPalette();return true}
+    }
+    card._selectWhole?.();hideMathPalette();return true
+}
 function mathPanel(field){
     const bar=el('div','mathPalette');
-    const symbols=[['分数',String.raw`\frac{#0}{#?}`],['上标','^{#?}'],['下标','_{#?}'],['根号',String.raw`\sqrt{#0}`],['积分',String.raw`\int_{#?}^{#?}`],['求和',String.raw`\sum_{#?}^{#?}`],['矩阵',String.raw`\begin{pmatrix}#?&#?\\#?&#?\end{pmatrix}`],['偏导',String.raw`\partial`],['矢量',String.raw`\vec{#0}`],['α',String.raw`\alpha`],['β',String.raw`\beta`],['ρ',String.raw`\rho`],['μ',String.raw`\mu`],['σ',String.raw`\sigma`],['ω',String.raw`\omega`],['π',String.raw`\pi`],['±',String.raw`\pm`],['≤',String.raw`\le`]];
-    for(const [name,value] of symbols){const b=btn(name,()=>{field.focus();field.insert(value,{insertionMode:'replaceSelection'});field.dispatchEvent(new Event('input',{bubbles:true}))});b.addEventListener('pointerdown',e=>e.preventDefault());bar.append(b)}
-    bar.append(btn('数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}));return bar
+    const symbols=[['分数',String.raw`\frac{#@}{#?}`],['上标','^{#?}'],['下标','_{#?}'],['根号',String.raw`\sqrt{#@}`],['积分',String.raw`\int_{#?}^{#?}`],['求和',String.raw`\sum_{#?}^{#?}`],['矩阵',String.raw`\begin{pmatrix}#?&#?\\#?&#?\end{pmatrix}`],['偏导',String.raw`\partial`],['矢量',String.raw`\vec{#@}`],['α',String.raw`\alpha`],['β',String.raw`\beta`],['ρ',String.raw`\rho`],['μ',String.raw`\mu`],['σ',String.raw`\sigma`],['ω',String.raw`\omega`],['π',String.raw`\pi`],['±',String.raw`\pm`],['≤',String.raw`\le`]];
+    const glyphs=['a/b','xⁿ','xᵢ','√','∫','∑','▦','∂','x⃗'];
+    for(const [i,[name,value]] of symbols.entries()){const b=btn(glyphs[i]||name,()=>{
+        if(!editingEnabled||!field.isConnected)return;field.focus();
+        // The initial square is only a visible insertion point, not an operand.
+        if(field.value==='\\square'&&!field.selectionIsCollapsed&&field.getValue(field.selection,'latex')==='\\square'){
+            field.insert(value.replaceAll('#@','#?'),{insertionMode:'replaceSelection',selectionMode:'placeholder'})
+        }else field.insert(value,{insertionMode:'replaceSelection',selectionMode:'placeholder'});
+        field.dispatchEvent(new Event('input',{bubbles:true}))
+    });b.title=name;b.setAttribute('aria-label',name);b.addEventListener('pointerdown',e=>e.preventDefault());bar.append(b)}
+    const keyboard=btn('数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()});keyboard.addEventListener('pointerdown',e=>e.preventDefault());bar.append(keyboard);return bar
 }
 // A note marker is a selectable reference, not an editable text character.
 const noteLabelSelector='.inlineAnnotation,.objectNoteMarker,.freeNoteMarker,.noteWindowHandle';
@@ -122,20 +183,20 @@ function visualRich(raw,changed,compact=false,allowRefs=true){
     for(const p of host.querySelectorAll('[data-wb-token]')){
         const t=tokens[Number(p.dataset.wbToken)];if(!t){p.remove();continue}
         if(t.kind==='math'){
-            const f=visualMath(t.value,false,()=>changed());f.dataset.inline='1';p.replaceWith(f);
+            const f=visualMath(t.value,false,()=>changed());p.replaceWith(inlineMathAtom(f));
         }else p.replaceWith(visualRef(t.kind,t.value,allowRefs))
     }
     if(!host.childNodes.length)host.append(el('p'));
     host.addEventListener('input',()=>{if(editingEnabled)changed()});
     // Avoid pasting untrusted HTML; recognized structured text is handled by the parent.
-    host.addEventListener('paste',e=>{if(e.defaultPrevented)return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed()});
+    host.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed()});
     return host
 }
 function richMarkdown(host,fragment=false){
     function walk(n){
         if(n.nodeType===Node.TEXT_NODE)return (n.textContent||'').replace(/\u00a0/g,' ');
         if(n.nodeType!==Node.ELEMENT_NODE)return '';
-        if(n.tagName==='MATH-FIELD')return '$'+(n.dataset.tex??(n._texChanged?n.value:n._texOriginal||n.value||''))+'$';
+        if(n.tagName==='MATH-FIELD')return '$'+((n.dataset.tex??(n._texChanged?n.value:n._texOriginal||n.value||''))||' ')+'$';
         if(n.dataset.token)return n.dataset.token;
         const inner=[...n.childNodes].map(walk).join('');
         if(n.tagName==='BR')return '\n';
@@ -363,7 +424,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!card||card.parentElement!==body)card=cards().filter(c=>c.getClientRects().length).sort((a,b)=>{const d=c=>{const r=c.getBoundingClientRect();return Math.max(r.top-y,y-r.bottom,0)};return d(a)-d(b)})[0];
         if(!card)return null;
         if(card._part.kind!=='text')return edge(card,compare(fixed,edge(card,false))<=0);
-        const atom=hits.map(n=>n.closest('.inlineAnnotation,math-field,[data-token]')).find(n=>n&&card.contains(n));
+        const atom=hits.map(n=>n.closest('.inlineMathAtom')||n.closest('.inlineAnnotation,math-field,[data-token]')).find(n=>n&&card.contains(n));
         if(atom){const r=document.createRange();r.selectNode(atom);return compare(fixed,point(r.startContainer,r.startOffset))<=0?point(r.endContainer,r.endOffset):point(r.startContainer,r.startOffset)}
         const area=card.querySelector('.richText'),r=document.caretRangeFromPoint?.(x,y);
         if(r&&area.contains(r.startContainer)&&!(r.startContainer.nodeType===1?r.startContainer:r.startContainer.parentElement)?.closest('math-field,[data-token]'))return point(r.startContainer,r.startOffset);
@@ -557,7 +618,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         }
     }
     function atomicAt(area,caret,forward){
-        const atoms=[...area.querySelectorAll('math-field,[data-token],img')];
+        const atoms=[...area.querySelectorAll('math-field,[data-token],img')].map(n=>n.closest('.inlineMathAtom')||n);
         if(!forward)atoms.reverse();
         for(const atom of atoms){
             const edge=document.createRange();edge.selectNode(atom);edge.collapse(forward);
@@ -704,6 +765,18 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const last=frag.lastChild;if(!last)return;
         r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember()})
     }
+    function addFormula(area,caret,anchor,standalone=false){
+        if(!requireEditMode()||!root.isConnected)return;
+        clearMixed();clearObject();
+        if(!standalone&&area?.isConnected&&root.contains(area)){
+            focused=area;selectedPart=area.closest('.visualCard')?._part;selection=caret;
+            const field=visualMath('\\square',false,()=>area.dispatchEvent(new Event('input',{bubbles:true})));
+            insertInline(inlineMathAtom(field));field.focus();field.executeCommand?.('selectAll');return
+        }
+        const id='eq-'+uid(),tex='\\square';
+        add({kind:'equation',id,flags:'',body:tex,raw:':::equation '+id+'\n'+tex+'\n:::'},anchor);
+        cards().find(c=>c._part.id===id)?.querySelector('math-field')?.executeCommand?.('selectAll')
+    }
     function insertMenu(){return internal?[]:[
         ['插入交叉引用',()=>visualPick(s=>{const m=[...s.matchAll(refPattern())][0];if(m)insertInline(visualRef(m[1],m[2]))})]
     ]}
@@ -713,10 +786,16 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const anchor=card?._part||parts.at(-1);
         const range=getSelection()?.rangeCount?getSelection().getRangeAt(0):null;
         const caret=area&&range&&area.contains(range.commonAncestorContainer)?range.cloneRange():null;
-        return insertMenu().map(([name,action])=>[name,()=>{
+        const hit=!e.useCurrentSelection&&area&&document.caretRangeFromPoint?.(e.clientX,e.clientY);
+        const position=caret&&!caret.collapsed?caret:hit&&area.contains(hit.startContainer)&&!hit.startContainer.parentElement?.closest('math-field')?hit:caret;
+        const formulas=e.target.closest('math-field')?[]:[
+            ['添加公式',()=>addFormula(area,position,anchor)],
+            ...(area?[['添加独立公式',()=>addFormula(null,null,anchor,true)]]:[])
+        ];
+        return [...formulas,...insertMenu().map(([name,action])=>[name,()=>{
             selectedPart=anchor;focused=area&&root.contains(area)?area:null;selection=focused?caret:null;
             action()
-        }])
+        }])]
     };
     root._blankMenu=e=>{
         const cards=[...body.children];const before=cards.filter(c=>c.getBoundingClientRect().top<=e.clientY).at(-1);
@@ -738,7 +817,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function bindRich(area,p){
         area.addEventListener('focusin',()=>{focused=area;selectedPart=p;clearObject()});
         area.addEventListener('keyup',remember);area.addEventListener('pointerup',remember);
-        area.addEventListener('paste',e=>{const text=e.clipboardData?.getData('text/plain')||'';
+        area.addEventListener('paste',e=>{if(e.target.closest('math-field'))return;const text=e.clipboardData?.getData('text/plain')||'';
             if(pasteSubfigure(text,p)){e.preventDefault();e.stopImmediatePropagation();return}
             if(pasteImage(e,p))return;
             if(rangeNoteClipboardValue(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
@@ -749,7 +828,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             if(/\[\[(ref|eqref|cite):[^\]\n]+\]\]/.test(text)&&!/\[\[embed:/.test(text)){e.preventDefault();e.stopImmediatePropagation();pasteInline(area,text);return}
             if(/(\[\[embed:|\$[^$\n]+\$)/m.test(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p)}
         },true)
-        area.addEventListener('copy',e=>{const s=window.getSelection();if(!s?.rangeCount||s.isCollapsed||!area.contains(s.getRangeAt(0).commonAncestorContainer))return;const clone=s.getRangeAt(0).cloneContents();if(!clone.querySelector('[data-token]'))return;const holder=el('div');holder.append(clone);e.clipboardData.setData('text/plain',richMarkdown(holder));e.preventDefault()});
+        area.addEventListener('copy',e=>{if(e.target.closest('math-field'))return;const s=window.getSelection();if(!s?.rangeCount||s.isCollapsed||!area.contains(s.getRangeAt(0).commonAncestorContainer))return;const clone=s.getRangeAt(0).cloneContents();if(!clone.querySelector('[data-token],math-field'))return;const holder=el('div');holder.append(clone);e.clipboardData.setData('text/plain',richMarkdown(holder));e.preventDefault()});
     }
     function objectRaw(p){p.raw=':::'+p.kind+' '+p.id+(p.flags?' '+p.flags:'')+'\n'+p.body+'\n:::';flush()}
     function draw(){
@@ -786,8 +865,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             }else if(p.kind==='text'){
                 const area=visualRich(p.raw,()=>{p.raw=richMarkdown(area);flush()},false,!internal);bindRich(area,p);content.append(area)
             }else if(p.kind==='equation'){
-                const field=visualMath(p.body.trim(),true,value=>{p.body=value;objectRaw(p)}),palette=mathPanel(field);content.append(field,palette);
-                extra=[['公式输入工具',()=>{card.classList.add('showMathTools');field.focus()}],['数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}],['复制公式',()=>copy(p.body)]]
+                const field=visualMath(p.body.trim(),true,value=>{p.body=value;objectRaw(p)});content.append(field);
+                field.addEventListener('focusin',()=>{clearMixed();clearObject();selectedPart=p});
+                extra=[['公式输入工具',()=>{field.focus();showMathPalette(field)}],['数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}],['复制公式',()=>copy(p.body)]]
             }else if(p.kind==='figure'){
                 const lines=p.body.split('\n'),caption=lines.shift()||'',rest=lines.join('\n').trim();
                 const cap=visualRich(caption,()=>{p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+imageSource;objectRaw(p)},true,!internal);
