@@ -595,11 +595,11 @@ function closeHistoricalVersion(redraw=true){
     active=0;
     if(redraw){renderNav();renderPanes()}
 }
-function openHistoricalVersion(entry,past,objectId=null,mode='version'){
+function openHistoricalVersion(entry,past,objectId=null,mode='version',comparison=null){
     captureReading();
     const previous=panes[1]?.history?panes[1].history.previous:panes[1]||null;
     const selected=objectId||[...past.thesis,...past.blocks].find(n=>n.id===panes[0]?.id)?.id||past.thesis[0]?.id||past.blocks[0]?.id||null;
-    panes[1]={id:previous?.id||panes[0]?.id||null,edit:false,history:{entry,past,objectId,selected,previous,mode}};
+    panes[1]={id:previous?.id||panes[0]?.id||null,edit:false,history:{entry,past,objectId,selected,previous,mode,comparison}};
     if(dialog.open)dialog.close();$('menu').hidden=true;mobileClose();active=1;renderNav();renderPanes();
 }
 function historyPageNodes(doc,id){
@@ -707,13 +707,15 @@ function historyPageNotes(doc,nodes){
     return doc.blocks.filter(n=>!ids.has(n.id)&&(embedded.has(n.id)||objectNoteBindings(n).some(b=>ids.has(b.targetId))||freeNotePlacements(n).some(p=>ids.has(p.pageId))));
 }
 function renderHistoryDiff(host,h){
-    const id=panes[0]?.id,oldNodes=historyPageNodes(h.past,id),newNodes=historyPageNodes(db,id);
-    const oldNotes=historyPageNotes(h.past,oldNodes),newNotes=historyPageNotes(db,newNodes);
+    const id=panes[0]?.id,oldDoc=h.comparison?h.comparison.doc:h.past,newDoc=h.comparison?h.past:db;
+    const oldNodes=historyPageNodes(oldDoc,id),newNodes=historyPageNodes(newDoc,id);
+    const oldNotes=historyPageNotes(oldDoc,oldNodes),newNotes=historyPageNotes(newDoc,newNodes);
     const signature=JSON.stringify([id,oldNodes,newNodes,oldNotes,newNotes]);
     if(host._diffSignature===signature)return;
     host._diffSignature=signature;host.replaceChildren();
     if(!id){host.append(el('p','muted','请在首页打开要比较的章节或批注。'));return}
-    host.append(el('p','small','当前首页：'+(newNodes[0]?.title||oldNodes[0]?.title||id)+' · 历史版本 → 当前版本 · 行号以当前版本为准'));
+    const basis=h.comparison?(h.comparison.entry?.id.slice(0,8)||'初始空版本')+' → '+h.entry.id.slice(0,8)+' · 行号以选中版本为准':'历史版本 → 当前版本 · 行号以当前版本为准';
+    host.append(el('p','small','当前首页：'+(newNodes[0]?.title||oldNodes[0]?.title||id)+' · '+basis));
     let changes=false;
     function sections(oldList,newList,notes=false){
         const before=new Map(oldList.map(n=>[n.id,n])),after=new Map(newList.map(n=>[n.id,n]));
@@ -927,16 +929,28 @@ async function showHistory(objectId=null){
     const expand=btn('全部展开',()=>{const groups=[...list.querySelectorAll('details.historyGroup')];const opened=groups.every(x=>x.open);groups.forEach(x=>x.open=!opened);expand.textContent=opened?'全部展开':'全部折叠'});
     heading.append(scope,expand);d.append(heading);
     const list=el('div','historyList');d.append(list);
-    let entries=[],more=true,loading=false,viewSequence=0;
+    let entries=[],more=true,loading=null,viewSequence=0;
     const valid=()=>dialog.open&&d.contains(list)&&list.isConnected&&workspace===currentWorkspace?.id;
     function date(t){return new Date(t).toLocaleDateString()}
     function clock(t){return new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
-    async function preview(entry){
+    const auto=entry=>!entry.tag&&['editor','migration','initial'].includes(entry.source);
+    const sameGroup=(newer,older)=>auto(newer)&&auto(older)&&date(newer.time)===date(older.time)&&Math.abs(new Date(newer.time)-new Date(older.time))<=5*60*1000;
+    async function preview(entry,grouped=false,compareLive=false){
         const token=++viewSequence;
         try{
-            const past=await api(historyURL('/api/history/item',{id:entry.id}));
+            let base=null;
+            if(!compareLive){
+                let i=entries.findIndex(x=>x.id===entry.id);
+                if(i<0)return;
+                while(true){
+                    if(i+1>=entries.length&&more){if(!await fetchMore()||!valid()||token!==viewSequence)return;continue}
+                    if(grouped&&entries[i+1]&&sameGroup(entries[i],entries[i+1])){i++;continue}
+                    base=entries[i+1]||null;break;
+                }
+            }
+            const [past,baseDoc]=await Promise.all([api(historyURL('/api/history/item',{id:entry.id})),base?api(historyURL('/api/history/item',{id:base.id})):null]);
             if(!valid()||token!==viewSequence)return;
-            openHistoricalVersion(entry,past,objectId,'diff');
+            openHistoricalVersion(entry,past,objectId,'diff',compareLive?null:{entry:base,doc:baseDoc||{thesis:[],blocks:[]}});
         }catch(e){if(valid())showToast(e.message)}
     }
     function row(entry){
@@ -959,7 +973,7 @@ async function showHistory(objectId=null){
             input.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();const value=input.value.trim();if(value)setName(value);else showToast('请输入版本名称')}else if(e.key==='Escape'){e.preventDefault();input.replaceWith(name)}};
             input.onblur=()=>{if(input.isConnected)input.replaceWith(name)};
         }
-        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['复制版本 ID',()=>copy(entry.id)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
+        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['与当前版本比较',()=>preview(entry,false,true)],['复制版本 ID',()=>copy(entry.id)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
         context(r,menu,null,true);
         r.append(btn('⋯',e=>menuAt(e,menu()),'historyMore'));if(entry.tag)r.classList.add('named');return r;
     }
@@ -968,14 +982,14 @@ async function showHistory(objectId=null){
         list.replaceChildren();
         let day='',group=null,last=null;
         for(const entry of entries){
-            const nextDay=date(entry.time),auto=!entry.tag&&['editor','migration','initial'].includes(entry.source);
+            const nextDay=date(entry.time);
             if(day!==nextDay){day=nextDay;group=null;list.append(el('h4','historyDate',day))}
-            if(!auto){group=null;list.append(row(entry))}
+            if(!auto(entry)){group=null;list.append(row(entry))}
             else{
-                if(!group||!last||Math.abs(new Date(last.time)-new Date(entry.time))>5*60*1000){
+                if(!group||!last||!sameGroup(last,entry)){
                     group=el('details','historyGroup');group.dataset.group=entry.id;group.open=opened.has(entry.id);
-                    const summary=el('summary'),versions=group;group.append(summary);group._summary=summary;group._count=0;group._first=entry.time;list.append(group);
-                    context(summary,()=>[[versions.open?'折叠版本组':'展开版本组',()=>{versions.open=!versions.open}]],null,true);
+                    const summary=el('summary'),versions=group,groupTitle=btn('',e=>{e.preventDefault();e.stopPropagation();preview(entry,true)},'historyGroupTitle');summary.append(groupTitle);group.append(summary);group._summary=groupTitle;group._count=0;group._first=entry.time;list.append(group);
+                    context(summary,()=>[[versions.open?'折叠版本组':'展开版本组',()=>{versions.open=!versions.open}],['查看差异',()=>preview(entry,true)],['与当前版本比较',()=>preview(entry,true,true)]],null,true);
                     versions.addEventListener('toggle',()=>{expand.textContent=[...list.querySelectorAll('details.historyGroup')].every(x=>x.open)?'全部折叠':'全部展开'});
                 }
                 group.append(row(entry));group._count++;group._summary.textContent=clock(entry.time)+'–'+clock(group._first)+' · '+group._count+' 个自动版本';
@@ -986,10 +1000,12 @@ async function showHistory(objectId=null){
         if(more)list.append(btn('加载更多',fetchMore));
     }
     async function fetchMore(){
-        if(loading||!valid())return;loading=true;
-        try{const result=await api(historyURL('/api/history',{offset:entries.length,limit:100,...(objectId?{object:objectId}:{})}));if(!valid())return;entries.push(...result.items);more=result.more;draw()}
-        catch(e){if(valid())list.replaceChildren(el('p','muted',e.message))}
-        finally{loading=false}
+        if(!valid())return false;if(loading)return loading;
+        loading=(async()=>{
+            try{const result=await api(historyURL('/api/history',{offset:entries.length,limit:100,...(objectId?{object:objectId}:{})}));if(!valid())return false;entries.push(...result.items);more=!!result.more&&result.items.length>0;draw();return true}
+            catch(e){if(valid())showToast(e.message);return false}
+        })();
+        try{return await loading}finally{loading=null}
     }
     list.append(el('p','small','加载历史…'));await fetchMore();
 }
@@ -1111,6 +1127,7 @@ const MODE_TOOL='切换查看/编辑模式';
 const MORE_TOOL='更多操作';
 const MORE_ACTIONS=new Set(['添加公式','添加独立公式','插入交叉引用']);
 const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','查看历史版本','查看差异','复制版本 ID','恢复版本','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
+readOnlyActions.add('与当前版本比较');
 // Annotation editing is independent of the global thesis editing switch.
 function canEditControl(node){return editingEnabled||!!(node?._noteEditor||node?.closest?.('.visualDocument')?._internalObjects)}
 function modeMenuItems(items,target){

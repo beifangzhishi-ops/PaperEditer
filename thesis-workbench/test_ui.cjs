@@ -63,7 +63,10 @@ async function fixture(browser,mobile=false,shared=null,legacy=null){
             if(shared)shared.state=next;else ownState=next;
             return r.fulfill({json:{revision}});
         }
-        if(shared?.history&&name==='/api/history')return r.fulfill({json:{items:shared.history,more:false,total:shared.history.length}});
+        if(shared?.history&&name==='/api/history'){
+            const offset=Number(u.searchParams.get('offset')||0),limit=shared.historyPageSize||Number(u.searchParams.get('limit')||100);
+            return r.fulfill({json:{items:shared.history.slice(offset,offset+limit),more:offset+limit<shared.history.length,total:shared.history.length}})
+        }
         if(shared?.history&&name==='/api/history/item')return r.fulfill({json:shared.versions[u.searchParams.get('id')]});
         if(shared?.history&&name==='/api/history/tag'){
             const req=r.request().postDataJSON(),entry=shared.history.find(x=>x.id===req.id)||shared.history[0];
@@ -592,11 +595,34 @@ async function checkGroupedUndo(browser,mobile){
     await history(false);assert.equal((await note.innerText()).trim(),'');await history(true);assert.equal((await note.innerText()).trim(),'note');
     assert.deepEqual(errors,[]);await context.close()
 }
+async function checkHistoryPointDiff(browser,mobile){
+    const workspace={...data.state.workspace,history:true};
+    const entries=['e','d','c','b','a'].map((x,i)=>({id:x.repeat(40),time:'2026-11-26T10:'+String(10-i*2).padStart(2,'0')+':00Z',source:i===0||i===4?'agent':'editor',message:x,tag:i===0||i===4?{id:x,name:x.toUpperCase()}:null}));
+    const versions=Object.fromEntries(entries.map((e,i)=>{const s=structuredClone(data.state);s.thesis[0].body='Version '+e.message.toUpperCase()+'\n';return [e.id,s]}));
+    const shared={workspace,state:structuredClone(data.state),reading:{},recent:[],history:entries,versions,historyPageSize:2};
+    const {p,context,errors}=await fixture(browser,mobile,shared);
+    const open=async()=>{await headerControl(p,'historyButton',mobile?'tap':'click');await p.locator('.historyGroup').first().waitFor()};
+    const close=()=>p.evaluate(()=>closeHistoricalVersion());
+    const diff=(old,now)=>p.waitForFunction(([old,now])=>{const h=panes[1]?.history;return h?.entry.message===now&&h.comparison?.entry?.message===old&&document.querySelector('.historyPageDiff')?.textContent.includes('Version')},[old,now]);
+    await open();await p.locator('.historyRow.named .historyTitle').first().click();await diff('d','e');await close();
+    await open();await p.locator('.historyGroupTitle').click();await diff('a','d');
+    assert((await p.locator('.historyPageDiff .historyRemoved').allTextContents()).join('').includes('A'));
+    assert((await p.locator('.historyPageDiff .historyAdded').allTextContents()).join('').includes('D'));
+    await p.evaluate(()=>{find('demo-start').body='Live edit';change(false)});
+    assert(!(await p.locator('.historyPageDiff').textContent()).includes('Live edit'));await close();
+    await open();await p.evaluate(()=>{document.querySelector('.historyGroup').open=true});await p.locator('.historyGroup .historyTitle').first().click();await diff('c','d');await close();
+    await open();await p.evaluate(()=>{document.querySelector('.historyGroup').open=true});await p.locator('.historyGroup .historyRow').first().locator('.historyMore').click();await menu(p,'与当前版本比较').click();
+    await p.waitForFunction(()=>panes[1]?.history?.entry.message==='d'&&!panes[1].history.comparison);assert.match((await p.locator('.historyPageDiff .historyAdded').allTextContents()).join(' '),/Live\s+edit/);
+    await close();await open();await p.getByRole('button',{name:'加载更多',exact:true}).click();await p.getByRole('button',{name:'加载更多',exact:true}).click();await p.locator('.historyRow.named .historyTitle').last().click();
+    await p.waitForFunction(()=>panes[1]?.history?.entry.message==='a'&&panes[1].history.comparison?.entry===null);assert((await p.locator('.historyPageDiff .historyAdded').allTextContents()).join('').includes('Version A'));
+    assert.deepEqual(errors,[]);await context.close()
+}
 async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
         if(process.argv.includes('--grouped-undo-only')){await checkGroupedUndo(browser,false);await checkGroupedUndo(browser,true);console.log('PASS: grouped typing, deletion, pauses, caret movement, paragraph, paste, IME, title, note undo and redo on desktop/mobile');return}
+        if(process.argv.includes('--history-point-only')){await checkHistoryPointDiff(browser,false);await checkHistoryPointDiff(browser,true);console.log('PASS: previous point, folded group across pagination, expanded row, initial version and live comparison on desktop/mobile');return}
         if(process.argv.includes('--figure-rows-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);
@@ -1081,7 +1107,7 @@ async function run(){
             assert.equal(await p.locator('.historyGroup').evaluate(x=>x.open),false);
             const group=p.locator('.historyGroup'),summary=group.locator('summary');
             await summary.click({button:'right'});
-            assert.deepEqual(await p.locator('#menu button').allTextContents(),['展开版本组']);
+            assert.deepEqual(await p.locator('#menu button').allTextContents(),['展开版本组','查看差异','与当前版本比较']);
             await menu(p,'展开版本组').click();
             assert.equal(await group.evaluate(x=>x.open),true);
             const groupedRow=group.locator('.historyRow').first(),groupedId=await groupedRow.getAttribute('data-commit');
@@ -1099,7 +1125,7 @@ async function run(){
             const rename=p.getByRole('textbox',{name:'版本名称'});await rename.fill('Renamed');await rename.press('Enter');
             await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
             const liveBody=await p.evaluate(()=>find('demo-start').body);
-            await p.locator('.historyRow').filter({hasText:'Renamed'}).locator('.historyTitle').click();
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'与当前版本比较').click();
             await p.locator('#panes > .historicalPane').waitFor();
             assert.equal(await p.locator('#panes > .pane').count(),2);
             assert((await p.locator('.historyPageDiff').innerText()).includes('Historical body.'));
@@ -1122,7 +1148,7 @@ async function run(){
             assert.equal(await p.locator('#panes > .pane').count(),1);
             await headerControl(p,'historyButton','click');
             await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
-            await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'查看差异').click();
+            await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'与当前版本比较').click();
             await p.locator('.historyPageDiff').waitFor();assert((await p.locator('.historyPageDiff').innerText()).includes('Historical body.'));
             await p.getByRole('button',{name:'关闭历史',exact:true}).click();
             await headerControl(p,'historyButton','click');
@@ -1146,7 +1172,7 @@ async function run(){
             assert.equal(await mobile.p.evaluate(()=>editingEnabled),false);
             for(const [id,body,count] of [[a.id,data.state.thesis[0].body,2],[b.id,past.thesis[0].body,3]]){
                 await headerControl(mobile.p,'historyButton','tap');
-                await mobile.p.locator('.historyGroup summary').tap();
+                await mobile.p.locator('.historyGroup summary').click({button:'right'});await menu(mobile.p,'展开版本组').tap();
                 await mobile.p.locator(`.historyRow[data-commit="${id}"] .historyMore`).tap();
                 assert(await menu(mobile.p,'恢复版本').isEnabled());
                 await menu(mobile.p,'恢复版本').tap();
