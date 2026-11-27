@@ -10,6 +10,19 @@ const figureImagePattern=()=>/!\[([^\]]*)\]\((\/assets\/[^\s)]+)(?:\s+"([^"]*)")
 function figureImageId(title,parent,index){return title?.match(/(?:^|\s)wb-id:([^\s"]+)/)?.[1]||'subfig-'+parent+'-'+(index+1)}
 function figureImageMarkup(alt,url,title,id){const meta=(title||'').replace(/(?:^|\s)wb-id:[^\s"]+/g,'').trim();return '!['+alt+']('+url+' "'+[meta,'wb-id:'+id].filter(Boolean).join(' ')+'")'}
 function normalizeFigureImages(s,parent){let i=0;return s.replace(figureImagePattern(),(m,alt,url,title)=>figureImageMarkup(alt,url,title,figureImageId(title,parent,i++)))}
+// A physical source line is an explicit image row. Keep older single-image
+// lines unchanged, and never discard non-image Markdown from legacy figures.
+function figureImageRows(source){
+    const rows=[];
+    for(const line of source.split(/\r?\n/)){
+        if(!line.trim())continue;
+        const images=[...line.matchAll(figureImagePattern())].map(m=>m[0]);
+        if(!images.length||line.replace(figureImagePattern(),'').trim())return null;
+        rows.push(images)
+    }
+    return rows
+}
+function figureWidth(title,fallback=100){return Math.max(1,Math.min(100,Number(title?.match(/(?:^|\s)wb-width:(\d+(?:\.\d+)?)(?:\s|$)/)?.[1]||fallback)||100))}
 function subfigureLetter(i){let s='';for(i++;i>0;i=Math.floor((i-1)/26))s=String.fromCharCode(97+(i-1)%26)+s;return s}
 let db, view='thesis', panes=[{id:null,edit:false}], active=0, open=new Set(), targets=new Map(), numbers=new Map(), aliases=new Map(), search='', dragging=null, timer, saving=false, dirty=false, conflict=false, version=0, toastTimer, longTimer;
 let undoStack=[], redoStack=[];
@@ -591,7 +604,22 @@ function historyRenderedPart(p,showId=false){
     else{
         const box=el('section','historicalObject');box.append(el('div','small',({equation:'公式',figure:'图',table:'表'}[p.kind]||'')+(showId?' · '+p.id:'')));
         if(p.kind==='equation'){const m=el('div','mathscroll historicalMath');math(m,p.body.trim(),true);box.append(m)}
-        else historyMarkdown(p.body,box);
+        else if(p.kind==='figure'){
+            const [caption,...rest]=p.body.split('\n'),rows=figureImageRows(rest.join('\n'));
+            if(rows){
+                const images=el('div','figureImageRows');let index=0;
+                for(const marks of rows){
+                    const row=el('div','figureImageRow');
+                    for(const mark of marks){
+                        const m=[...mark.matchAll(figureImagePattern())][0],wrap=el('div','historicalFigureImage'),img=el('img');
+                        wrap.dataset.subfigure=figureImageId(m[3],p.id,index++);wrap.style.width=figureWidth(m[3])+'%';
+                        img.src=m[2];img.alt=m[1];wrap.append(img);row.append(wrap)
+                    }
+                    images.append(row)
+                }
+                box.append(images);historyMarkdown(caption,box)
+            }else historyMarkdown(p.body,box)
+        }else historyMarkdown(p.body,box);
         host.append(box);
     }
     return host;
@@ -1793,18 +1821,29 @@ function markdown(raw,host,trail=[],onImageResize=null){
     let imageIndex=-1;
     for(const img of fragment.querySelectorAll('img')){
         if(!img.getAttribute('src')?.startsWith('/assets/')){img.replaceWith(el('span','badref','图片来源不在本地资源目录'));continue}
-        const index=++imageIndex,src=img.getAttribute('src'),key='wb-image-width:'+src,stored=img.title.match(/(?:^|\s)wb-width:(\d+(?:\.\d+)?)(?:\s|$)/);
-        const wrap=el('div','imgwrap resizeImage');let w=Math.max(10,Math.min(100,Number(stored?.[1]||(onImageResize?100:localStorage.getItem(key))||100)));wrap.style.width=w+'%';img.removeAttribute('title');
+        const index=++imageIndex,src=img.getAttribute('src'),key='wb-image-width:'+src;
+        const wrap=el('div','imgwrap resizeImage');let w=figureWidth(img.title,onImageResize?100:localStorage.getItem(key)||100);wrap.style.width=w+'%';img.removeAttribute('title');
+        wrap._setImageWidth=value=>{w=value;wrap.style.width=w+'%'};
+        wrap._getImageWidth=()=>w;
         function activate(){document.querySelectorAll('.resizeImage.selectedImage').forEach(x=>{if(x!==wrap)x.classList.remove('selectedImage')});wrap.classList.add('selectedImage');wrap.closest('.visualCard')?._selectImage?.(wrap);wrap.closest('.visualDocument')?.focus({preventScroll:true})}
         function full(){const d=showDialog(img.alt||'图片');const f=el('img','imagefull');f.src=src;d.append(f,btn('打开原图',()=>window.open(src,'_blank','noopener')))}
-        function commit(){if(onImageResize)onImageResize(src,w,index);else localStorage.setItem(key,String(w))}
+        function commit(widths=null){if(onImageResize)onImageResize(src,w,index,widths);else localStorage.setItem(key,String(w))}
         img.loading='lazy';img.draggable=false;img.addEventListener('click',e=>{e.stopPropagation();activate()});img.addEventListener('dblclick',e=>{e.stopPropagation();full()});
         img.replaceWith(wrap);wrap.append(img);context(wrap,()=>[['查看原图',full],['恢复原始显示大小',()=>{w=100;wrap.style.width='100%';commit()}],...(wrap.closest('.visualCard')?._menu?.()||[])]);
         for(const corner of ['nw','ne','sw','se']){
             const h=el('span','resizeHandle '+corner);h.setAttribute('role','button');h.setAttribute('aria-label','拖动图片'+corner+'角缩放');wrap.append(h);
             h.addEventListener('pointerdown',e=>{if(!canEditControl(wrap))return;e.preventDefault();e.stopPropagation();activate();h.setPointerCapture(e.pointerId);const startX=e.clientX,startY=e.clientY,startW=wrap.getBoundingClientRect().width,startH=wrap.getBoundingClientRect().height,available=wrap.parentElement.clientWidth||startW,signX=corner.endsWith('e')?1:-1,signY=corner.startsWith('s')?1:-1;let moved=false;
-                const move=ev=>{const dx=(ev.clientX-startX)*signX,dy=(ev.clientY-startY)*signY*(startW/Math.max(1,startH));const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy;if(Math.abs(delta)>2)moved=true;w=Math.round(Math.max(10,Math.min(100,(startW+delta)/available*100))*10)/10;wrap.style.width=w+'%'};
-                const end=()=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);if(moved)commit()};h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
+                const siblings=wrap.parentElement.matches('.figureImageRow')?[...wrap.parentElement.querySelectorAll(':scope > .resizeImage')]:[wrap];
+                const other=siblings.filter(x=>x!==wrap).map(x=>({wrap:x,width:x.getBoundingClientRect().width,original:x._getImageWidth()}));
+                const total=other.reduce((s,x)=>s+x.width,0),usable=Math.max(1,available-(siblings.length-1)*10),initial=w;
+                const move=ev=>{const dx=(ev.clientX-startX)*signX,dy=(ev.clientY-startY)*signY*(startW/Math.max(1,startH));const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy;if(Math.abs(delta)>2)moved=true;if(!moved)return;
+                    if(other.length){
+                        const target=Math.max(1,Math.min(100-other.length,(startW+delta)/usable*100));
+                        wrap._setImageWidth(Math.round(target*10)/10);
+                        for(const x of other)x.wrap._setImageWidth(Math.round((100-target)*x.width/Math.max(1,total)*10)/10)
+                    }else wrap._setImageWidth(Math.round(Math.max(1,Math.min(100,(startW+delta)/available*100))*10)/10)
+                };
+                const end=ev=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);if(ev.type==='pointercancel'){wrap._setImageWidth(initial);for(const x of other)x.wrap._setImageWidth(x.original)}else if(moved)commit(other.length?siblings.map(x=>[Number(x.dataset.imageIndex),x._getImageWidth()]):null)};h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
             })
         }
     }

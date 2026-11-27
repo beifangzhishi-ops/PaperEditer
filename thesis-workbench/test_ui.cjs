@@ -566,6 +566,45 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--figure-rows-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                const source=':::figure row-fig\nCaption\n\n![A](/assets/demo.png "wb-id:row-a")\n\n![B](/assets/demo.png "wb-id:row-b") ![C](/assets/demo.png "wb-id:row-c")\n:::';
+                await p.evaluate(source=>{find('demo-start').body=source;select('demo-start',0);if(!editingEnabled)toggleEditMode()},source);
+                const fig=p.locator('.pane [data-object="row-fig"]'),rows=fig.locator('.figureImageRow'),images=fig.locator('.resizeImage');
+                const shape=()=>rows.evaluateAll(rs=>rs.map(r=>[...r.querySelectorAll('.resizeImage')].map(w=>w.dataset.subfigure)));
+                const click=loc=>mobile?loc.tap():loc.click();
+                assert.deepEqual(await shape(),[['row-a'],['row-b','row-c']]);
+                await click(fig.locator('.figureRowBreak'));
+                await p.keyboard.press('Backspace');
+                assert.deepEqual(await shape(),[['row-a','row-b','row-c']]);
+                const boxes=await images.evaluateAll(ws=>ws.map(w=>({x:w.offsetLeft,y:w.offsetTop,width:w.offsetWidth})));
+                assert(boxes.every(b=>b.y===boxes[0].y&&b.width>0)&&boxes[2].x>boxes[1].x&&boxes[1].x>boxes[0].x);
+                await click(fig.locator('.figureImageGap[data-slot="1"]'));await p.keyboard.press('Enter');
+                assert.deepEqual(await shape(),[['row-a'],['row-b','row-c']]);
+                await click(fig.locator('.figureRowBreak'));await p.keyboard.press('Delete');
+                assert.deepEqual(await shape(),[['row-a','row-b','row-c']]);
+                if(!mobile){
+                    const a=fig.locator('[data-subfigure="row-a"] img'),c=fig.locator('[data-subfigure="row-c"] img');
+                    await a.scrollIntoViewIfNeeded();const ab=await a.boundingBox(),cb=await c.boundingBox();
+                    await p.mouse.move(ab.x+ab.width/2,ab.y+ab.height/2);await p.mouse.down();await p.mouse.move(cb.x+cb.width-2,cb.y+cb.height/2,{steps:12});await p.mouse.up();
+                    assert.deepEqual(await shape(),[['row-b','row-c','row-a']]);
+                    const b=fig.locator('[data-subfigure="row-b"]');await b.locator('img').click();
+                    const h=b.locator('.resizeHandle.se'),hb=await h.boundingBox(),oldWidth=await b.evaluate(w=>w.offsetWidth);
+                    await p.mouse.move(hb.x+hb.width/2,hb.y+hb.height/2);await p.mouse.down();await p.mouse.move(hb.x+hb.width/2+35,hb.y+hb.height/2,{steps:8});await p.mouse.up();
+                    assert(await b.evaluate(w=>w.offsetWidth)>oldWidth);
+                    assert(await p.evaluate(()=>find('demo-start').body.includes('wb-width:')));
+                }
+                const saved=await p.evaluate(()=>find('demo-start').body);
+                await p.evaluate(()=>renderPanes());assert.equal(await rows.count(),1);
+                assert.equal(await p.evaluate(()=>find('demo-start').body),saved);
+                const historical=await p.evaluate(()=>{const part=visualParts(find('demo-start').body)[0],h=historyRenderedPart(part);return [...h.querySelectorAll('.figureImageRow')].map(r=>[...r.children].map(w=>w.dataset.subfigure))});
+                assert.deepEqual(historical,await shape());
+                await click(images.first().locator('img'));await p.keyboard.press('Delete');assert.equal(await images.count(),2);
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: figure rows, break insertion/deletion, drag reorder, resize, persistence, history, mobile and single-image deletion');return
+        }
         if(process.argv.includes('--viewport-lines-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);
