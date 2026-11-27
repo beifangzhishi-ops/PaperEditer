@@ -22,6 +22,8 @@ SPACES = ("thesis", "blocks")
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 OID = re.compile(r"[0-9a-f]{40,64}")
 ASSET = re.compile(r"[\w.-]+")
+UPLOADED_ASSET = re.compile(r"[0-9a-f]{24}\.(?:png|jpg|webp|gif)")
+UPLOADED_REF = re.compile(r'!\[[^\]\n]*\]\(/assets/([0-9a-f]{24}\.(?:png|jpg|webp|gif))(?=[\s)])')
 TAG = re.compile(r"[0-9a-f]{32}")
 REF = re.compile(r"\[\[(ref|eqref|embed|cite):([^\]\n]+)\]\]")
 
@@ -711,7 +713,17 @@ class Document:
                 raise RuntimeError("Legacy trash changed during migration")
         if self.filename.read_bytes() != raw:
             raise RuntimeError("Legacy manifest changed during migration")
-        staging.rename(self.historypath)
+        # Windows may briefly retain a handle to the newly created Git files
+        # (e.g. a scanner). Retry the same atomic rename, never replace an
+        # existing history directory or hide a persistent permission error.
+        for attempt in range(8):
+            try:
+                staging.rename(self.historypath)
+                break
+            except PermissionError as exc:
+                if os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32, 33) or self.historypath.exists() or attempt == 7:
+                    raise
+                time.sleep(.15 * (attempt + 1))
         self.replace(raw, doc)
 
     def read_doc(self):
@@ -800,6 +812,7 @@ class Document:
                     n["order"] = i
             next_doc["paragraphs"] = rebuild(doc, next_doc)
             register_example_resource(next_doc)
+            self.register_staged_images(next_doc)
             check_document(next_doc, self.validator)
             validate_annotation_locations(next_doc)
             reject_encoding_loss(doc, next_doc)
@@ -901,8 +914,56 @@ class Document:
                     os.fsync(f.fileno())
             next_doc = copy.deepcopy(doc)
             next_doc["assets"][name] = str(target.resolve())
+            next_doc.setdefault("assetHashes", {})[name] = digest(data)
             self.replace(self.local.raw, next_doc)
             self.record(next_doc, "Register image", "editor")
+
+    def stage_upload(self, name, data):
+        """Durably stage bytes without changing the document revision.
+
+        The next save referencing the content-addressed image registers it in
+        the same commit as the text. Staged files survive draft reload/restart.
+        """
+        if not UPLOADED_ASSET.fullmatch(name) or digest(data)[:24] != name.split('.')[0]:
+            raise ValueError("Invalid uploaded image name")
+        with self.transaction() as doc:
+            target = Path(doc['assets'].get(name) or Path(doc['uploadDirectory']) / name)
+            if target.exists():
+                if target.read_bytes() != data:
+                    raise ValueError("Asset collision")
+            elif name in doc['assets']:
+                raise FileNotFoundError(name)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                replace_bytes(target, data)
+
+    def staged_image(self, doc, name):
+        if not UPLOADED_ASSET.fullmatch(name):
+            raise FileNotFoundError(name)
+        target = Path(doc['uploadDirectory']) / name
+        if not target.is_file() or target.stat().st_size > 20 * 1024 * 1024:
+            raise FileNotFoundError(name)
+        data = target.read_bytes()
+        h = digest(data)
+        if h[:24] != name.split('.')[0]:
+            raise FileNotFoundError(name)
+        return target, data, h
+
+    def register_staged_images(self, doc):
+        nodes = doc['thesis'] + doc['blocks'] + [n for entry in doc['trash'] for n in entry['nodes']]
+        names = {name for node in nodes for name in UPLOADED_REF.findall(node['body'])}
+        missing = names - doc['assets'].keys()
+        if not missing:
+            return
+        doc['assets'] = dict(doc['assets'])
+        doc['assetHashes'] = dict(doc.get('assetHashes', {}))
+        for name in missing:
+            try:
+                target, _, h = self.staged_image(doc, name)
+            except FileNotFoundError:
+                continue  # Preserve existing behavior for unresolved references.
+            doc['assets'][name] = str(target.resolve())
+            doc['assetHashes'][name] = h
 
     def asset(self, name):
         with self.transaction() as doc:
@@ -910,7 +971,7 @@ class Document:
             if not path and name == EXAMPLE_IMAGE:
                 path = EXAMPLE_IMAGE_PATH
             if not path:
-                raise FileNotFoundError(name)
+                return self.staged_image(doc, name)[1]
             return Path(path).read_bytes()
 
     def history_list(self, offset=0, limit=100, object_id=None):

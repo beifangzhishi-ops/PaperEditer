@@ -171,6 +171,61 @@ class WorkspaceTests(unittest.TestCase):
                 finally:
                     http.shutdown();thread.join(timeout=5)
 
+    def test_realtime_edit_and_atomic_binary_image(self):
+        from document import EXAMPLE_IMAGE_PATH, Document
+        import time
+        root=Path(self.tmp.name)
+        with patch.object(server,'CONFIG',root/'settings.json'), patch.object(server,'PACKAGE',None), patch.object(server,'WORKSPACE_ERROR',None):
+            filename=root/'sync.json';info=server.new_workspace(str(filename))
+            server.PACKAGE.scan()
+            with server.WorkbenchServer(('127.0.0.1',0),server.Handler) as http:
+                thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+                url=f'http://127.0.0.1:{http.server_port}'
+                def get(path,headers=None):
+                    return urllib.request.urlopen(urllib.request.Request(url+path,headers=headers or {}),timeout=5)
+                def post(path,payload,ct='application/json'):
+                    data=json.dumps(payload).encode() if ct=='application/json' else payload
+                    req=urllib.request.Request(url+path,data=data,headers={'Content-Type':ct,'X-PaperEditer-Workspace':info['id']})
+                    with urllib.request.urlopen(req,timeout=5) as r:return json.load(r)
+                try:
+                    with get('/api/events') as stream:
+                        self.assertIn('text/event-stream',stream.headers['Content-Type'])
+                        def event():
+                            lines=[]
+                            while True:
+                                line=stream.readline()
+                                if line==b'\n':return b''.join(lines)
+                                if not line:raise AssertionError('Event stream closed')
+                                lines.append(line)
+                        self.assertIn(b'data: ready',event())
+                        initial=server.state();owner=initial['thesis'][0]['id']
+                        result=post('/api/cli/edit',{'revision':initial['revision'],'operations':[{'op':'update','id':owner,'body':'Remote CLI update.'}]})
+                        start=time.monotonic();self.assertIn(b'data: update',event());print('CLI event after response: %.1f ms'%((time.monotonic()-start)*1000))
+                        self.assertEqual(server.state()['revision'],result['revision'])
+                        before=server.state();count=server.PACKAGE.history_list()['total']
+                        image=EXAMPLE_IMAGE_PATH.read_bytes()
+                        result=post('/api/upload',image,'application/octet-stream');path=result['url'];name=path.rsplit('/',1)[1]
+                        self.assertEqual(post('/api/upload',image,'application/octet-stream'),result)
+                        self.assertEqual(server.state()['revision'],before['revision'])
+                        self.assertEqual(server.PACKAGE.history_list()['total'],count)
+                        self.assertNotIn(name,json.loads(filename.read_bytes())['assets'])
+                        # Staged images survive reopening the document and can be previewed.
+                        self.assertEqual(Document(filename,server.validate_document_state).asset(name),image)
+                        with get(path) as response:
+                            self.assertEqual(response.read(),image);etag=response.headers['ETag']
+                        with self.assertRaises(urllib.error.HTTPError) as cached:get(path,{'If-None-Match':etag})
+                        self.assertEqual(cached.exception.code,304);self.assertEqual(cached.exception.read(),b'')
+                        before['thesis'][0]['body']+='\n\n:::figure sync-image\nImage\n\n![Image]('+path+')\n:::\n'
+                        result=post('/api/save',before)
+                        self.assertIn(b'data: update',event())
+                        disk=json.loads(filename.read_bytes());self.assertIn(name,disk['assets'])
+                        self.assertEqual(disk['assetHashes'][name],hashlib.sha256(image).hexdigest())
+                        self.assertEqual(server.PACKAGE.history_list()['total'],count+1)
+                        server.PACKAGE.scan();self.assertEqual(server.state()['revision'],result['revision'])
+                        self.assertEqual(server.PACKAGE.history_list()['total'],count+1)
+                finally:
+                    http.shutdown();thread.join(timeout=5)
+
     def test_incomplete_workspace_is_not_overwritten(self):
         self.data.mkdir()
         sentinel = self.data / "outline.json"

@@ -1337,6 +1337,16 @@ async function run(){
             const edit=async(page,id,body)=>page.evaluate(([id,body])=>{find(id).body=body;change(true);clearTimeout(timer)},[id,body]);
             const a='Paragraph A.\n\n:::equation sync-eq\nx=1\n:::\n\nParagraph B.\n';
             await edit(p,'demo-start',a);await p.evaluate(()=>save());await q.waitForFunction(a=>find('demo-start').body===a,a);
+            // An idle caret must not hold a remote update until blur. Preserve
+            // an unchanged paragraph, and do not interrupt an active IME.
+            await p.evaluate(()=>{select('demo-start');const area=document.querySelector('.pane .part-text .richText');area.focus();const r=document.createRange();r.setStart(area.querySelector('p').firstChild,4);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r);area.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))});
+            const remoteBody=a.replace('Paragraph B.','Remote paragraph B.');
+            await edit(q,'demo-start',remoteBody);await q.evaluate(()=>save());await p.evaluate(()=>signalSync());
+            await p.waitForFunction(()=>syncNeeded);assert.equal(await p.evaluate(()=>find('demo-start').body),a);
+            await p.evaluate(()=>document.activeElement.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true})));
+            await p.waitForFunction(remote=>find('demo-start').body===remote&&!syncNeeded,remoteBody,{timeout:3500});
+            assert.equal(await p.evaluate(()=>document.activeElement.matches('.richText')&&getSelection().anchorOffset===4),true);
+            await edit(q,'demo-start',a);await q.evaluate(()=>save());await p.waitForFunction(a=>find('demo-start').body===a,a);
             // Separate paragraphs and formula in one section, same initial revision.
             await edit(q,'demo-start',a.replace('x=1','x=2'));await edit(p,'demo-start',a.replace('Paragraph A.','Paragraph A edited.'));
             await p.evaluate(()=>save());await q.evaluate(()=>save());

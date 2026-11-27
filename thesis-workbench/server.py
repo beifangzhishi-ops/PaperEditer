@@ -12,6 +12,13 @@ PACKAGE=None
 CONFIG=ROOT/'workspace.local.json'
 WORKSPACE_ERROR=None
 LOCK=threading.RLock()
+CHANGE_EVENT=threading.Condition()
+CHANGE_GENERATION=0
+def notify_change():
+    global CHANGE_GENERATION
+    with CHANGE_EVENT:
+        CHANGE_GENERATION+=1
+        CHANGE_EVENT.notify_all()
 def settings_load():
     return json.loads(CONFIG.read_text(encoding='utf-8')) if CONFIG.is_file() else {}
 def settings_save(settings):
@@ -250,13 +257,35 @@ def save_legacy(payload):
 class Handler(BaseHTTPRequestHandler):
     protocol_version='HTTP/1.1'
     def log_message(self,fmt,*args):print(now(),fmt%args,flush=True)
-    def respond(self,code,data,ct='application/json; charset=utf-8'):
+    def respond(self,code,data,ct='application/json; charset=utf-8',etag=None):
         if not isinstance(data,bytes):data=json.dumps(data,ensure_ascii=False).encode('utf-8')
-        self.send_response(code);self.send_header('Content-Type',ct);self.send_header('Content-Length',str(len(data)))
-        self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
+        self.send_response(code);self.send_header('Content-Type',ct)
+        if code!=304:self.send_header('Content-Length',str(len(data)))
+        self.send_header('Cache-Control','private, no-cache' if etag else 'no-store');self.send_header('X-Content-Type-Options','nosniff')
+        if etag:self.send_header('ETag',etag)
         self.send_header('Connection','close');self.close_connection=True
         self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
         self.end_headers();self.wfile.write(data)
+    def image_response(self,data,name):
+        etag='"'+hashlib.sha256(data).hexdigest()+'"'
+        if self.headers.get('If-None-Match')==etag:return self.respond(304,b'',etag=etag)
+        return self.respond(200,data,mimetypes.guess_type(name)[0] or 'application/octet-stream',etag=etag)
+    def events(self):
+        self.send_response(200)
+        self.send_header('Content-Type','text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control','no-cache, no-transform')
+        self.send_header('X-Accel-Buffering','no')
+        self.send_header('Connection','close');self.close_connection=True
+        self.end_headers()
+        try:
+            with CHANGE_EVENT: generation=CHANGE_GENERATION
+            self.wfile.write(b'retry: 1000\nevent: change\ndata: ready\n\n');self.wfile.flush()
+            while True:
+                with CHANGE_EVENT:
+                    changed=CHANGE_EVENT.wait_for(lambda:CHANGE_GENERATION!=generation,timeout=15)
+                    generation=CHANGE_GENERATION
+                self.wfile.write(b'event: change\ndata: update\n\n' if changed else b': heartbeat\n\n');self.wfile.flush()
+        except (OSError,ConnectionError):pass
     def file(self,p,root):
         p=p.resolve()
         if not p.is_relative_to(root.resolve()) or not p.is_file():return self.respond(404,{'error':'Not found'})
@@ -266,6 +295,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             u=urlparse(self.path);p=unquote(u.path)
+            if p=='/api/events':return self.events()
             if p=='/api/workspaces':
                 with LOCK:return self.respond(200,workspace_catalog())
             if p=='/api/shortcuts':
@@ -306,32 +336,66 @@ class Handler(BaseHTTPRequestHandler):
                             if not re.fullmatch(r'[\w.-]+',name):return self.respond(404,{'error':'Not found'})
                             try:data=PACKAGE.asset(name)
                             except FileNotFoundError:return self.respond(404,{'error':'Not found'})
-                            return self.respond(200,data,mimetypes.guess_type(name)[0] or 'application/octet-stream')
-                        if not re.fullmatch(r'[\w.-]+',name) or not PACKAGE.exists('assets/'+name):return self.respond(404,{'error':'Not found'})
-                        return self.respond(200,PACKAGE.read('assets/'+name),mimetypes.guess_type(name)[0] or 'application/octet-stream')
-                    return self.file(DATA/p.lstrip('/'),DATA/'assets')
+                        else:
+                            if not re.fullmatch(r'[\w.-]+',name) or not PACKAGE.exists('assets/'+name):return self.respond(404,{'error':'Not found'})
+                            data=PACKAGE.read('assets/'+name)
+                    else:
+                        name=p[len('/assets/'):];target=(DATA/'assets'/name).resolve()
+                        if not target.is_relative_to((DATA/'assets').resolve()) or not target.is_file():return self.respond(404,{'error':'Not found'})
+                        data=target.read_bytes()
+                return self.image_response(data,name)
             if p.startswith('/vendor/'):return self.file(ROOT/'node_modules'/p[len('/vendor/'):],ROOT/'node_modules')
             if p=='/workbench.js':
                 return self.respond(200,(read(ROOT/'app.js')+'\n;\n'+read(ROOT/'visual.js')).encode('utf-8'),'text/javascript; charset=utf-8')
             if p=='/manifest.webmanifest':return self.respond(200,(ROOT/'manifest.webmanifest').read_bytes(),'application/manifest+json')
             if p in ['/','/index.html','/app.js','/visual.js','/style.css','/visual.css','/app-icon-192.png','/app-icon-512.png']:return self.file(ROOT/('index.html' if p=='/' else p[1:]),ROOT)
             return self.respond(404,{'error':'Not found'})
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
         except Exception as e: traceback.print_exc();self.respond(500,{'error':str(e)})
+    def upload_image(self,data,staged=False):
+        if len(data)>20*1024*1024:raise ValueError('Image too large')
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as img:
+            if img.width*img.height>50000000:raise ValueError('Image too large')
+            img.load();kind=img.format
+            if kind not in ['PNG','JPEG','WEBP','GIF']:raise ValueError('Unsupported image type')
+        ext={'PNG':'png','JPEG':'jpg','WEBP':'webp','GIF':'gif'}[kind]
+        name=hashlib.sha256(data).hexdigest()[:24]+'.'+ext
+        with LOCK,workspace_tx(True):
+            if WORKSPACE_ERROR or (PACKAGE is not None and self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']):return self.respond(409,{'error':'Workspace changed'})
+            target=DATA/'assets'/name
+            if isinstance(PACKAGE,Document):
+                if staged:PACKAGE.stage_upload(name,data)
+                else:PACKAGE.upload(name,data);notify_change()
+            elif not exists(target):
+                if PACKAGE is not None:PACKAGE.write(package_name(target),data)
+                else:
+                    temp=target.with_suffix('.tmp');temp.write_bytes(data);os.replace(temp,target)
+        return self.respond(200,{'url':'/assets/'+name})
     def do_POST(self):
         try:
             if self.headers.get('Origin'):
                 origin=urlparse(self.headers['Origin'])
                 if origin.netloc.lower()!=self.headers.get('Host','').lower():return self.respond(403,{'error':'Origin mismatch'})
-            if self.headers.get('Content-Type','').split(';')[0]!='application/json':return self.respond(415,{'error':'JSON required'})
             n=int(self.headers.get('Content-Length',0))
+            ct=self.headers.get('Content-Type','').split(';')[0]
+            if self.path=='/api/upload' and ct=='application/octet-stream':
+                if not 0<n<=20*1024*1024:return self.respond(413,{'error':'Invalid request size'})
+                return self.upload_image(self.rfile.read(n),staged=True)
+            if ct!='application/json':return self.respond(415,{'error':'JSON required'})
             if not 0<n<=32*1024*1024:return self.respond(413,{'error':'Invalid request size'})
             payload=json.loads(self.rfile.read(n))
             if self.path=='/api/shortcuts':
                 code,result=save_shortcuts(payload);return self.respond(code,result)
             if self.path=='/api/workspaces/open':
-                with LOCK:return self.respond(200,open_workspace(payload['path']))
+                with LOCK:
+                    result=open_workspace(payload['path']);notify_change()
+                return self.respond(200,result)
             if self.path=='/api/workspaces/new':
-                with LOCK:return self.respond(200,new_workspace(payload['path']))
+                with LOCK:
+                    result=new_workspace(payload['path']);notify_change()
+                return self.respond(200,result)
             if self.path=='/api/workspaces/forget':
                 with LOCK:return self.respond(200,forget_workspace(payload['path']))
             if self.path=='/api/reading':
@@ -341,7 +405,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/save':
                 with LOCK:
                     if WORKSPACE_ERROR or (PACKAGE is not None and self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']):return self.respond(409,{'error':'工作区已切换，请先保存草稿并刷新。'})
-                    code,result=save(payload);return self.respond(code,result)
+                    code,result=save(payload)
+                    if code==200 and result.get('revision')!=payload.get('revision'):notify_change()
+                return self.respond(code,result)
             if self.path in ('/api/history/tag','/api/history/restore','/api/cli/edit','/api/merge'):
                 with LOCK:
                     if not isinstance(PACKAGE,Document) or WORKSPACE_ERROR or self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']:return self.respond(409,{'error':'工作区已切换或不支持历史'})
@@ -351,28 +417,12 @@ class Handler(BaseHTTPRequestHandler):
                     if self.path=='/api/history/tag':
                         return self.respond(200,{'tag':PACKAGE.tag(payload.get('id'),payload.get('name'),payload.get('clear',False),payload.get('revision'))})
                     if self.path=='/api/history/restore':
-                        code,result=PACKAGE.restore(payload['id'],payload['revision'],payload.get('object'));return self.respond(code,result)
-                    code,result=PACKAGE.edit(payload['operations'],payload['revision'],payload.get('message'));return self.respond(code,result)
+                        code,result=PACKAGE.restore(payload['id'],payload['revision'],payload.get('object'))
+                    else:code,result=PACKAGE.edit(payload['operations'],payload['revision'],payload.get('message'))
+                    if code==200 and result.get('revision')!=payload.get('revision'):notify_change()
+                return self.respond(code,result)
             if self.path=='/api/upload':
-                data=base64.b64decode(payload['data'],validate=True)
-                if len(data)>20*1024*1024:raise ValueError('Image too large')
-                import io
-                from PIL import Image
-                with Image.open(io.BytesIO(data)) as img:
-                    if img.width*img.height>50000000:raise ValueError('Image too large')
-                    img.load();kind=img.format
-                    if kind not in ['PNG','JPEG','WEBP','GIF']:raise ValueError('Unsupported image type')
-                ext={'PNG':'png','JPEG':'jpg','WEBP':'webp','GIF':'gif'}[kind]
-                name=hashlib.sha256(data).hexdigest()[:24]+'.'+ext
-                with LOCK,workspace_tx(True):
-                    if WORKSPACE_ERROR or (PACKAGE is not None and self.headers.get('X-PaperEditer-Workspace')!=workspace_info()['id']):return self.respond(409,{'error':'工作区已切换，请刷新。'})
-                    target=DATA/'assets'/name
-                    if isinstance(PACKAGE,Document):PACKAGE.upload(name,data)
-                    elif not exists(target):
-                        if PACKAGE is not None:PACKAGE.write(package_name(target),data)
-                        else:
-                            temp=target.with_suffix('.tmp');temp.write_bytes(data);os.replace(temp,target)
-                return self.respond(200,{'url':'/assets/'+name})
+                return self.upload_image(base64.b64decode(payload['data'],validate=True))
             return self.respond(404,{'error':'Not found'})
         except Exception as e:traceback.print_exc();self.respond(400,{'error':str(e)})
 class WorkbenchServer(ThreadingHTTPServer):
@@ -386,7 +436,9 @@ def scan_workspaces():
     while True:
         try:
             with LOCK:
-                if isinstance(PACKAGE,Document):PACKAGE.scan()
+                if isinstance(PACKAGE,Document):
+                    before=PACKAGE._known_head;PACKAGE.scan()
+                    if PACKAGE._known_head!=before:notify_change()
             previous_error=None
         except Exception as e:
             if str(e)!=previous_error:

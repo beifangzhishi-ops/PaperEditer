@@ -380,8 +380,9 @@ document.addEventListener('input',()=>{verticalCaretX=null},true);
 function visualImageUpload(file,done){
     if(!file)return Promise.resolve();
     return (async()=>{try{
-        const data=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=reject;r.readAsDataURL(file)});
-        const result=await api('/api/upload',{data});done?.(result.url,file.name||'图片');return {url:result.url,name:file.name||'图片'}
+        const r=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-PaperEditer-Workspace':currentWorkspace?.id||''},body:file});
+        const result=await r.json();if(!r.ok)throw new Error(result.error||'HTTP '+r.status);
+        done?.(result.url,file.name||'图片');return {url:result.url,name:file.name||'图片'}
     }catch(e){showToast(e.message)}})()
 }
 function visualPick(onSelect){
@@ -957,9 +958,15 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         add({kind:'figure',id,flags:'',body:data,raw:':::figure '+id+'\n'+data+'\n:::'},after);if(center)centerAfterPaste(cards().find(c=>c._part===selectedPart))
     }
     async function uploadImages(files,after=selectedPart,center=false){
-        const images=[];
-        for(const file of files.filter(f=>f?.type?.startsWith('image/'))){const img=await visualImageUpload(file);if(img)images.push(img)}
-        addImages(images,after,center)
+        const images=[],workspace=currentWorkspace?.id,queue=files.filter(f=>f?.type?.startsWith('image/'));
+        imageUploads++;
+        try{
+            for(let i=0;i<queue.length;i+=3){
+                if(workspace!==currentWorkspace?.id||!root.isConnected)return;
+                images.push(...(await Promise.all(queue.slice(i,i+3).map(f=>visualImageUpload(f)))).filter(Boolean))
+            }
+            if(workspace===currentWorkspace?.id){addImages(images,after,center);if(images.length&&dirty){clearTimeout(timer);timer=setTimeout(save,0)}}
+        }finally{imageUploads--;if(syncNeeded||syncSignalPending)scheduleSyncRetry(0)}
     }
     function pasteImage(e,after){
         const items=[...(e.clipboardData?.items||[])].filter(x=>x.kind==='file'&&x.type.startsWith('image/')).map(x=>x.getAsFile()).filter(Boolean);

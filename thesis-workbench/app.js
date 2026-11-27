@@ -34,6 +34,8 @@ let db, view='thesis', panes=[{id:null,edit:false}], active=0, open=new Set(), t
 let undoStack=[], redoStack=[];
 let trashSupported=false;
 let syncBase=null,syncBusy=false,syncNeeded=false,syncConflict=null,syncLoading=false,workspaceChanged=false;
+let syncSignalPending=false,syncRetryTimer=null,lastEditorInput=0,editorComposing=false,editorPointer=false,imageUploads=0;
+const SYNC_IDLE_MS=650;
 let draftDB=null,draftQueue=Promise.resolve(),draftWarning=false,draftRunning=false;
 const draftPending=new Map();
 const draftTab=(()=>{try{let id=sessionStorage.getItem('wb:draft-tab');if(!id){id=uid();sessionStorage.setItem('wb:draft-tab',id)}return id}catch{return uid()}})();
@@ -363,11 +365,12 @@ function syncStatus(){status(workspaceChanged?'工作区已切换 · 请刷新':
 function applySynced(remote,merged,preserveEditor=false){
     const before=editableSnapshot();syncBase=clone({thesis:remote.thesis,blocks:remote.blocks,trash:remote.trash||[]});
     const local=clone(merged),redraw=!syncEqual(before,local);
+    const caret=redraw&&!preserveEditor?captureSyncCaret():null;
     if(redraw&&preserveEditor){for(const space of ['thesis','blocks'])for(let i=0;i<db[space].length;i++){const n=db[space][i],next=local[space][i];if(!syncEqual(n,next)){for(const k of Object.keys(n))if(!Object.hasOwn(next,k))delete n[k];Object.assign(n,next)}}db.trash=local.trash}
     else if(redraw)Object.assign(db,local);
     Object.assign(db,{revision:remote.revision,originalLabels:remote.originalLabels,importReport:remote.importReport,paragraphs:remote.paragraphs});
     dirty=!syncEqual(local,syncBase);conflict=false;syncConflict=null;syncNeeded=false;version++;
-    if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists()}else renderPanes()}
+    if(redraw){undoStack=[];redoStack=[];panes.forEach(p=>{if(p.id&&!find(p.id))p.id=null});open=new Set([...open].filter(id=>find(id)));reindex();renderNav();if(preserveEditor){refreshObjectLabels();refreshObjectAnnotations();refreshFreeNotes();refreshAnnotationLists()}else{renderPanes();restoreSyncCaret(caret)}}
     refreshHistoryDiff();persistDraft();syncStatus();if(dirty){clearTimeout(timer);timer=setTimeout(save,100)}
 }
 async function mergePlan(base,local,remote,choices={}){
@@ -380,8 +383,8 @@ async function reconcile(remote,base=syncBase,local=editableSnapshot(),respectFo
     if(workspace!==currentWorkspace?.id)return;
     if(at!==version){syncNeeded=true;status('有新版本 · 等待同步');return}
     if(m.conflicts.length){conflict=true;dirty=true;syncConflict={remote,base,local};persistDraft();syncStatus();showToast('检测到并发冲突，草稿已保留。点击刷新处理。');return}
-    const preserve=respectFocus&&!syncCanApply();
-    if(preserve&&!syncCanPreserve(local,m.state)){syncNeeded=true;status('有新版本 · 结束输入后同步');return}
+    const preserve=respectFocus&&syncCanPreserve(local,m.state);
+    if(respectFocus&&!preserve&&!syncCanApply()){syncNeeded=true;status('有新版本 · 结束输入后同步');scheduleSyncRetry();return}
     applySynced(remote,m.state,preserve);
 }
 function downloadSyncDraft(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download=name+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
@@ -433,10 +436,42 @@ function showSyncConflict(){
         done.disabled=!!m.conflicts.length;if(!m.conflicts.length)fields.append(el('p','','已选择全部冲突项。确认后保存。'))
     }draw();
 }
-function syncCanApply(){return !dialog.open&&!dragging&&$('menu').hidden&&(!document.activeElement?.closest('.richText,.editableTitle,math-field,textarea')||!canEditControl(document.activeElement))}
+function captureSyncCaret(){
+    const focus=document.activeElement,area=focus?.closest('.richText'),doc=focus?.closest('.visualDocument'),pane=focus?.closest('.pane'),card=focus?.closest('.visualCard');
+    if(!doc||!pane||!card)return null;
+    const index=[...doc.querySelectorAll('.visualCard')].indexOf(card),paragraph=card.dataset.paragraphIndex;
+    const info={owner:doc._owner,pane:[...paneBox.children].indexOf(pane),index,raw:card._part?.raw,id:card.dataset.object,paragraphId:db.paragraphs?.[doc._owner]?.[paragraph]?.id};
+    if(focus.matches('math-field'))return {...info,math:true,selection:focus.selection};
+    const s=getSelection();if(!area||!s?.rangeCount||!s.isCollapsed||!area.contains(s.anchorNode))return null;
+    const r=document.createRange();r.selectNodeContents(area);r.setEnd(s.anchorNode,s.anchorOffset);
+    return {...info,offset:r.toString().length,areaIndex:[...card.querySelectorAll('.richText')].indexOf(area)};
+}
+function restoreSyncCaret(info){
+    if(!info)return;
+    const doc=[...(paneBox.children[info.pane]?.querySelectorAll('.visualDocument')||[])].find(d=>d._owner===info.owner);
+    if(!doc)return;
+    const cards=[...doc.querySelectorAll('.visualCard')];let card;
+    if(info.id)card=cards.find(c=>c.dataset.object===info.id);
+    else if(info.paragraphId){const i=db.paragraphs?.[info.owner]?.findIndex(p=>p.id===info.paragraphId);if(i>=0)card=cards.find(c=>c.dataset.paragraphIndex===String(i))}
+    else{const matching=cards.filter(c=>c._part?.raw===info.raw);card=matching.length===1?matching[0]:cards[info.index]?._part?.raw===info.raw?cards[info.index]:null}
+    if(!card)return;
+    if(info.math){const field=card.querySelector('math-field');if(field){field.focus({preventScroll:true});try{field.selection=info.selection}catch{}}return}
+    const area=card.querySelectorAll('.richText')[info.areaIndex];if(!area||!canEditControl(area))return;
+    const walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);let n,left=info.offset,r=document.createRange();
+    while(n=walker.nextNode()){if(left<=n.length){r.setStart(n,left);r.collapse(true);break}left-=n.length}
+    if(!n){r.selectNodeContents(area);r.collapse(false)}
+    area.focus({preventScroll:true});const s=getSelection();s.removeAllRanges();s.addRange(r);
+}
+function syncCanApply(){
+    if(dialog.open||dragging||!$('menu').hidden||imageUploads||editorComposing||editorPointer)return false;
+    const focus=document.activeElement;
+    if(!focus?.closest('.richText,.editableTitle,math-field,textarea')||!canEditControl(focus))return true;
+    const s=getSelection();if(s&&!s.isCollapsed&&focus.contains(s.anchorNode))return false;
+    return Date.now()-lastEditorInput>=SYNC_IDLE_MS;
+}
 function syncCanPreserve(local,merged){
-    if(dialog.open||dragging||!$('menu').hidden)return false;
     if(syncEqual(local,merged))return true;
+    if(dialog.open||dragging||!$('menu').hidden||imageUploads)return false;
     // Keep the live editor DOM and node references intact for changes in
     // unrelated, non-rendered chapters. Structural/knowledge changes may
     // affect visible references and are deferred until the editor loses focus.
@@ -446,9 +481,11 @@ function syncCanPreserve(local,merged){
     if(local.thesis.length!==merged.thesis.length)return false;
     return local.thesis.every((n,i)=>{const next=merged.thesis[i];return n.id===next.id&&n.parent===next.parent&&n.order===next.order&&n.level===next.level&&(!visible.has(n.id)||syncEqual(n,next))});
 }
+function scheduleSyncRetry(delay=SYNC_IDLE_MS){clearTimeout(syncRetryTimer);syncRetryTimer=setTimeout(()=>{if(syncNeeded||syncSignalPending)syncNow()},delay)}
+function signalSync(){syncSignalPending=true;syncNow()}
 async function syncNow(force=false){
     if(!db||!syncBase||syncLoading||syncBusy||saving||conflict||workspaceChanged||document.hidden&&!force)return;
-    syncBusy=true;const workspace=currentWorkspace?.id;
+    syncBusy=true;syncSignalPending=false;const workspace=currentWorkspace?.id;
     try{
         const r=await api('/api/state?since='+encodeURIComponent(db.revision)+'&workspace='+encodeURIComponent(workspace||'directory'));
         if(syncLoading||workspace!==currentWorkspace?.id)return;
@@ -456,7 +493,7 @@ async function syncNow(force=false){
         if(r.unchanged||r.revision===db.revision){syncNeeded=false;return}
         await reconcile(r,syncBase,editableSnapshot(),!force);
     }catch(e){if(e.status>=500)status('文档异常 · 草稿保留');if(force)showToast(e.message);else console.warn(e)}
-    finally{syncBusy=false;if(dirty&&!conflict&&!workspaceChanged&&!syncNeeded){clearTimeout(timer);timer=setTimeout(save,100)}}
+    finally{syncBusy=false;if(syncSignalPending&&!conflict&&!workspaceChanged)scheduleSyncRetry(0);else if(dirty&&!conflict&&!workspaceChanged&&!syncNeeded){clearTimeout(timer);timer=setTimeout(save,100)}}
 }
 let annotationEditBefore=null,annotationEditCheckpointed=false;
 // Coalesce consecutive edits in one editing host, not unrelated document mutations.
@@ -522,7 +559,7 @@ async function save(){
         db.revision=r.revision;if(r.paragraphs)db.paragraphs=r.paragraphs;syncBase={thesis:snapshot.thesis,blocks:snapshot.blocks,trash:snapshot.trash};
         dirty=v!==version;persistDraft();status(dirty?'待保存':'已保存');
     }catch(e){if(e.status===409){syncNeeded=true;status('等待同步 · 请结束当前输入');persistDraft()}else{status('保存失败 · 草稿保留');showToast(e.message);console.warn(e)}}
-    finally{saving=false;if(syncNeeded)syncNow();else if(dirty&&!conflict&&v!==version){clearTimeout(timer);timer=setTimeout(save,850)}}
+    finally{saving=false;if(syncNeeded||syncSignalPending)syncNow();else if(dirty&&!conflict&&v!==version){clearTimeout(timer);timer=setTimeout(save,850)}}
 }
 let markingVersion=false;
 function updateHistoryControls(){
@@ -2565,7 +2602,15 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncShortc
 window.addEventListener('focus',()=>syncShortcuts());
 setInterval(()=>{if(!document.hidden)syncShortcuts()},1500);
 document.addEventListener('focusout',()=>setTimeout(()=>syncNow(),0),true);
-setInterval(()=>syncNow(),1500);
+for(const type of ['beforeinput','input','keydown'])document.addEventListener(type,e=>{if(e.target.closest?.('.richText,.editableTitle,math-field,textarea'))lastEditorInput=Date.now()},true);
+document.addEventListener('compositionstart',()=>{editorComposing=true},true);
+document.addEventListener('compositionend',()=>{editorComposing=false;lastEditorInput=Date.now();if(syncNeeded)scheduleSyncRetry()},true);
+document.addEventListener('pointerdown',e=>{if(e.target.closest?.('.visualDocument,.editableTitle'))editorPointer=true},true);
+for(const type of ['pointerup','pointercancel'])window.addEventListener(type,()=>{editorPointer=false;if(syncNeeded)scheduleSyncRetry()},true);
+window.addEventListener('blur',()=>{editorPointer=false;editorComposing=false});
+let syncEvents;
+if(typeof EventSource==='function'){syncEvents=new EventSource('/api/events');syncEvents.addEventListener('change',signalSync)}
+setInterval(()=>syncNow(),1500); // Fallback for buffered proxies, offline edits and reconnects.
 window.addEventListener('beforeunload',e=>{captureReading();flushReading();if(dirty){e.preventDefault();e.returnValue=''}});
 document.addEventListener('DOMContentLoaded',async()=>{
     if(typeof editor!=='function'||typeof newNode!=='function'||!window.marked||!window.DOMPurify){
