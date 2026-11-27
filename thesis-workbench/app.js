@@ -595,6 +595,11 @@ function closeHistoricalVersion(redraw=true){
     active=0;
     if(redraw){renderNav();renderPanes()}
 }
+function closeSecondPane(){
+    if(panes.length<2)return;
+    captureReading();panes.splice(1,1);active=0;
+    renderNav();renderPanes()
+}
 function openHistoricalVersion(entry,past,objectId=null,mode='version',comparison=null){
     captureReading();
     const previous=panes[1]?.history?panes[1].history.previous:panes[1]||null;
@@ -973,7 +978,7 @@ async function showHistory(objectId=null){
             input.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();const value=input.value.trim();if(value)setName(value);else showToast('请输入版本名称')}else if(e.key==='Escape'){e.preventDefault();input.replaceWith(name)}};
             input.onblur=()=>{if(input.isConnected)input.replaceWith(name)};
         }
-        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry)],['与当前版本比较',()=>preview(entry,false,true)],['复制版本 ID',()=>copy(entry.id)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
+        const menu=()=>[['查看历史版本',viewVersion],['查看差异',()=>preview(entry,false,true)],['复制版本 ID',()=>copy(entry.id)],['恢复版本',()=>restoreHistory(entry,objectId)],['设置版本名称',rename],...(entry.tag?[['清除版本名称',()=>setName(null,true)]]:[])];
         context(r,menu,null,true);
         r.append(btn('⋯',e=>menuAt(e,menu()),'historyMore'));if(entry.tag)r.classList.add('named');return r;
     }
@@ -989,7 +994,7 @@ async function showHistory(objectId=null){
                 if(!group||!last||!sameGroup(last,entry)){
                     group=el('details','historyGroup');group.dataset.group=entry.id;group.open=opened.has(entry.id);
                     const summary=el('summary'),versions=group,groupTitle=btn('',e=>{e.preventDefault();e.stopPropagation();preview(entry,true)},'historyGroupTitle');summary.append(groupTitle);group.append(summary);group._summary=groupTitle;group._count=0;group._first=entry.time;list.append(group);
-                    context(summary,()=>[[versions.open?'折叠版本组':'展开版本组',()=>{versions.open=!versions.open}],['查看差异',()=>preview(entry,true)],['与当前版本比较',()=>preview(entry,true,true)]],null,true);
+                    context(summary,()=>[[versions.open?'折叠版本组':'展开版本组',()=>{versions.open=!versions.open}],['查看差异',()=>preview(entry,true,true)]],null,true);
                     versions.addEventListener('toggle',()=>{expand.textContent=[...list.querySelectorAll('details.historyGroup')].every(x=>x.open)?'全部折叠':'全部展开'});
                 }
                 group.append(row(entry));group._count++;group._summary.textContent=clock(entry.time)+'–'+clock(group._first)+' · '+group._count+' 个自动版本';
@@ -1127,7 +1132,6 @@ const MODE_TOOL='切换查看/编辑模式';
 const MORE_TOOL='更多操作';
 const MORE_ACTIONS=new Set(['添加公式','添加独立公式','插入交叉引用']);
 const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','查看历史版本','查看差异','复制版本 ID','恢复版本','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
-readOnlyActions.add('与当前版本比较');
 // Annotation editing is independent of the global thesis editing switch.
 function canEditControl(node){return editingEnabled||!!(node?._noteEditor||node?.closest?.('.visualDocument')?._internalObjects)}
 function modeMenuItems(items,target){
@@ -2099,6 +2103,7 @@ function renderPanes(){
             if(doc?._blankMenu)return doc._blankMenu(e);
             return [[view==='blocks'?'新建批注':'新建章节',()=>newNode(view)],['撤销',()=>undo(false)],['重做',()=>undo(true)]]
         });
+        if(pi===1)toolbar.append(btn('关闭本页',closeSecondPane,'closeSecondPane'));
         if(toolbar.childNodes.length)pane.append(toolbar);pane.append(page);paneBox.append(pane);updatePageFoldButton(pi);restorePane(pane,p)
     });
     applySplitWidths();
