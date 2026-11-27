@@ -196,10 +196,14 @@ function setupNoteLabel(chip,id,open,detach,windowHandle=false){
 document.addEventListener('pointerdown',e=>{if(!isActionSurface(e.target)&&!e.target.closest('.selectedNoteLabel'))clearNoteLabel()},true);
 document.addEventListener('focusin',e=>{if(!isActionSurface(e.target)&&!e.target.closest('.selectedNoteLabel'))clearNoteLabel()},true);
 document.addEventListener('click',e=>{if(dialog.open&&(e.target===dialog||e.target===$('dialogBody'))){const handle=dialog.querySelector('.noteWindowHandle');if(handle)selectNoteLabel(handle)}});
+function textAnnotationAt(e){
+    const area=e.target.closest('.richText');
+    return textAnnotationRanges.find(({chip,range})=>chip.isConnected&&area?.contains(range.startContainer)&&[...range.getClientRects()].some(r=>e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom))
+}
 document.addEventListener('click',e=>{
     if(e.defaultPrevented||e.button!==0||e.shiftKey||e.ctrlKey||e.metaKey||e.altKey||!e.target.closest('.pane .richText')||e.target.closest('[data-token],math-field,a,img,button'))return;
     if(!getSelection()?.isCollapsed||e.target.closest('.visualDocument')?._mixedRange?.())return;
-    const hit=textAnnotationRanges.find(({chip,range})=>chip.isConnected&&chip.closest('.richText')===e.target.closest('.richText')&&[...range.getClientRects()].some(r=>e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom));
+    const hit=textAnnotationAt(e);
     if(hit){e.preventDefault();hit.chip._openNote?.()}
 });
 function visualRef(kind,id,allowRefs=true){
@@ -414,6 +418,17 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             return [{card,p,local,raw:md(local),before:md(before),after:md(after)}]
         })
     }
+    // A contiguous selection has one annotation marker, even when its text
+    // spans several independently rendered paragraph cards.
+    root._rangeAnnotationBinding=r=>{
+        const node=find(owner);
+        if(internal||!node||spaceOf(owner)!=='thesis'||dialog.open||!root.closest('.pane:not(.historicalPane)'))return null;
+        const pieces=selectedPieces(r).filter(p=>p.local&&p.local.toString());
+        if(!pieces.length)return null;
+        const first=pieces[0],area=first.card.querySelector('.richText'),range=first.local.cloneRange();range.collapse(true);
+        const start=cards().indexOf(first.card),segments=pieces.map(p=>({partOffset:cards().indexOf(p.card)-start,quote:p.local.toString()}));
+        return {doc:root,area,range,owner:node,mode:'selection',quote:segments.map(s=>s.quote).join('\n\n'),...(segments.length>1?{segments}:{})}
+    };
     function selectedRangeNotes(r,pieces=selectedPieces(r,true)){
         if(internal||!pieces.length)return [];
         const selected=new Map(),ids=new Set();
@@ -425,7 +440,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         }
         for(const {chip,range} of textAnnotationRanges){
             if(!chip.isConnected||!body.contains(chip)||!range.toString())continue;
-            const piece=pieces.find(p=>p.local&&p.card.contains(chip));
+            const piece=pieces.find(p=>p.local&&p.card.contains(range.startContainer));
             if(!piece||piece.local.compareBoundaryPoints(Range.END_TO_START,range)>=0||piece.local.compareBoundaryPoints(Range.START_TO_END,range)<=0)continue;
             const note=db.blocks.find(n=>n.id===chip.dataset.noteId);
             if(note&&!selected.has(note.id))selected.set(note.id,{note,piece,highlightOnly:true});
@@ -601,7 +616,9 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const r=document.caretRangeFromPoint?.(e.clientX,e.clientY);
         if(!r||!area.contains(r.startContainer)||r.startContainer.parentElement?.closest('math-field,[data-token]'))return;
         e.preventDefault();clearMixed();clearObject();clearNoteLabel();
-        const s=getSelection();r.collapse(true);s.removeAllRanges();s.addRange(r);readingCaretActive=true;syncRange();scheduleToolbarUpdate()
+        const s=getSelection();r.collapse(true);s.removeAllRanges();s.addRange(r);
+        const hit=textAnnotationAt(e);if(hit){hit.chip._openNote?.();return}
+        readingCaretActive=true;syncRange();scheduleToolbarUpdate()
     },true);
     for(let i=0;i<2;i++)handles[i].addEventListener('pointerdown',e=>{
         const r=activeMixed()||nativeRange();if(!r)return;
@@ -674,8 +691,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!cut)for(const {note} of notes)if(find(note.id))deleteNode(find(note.id));
         if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd);if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
     }
-    function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode(root)){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode(root)){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
-    root.addEventListener('contextmenu',e=>{if(touchContextEvent(e)&&e.target.closest('.part-text .richText'))root._prepareTouchRange(e);const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
+    function mixedMenu(r,e){
+        const items=[['剪切',async()=>{if(requireEditMode(root)){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode(root)){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]];
+        const binding=e&&root._rangeAnnotationBinding(r);if(binding)items.push(['新建批注',()=>newAnnotation(binding,e)]);
+        return items
+    }
+    root.addEventListener('contextmenu',e=>{if(touchContextEvent(e)&&e.target.closest('.part-text .richText'))root._prepareTouchRange(e);const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();const items=modeMenuItems(mixedMenu(r,e),root);if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,items)}else menuAt(e,items)},true);
     for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
         const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
         if(type==='paste'){if(canEditControl(root)){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
@@ -1106,7 +1127,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         else showToast('已复制，粘贴将生成新 ID')
     }
     root._clipboardMenu=e=>{
-        const multi=activeMixed();if(multi)return mixedMenu(multi);
+        const multi=activeMixed();if(multi)return mixedMenu(multi,localRangeArea(multi)?null:e);
         const card=e.target.closest('.visualCard'),p=card?._part||(e.target===root&&Number.isFinite(e.clientY)?cards().filter(c=>c.getBoundingClientRect().top<=e.clientY).at(-1)?._part||parts[0]:selectedPart);
         const area=e.target.closest('.richText'),math=e.target.closest('math-field');
         const wrap=e.target.closest('.resizeImage');
@@ -1199,23 +1220,29 @@ function refreshTextAnnotations(){
         const ranges=[];
         textAnnotationRanges=[];
         for(const chip of paneBox.querySelectorAll('.richText .inlineAnnotation')){
-            const owner=chip.closest('.visualDocument')?._owner,id=chip.dataset.token?.slice(8,-2),note=find(id);
+            const doc=chip.closest('.visualDocument'),owner=doc?._owner,id=chip.dataset.token?.slice(8,-2),note=find(id);
             if(!owner||!note)continue;
-            const quotes=[note.annotation,...(note.textBindings||[])].filter(a=>a?.owner===owner&&a.quote).map(a=>a.quote).sort((a,b)=>b.length-a.length);
-            if(!quotes.length)continue;
-            const area=chip.closest('.richText'),walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);
-            const range=document.createRange();range.setStartAfter(chip);range.setEnd(area,area.childNodes.length);
-            const remaining=range.toString(),quote=quotes.find(q=>remaining.startsWith(q));
-            if(!quote)continue; // A changed/deleted quote must not highlight unrelated text.
-            let length=0;
-            for(let n=walker.nextNode();n;n=walker.nextNode()){
-                if(chip.contains(n)||!(chip.compareDocumentPosition(n)&Node.DOCUMENT_POSITION_FOLLOWING))continue;
-                if(length+n.length>=quote.length){
-                    range.setEnd(n,quote.length-length);
-                    if(range.toString()===quote){ranges.push(range);textAnnotationRanges.push({chip,range})}
-                    break;
+            const bindings=[note.annotation,...(note.textBindings||[])].filter(a=>a?.owner===owner&&a.quote).sort((a,b)=>b.quote.length-a.quote.length);
+            const firstArea=chip.closest('.richText'),cards=[...doc.querySelector(':scope > .visualBody').children],start=cards.indexOf(chip.closest('.visualCard'));
+            function matchQuote(area,quote,marker){
+                if(!area||!quote)return null;
+                const range=document.createRange();if(marker)range.setStartAfter(marker);else range.setStart(area,0);range.setEnd(area,area.childNodes.length);
+                if(!range.toString().startsWith(quote))return null;
+                const walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);let length=0;
+                for(let n=walker.nextNode();n;n=walker.nextNode()){
+                    if(marker&&(marker.contains(n)||!(marker.compareDocumentPosition(n)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
+                    if(length+n.length>=quote.length){range.setEnd(n,quote.length-length);return range.toString()===quote?range:null}
+                    length+=n.length;
                 }
-                length+=n.length;
+                return null
+            }
+            for(const binding of bindings){
+                const segments=Array.isArray(binding.segments)&&binding.segments.length?binding.segments:[{partOffset:0,quote:binding.quote}];
+                if(segments[0].partOffset!==0)continue;
+                const matched=segments.map(({partOffset,quote})=>matchQuote(partOffset===0?firstArea:cards[start+partOffset]?.querySelector('.part-text .richText'),quote,partOffset===0?chip:null));
+                // Do not paint a partial or unrelated quote when its text has changed.
+                if(matched.some(r=>!r))continue;
+                for(const range of matched){ranges.push(range);textAnnotationRanges.push({chip,range})}break
             }
         }
         const highlight=new Highlight(...ranges);highlight.priority=-1;CSS.highlights.set('paper-annotation',highlight);syncNoteSelection();
@@ -1300,7 +1327,7 @@ function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
             const value=remapCopiedObjects(doc.getValue());if(!value.trim()){dialog.close();return}
             checkpoint();const id='block-'+uid(),n={id,title:blockLabel(value),parent,level:parent?ancestors(find(parent)).length+2:1,number:'',file:'blocks/'+id+'.md',source:'',order:db.blocks.length,body:value};
             if(options.binding?.mode==='object')n.objectBindings=[{targetId:options.binding.targetId,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}}];
-            else if(options.binding)n.annotation={owner:options.binding.owner.id,mode:options.binding.mode,quote:options.binding.quote,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}};
+            else if(options.binding)n.annotation={owner:options.binding.owner.id,mode:options.binding.mode,quote:options.binding.quote,...(options.binding.segments?{segments:options.binding.segments}:{}),floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}};
             else if(options.freePlacement)n.freePlacements=[{...options.freePlacement,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}}];
             if(dialog._noteSize)n.floatSize={...dialog._noteSize};
             db.blocks.push(n);normalizeOrder(space);dialog.close();change(false);if(onCreated){onCreated(id);renderNav()}else{select(id);renderPanes()}

@@ -1048,14 +1048,16 @@ async function run(){
                 await p.evaluate(()=>select('demo-start'));
                 const area=p.locator('.pane .part-text .richText').first();
                 const original=await p.evaluate(()=>find('demo-start').body);
-                const selectQuote=()=>area.evaluate(a=>{
+                const selectQuote=()=>area.evaluate((a,mobile)=>{
                     a.focus();const t=a.querySelector('p').firstChild,r=document.createRange();
                     r.setStart(t,0);r.setEnd(t,9);getSelection().removeAllRanges();getSelection().addRange(r);
-                    const b=r.getBoundingClientRect(),e=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:b.left+2,clientY:b.top+2});e.useCurrentSelection=true;a.dispatchEvent(e);return r.toString();
-                });
+                    if(!mobile){const b=r.getBoundingClientRect(),e=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:b.left+2,clientY:b.top+2});e.useCurrentSelection=true;a.dispatchEvent(e)}
+                    scheduleToolbarUpdate();return r.toString();
+                },isMobile);
+                const createNote=async()=>{if(isMobile){await p.waitForFunction(()=>document.querySelector('#floatingTools [data-tool="新建批注"]').getAttribute('aria-disabled')==='false');await p.locator('#floatingTools [data-tool="新建批注"]').tap()}else await menu(p,'新建批注').click()};
                 const quote=await selectQuote();
                 assert(quote.length);
-                await menu(p,'新建批注').click();
+                await createNote();
                 await p.locator('#dialog .richText').first().fill('New selected-text note');
                 await p.evaluate(()=>closeWorkbenchDialog());
                 await p.waitForFunction(quote=>[...(CSS.highlights.get('paper-annotation')||[])].some(r=>r.toString()===quote),quote);
@@ -1066,7 +1068,7 @@ async function run(){
                 await p.waitForFunction(original=>find('demo-start').body===original,original);
                 await p.waitForFunction(()=>!CSS.highlights.get('paper-annotation')?.size);
                 await selectQuote();
-                await menu(p,'新建批注').click();
+                await createNote();
                 await p.locator('#dialog .richText').first().fill('New selected-text note');
                 await p.evaluate(()=>closeWorkbenchDialog());
                 await p.waitForFunction(quote=>[...(CSS.highlights.get('paper-annotation')||[])].some(r=>r.toString()===quote),quote);
@@ -1177,7 +1179,39 @@ async function run(){
             assert.equal(result.body.indexOf('[[embed:'+result.id+']]'),5);
             await tapAt(2);await p.locator('#editModeToggle').tap();await caret.waitFor({state:'hidden'});
             assert.equal(await area.getAttribute('contenteditable'),'true');
+            assert(await area.evaluate(a=>document.activeElement===a&&getSelection().isCollapsed&&getSelection().anchorOffset===2));
+            await p.keyboard.insertText('X');await p.waitForFunction(()=>find('demo-start').body.startsWith('A X'));
+            await p.locator('#editModeToggle').tap();assert.equal(await p.evaluate(()=>document.activeElement?.isContentEditable),false);
             assert.deepEqual(errors,[]);await context.close();console.log('PASS: mobile read-only tap caret, exact inline annotation, no editable focus or body changes, edit-mode cleanup');return
+        }
+        if(process.argv.includes('--reading-range-note-only')){
+            const {p,context,errors}=await fixture(browser,true);
+            const original='Alpha first paragraph.\n\nBeta middle paragraph.\n\nGamma final paragraph.\n';
+            await p.evaluate(raw=>{find('demo-start').body=raw;reindex();select('demo-start')},original);
+            const doc=p.locator('.pane .visualDocument').first(),areas=doc.locator('.part-text .richText');
+            const point=(loc,i)=>loc.evaluate((a,i)=>{const t=a.querySelector('p').firstChild,r=document.createRange();r.setStart(t,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},i);
+            const cdp=await context.newCDPSession(p),start=await point(areas.first(),2);
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});await p.locator('.rangeEnd:visible').waitFor();
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+            await p.waitForTimeout(600);
+            const h=await p.locator('.rangeEnd:visible').boundingBox(),dest=await point(areas.last(),5);
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:h.x+h.width/2,y:h.y+10}]});
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:dest.x,y:dest.y+10}]});
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+            await p.waitForFunction(()=>document.querySelector('.pane .visualDocument')._rangeAnnotationBinding(document.querySelector('.pane .visualDocument')._mixedRange())?.segments?.length===3);
+            const expected=await doc.evaluate(d=>d._rangeAnnotationBinding(d._mixedRange()).segments.map(s=>s.quote));
+            const tool=name=>p.locator(`#floatingTools [data-tool="${name}"]`);
+            await p.waitForFunction(()=>document.querySelector('#floatingTools [data-tool="新建批注"]').getAttribute('aria-disabled')==='false');
+            assert.equal(await tool('剪切').getAttribute('aria-disabled'),'true');
+            await tool('新建批注').tap();await p.locator('#dialog .richText').first().fill('Cross paragraph note');await p.evaluate(()=>closeWorkbenchDialog());
+            const note=await p.evaluate(()=>db.blocks.find(n=>n.body.includes('Cross paragraph note')));
+            assert.deepEqual(note.annotation.segments.map(s=>s.quote),expected);
+            assert.equal(await p.evaluate(id=>find('demo-start').body.replace('[[embed:'+id+']]',''),note.id),original);
+            const check=()=>p.waitForFunction(({id,expected})=>JSON.stringify(textAnnotationRanges.filter(x=>x.chip.dataset.noteId===id).map(x=>x.range.toString()))===JSON.stringify(expected),{id:note.id,expected});
+            await check();await p.waitForFunction(()=>!dirty&&!saving);await p.reload();await p.waitForFunction(()=>typeof db!=='undefined'&&db?.thesis?.length===2);await check();
+            const hit=await p.evaluate(id=>{const b=textAnnotationRanges.filter(x=>x.chip.dataset.noteId===id)[1].range.getClientRects()[0];return {x:b.left+b.width/2,y:b.top+b.height/2}},note.id);
+            await p.touchscreen.tap(hit.x,hit.y);await p.waitForFunction(id=>dialog.open&&dialog._noteId===id,note.id);
+            assert.equal(await p.evaluate(()=>editingEnabled),false);assert.deepEqual(errors,[]);await context.close();console.log('PASS: read-only mobile drag selection creates one annotation, highlights three paragraphs after reload, opens from middle paragraph');return
         }
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--local-annotation-range-only')){await checkLocalRangeAnnotations(browser);console.log('PASS: same-paragraph annotation highlight selection, copy, cut, delete and undo');return}
@@ -1452,7 +1486,7 @@ async function run(){
         console.log('Mobile: verifying edit mode');
         assert.equal(await mode.getAttribute('aria-pressed'),'true');
         assert.equal(await target.getAttribute('contenteditable'),'true');
-        assert.equal(await q.evaluate(()=>document.activeElement?.isContentEditable),false);
+        assert.equal(await q.evaluate(()=>document.activeElement?.isContentEditable),true);
         await q.waitForFunction(()=>Array.from(document.querySelectorAll('math-field')).every(f=>!f.readOnly&&f.mathVirtualKeyboardPolicy==='auto'));
         if(process.argv.includes('--view-mode-only')){
             await q.evaluate(()=>{document.activeElement?.blur();getSelection().removeAllRanges();scheduleToolbarUpdate()});

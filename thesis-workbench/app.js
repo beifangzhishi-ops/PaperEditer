@@ -896,6 +896,19 @@ function syncEditMode(){
     scheduleToolbarUpdate()
 }
 function toggleEditMode(){
+    let mobileFocus=null;
+    if(!editingEnabled&&matchMedia('(pointer:coarse), (max-width:760px)').matches&&!dialog.open&&!panes[active]?.history){
+        const pane=paneBox.children[active],box=pane?.getBoundingClientRect(),s=getSelection();
+        const mixedDoc=[...(pane?.querySelectorAll('.visualDocument')||[])].find(d=>d._mixedRange?.());
+        const r=mixedDoc?._mixedRange()?.cloneRange()||(s?.rangeCount?s.getRangeAt(0).cloneRange():null);
+        const area=r&&(r.endContainer.nodeType===1?r.endContainer:r.endContainer.parentElement)?.closest('.part-text .richText');
+        if(area&&pane?.contains(area)&&area.getClientRects().length){r.collapse(false);mobileFocus={area,range:r}}
+        else if(box){
+            const candidates=[...pane.querySelectorAll('.part-text .richText')].filter(a=>{const b=a.getBoundingClientRect();return b.height&&b.bottom>Math.max(box.top,0)&&b.top<Math.min(box.bottom,innerHeight)});
+            const target=candidates[0];if(target){const b=target.getBoundingClientRect(),y=Math.max(b.top+1,box.top+1,pane.querySelector(':scope > .toolbar')?.getBoundingClientRect().bottom+1||0);const hit=document.caretRangeFromPoint?.(b.left+4,y+8);const range=hit&&target.contains(hit.startContainer)?hit:document.createRange();if(range!==hit){range.selectNodeContents(target);range.collapse(true)}mobileFocus={area:target,range}}
+        }
+        mixedDoc?._clearMixed?.();
+    }
     if(editingEnabled){
         const focus=document.activeElement;
         if(focus?.closest('.richText,.editableTitle,math-field'))focus.blur();
@@ -903,6 +916,11 @@ function toggleEditMode(){
     }
     editingEnabled=!editingEnabled;
     $('menu').hidden=true;hideToolHint();syncEditMode();
+    // Focus synchronously inside the mode button's user gesture so mobile
+    // browsers are allowed to open the system keyboard.
+    if(mobileFocus?.area.isConnected&&mobileFocus.area.isContentEditable){
+        const {area,range}=mobileFocus;clearNoteLabel();area.focus({preventScroll:true});const s=getSelection();s.removeAllRanges();s.addRange(range)
+    }
     showToast(editingEnabled?'编辑模式：点击正文或公式输入':'查看模式：已关闭正文编辑')
 }
 // These guards also cover native paste/drop/delete shortcuts and touch gestures.
@@ -978,7 +996,7 @@ function installToolHint(button){
         clearTimeout(hintTimer);const fired=press.fired;press=null;
         if(fired){suppressClick=true;hintDismiss=setTimeout(hideToolHint,1400)}
         else if(type!=='pointerup'){suppressClick=true;hideToolHint()}
-        else if(['剪切','复制','粘贴'].includes(button.dataset.tool)&&button.getAttribute('aria-disabled')!=='true'&&[...document.querySelectorAll('.visualDocument')].some(d=>d._mixedRange?.())){
+        else if(['剪切','复制','粘贴','新建批注'].includes(button.dataset.tool)&&button.getAttribute('aria-disabled')!=='true'&&[...document.querySelectorAll('.visualDocument')].some(d=>d._mixedRange?.())){
             // Chromium may suppress the compatibility click after dragging
             // a touch selection. Execute the short tap once on pointerup.
             button.click();suppressClick=true
@@ -1197,6 +1215,8 @@ function annotationBinding(e,pane){
     const logical=e.target.closest('.visualDocument')?._mixedRange?.();
     const r=logical?.cloneRange()||(prior&&Date.now()-prior.time<2000&&Math.hypot(e.clientX-prior.x,e.clientY-prior.y)<32?prior.range:s?.rangeCount?s.getRangeAt(0).cloneRange():null);
     if(!r||!pane.contains(r.startContainer)||!pane.contains(r.endContainer))return null;
+    const rangeDoc=e.target.closest('.visualDocument');
+    if(!r.collapsed&&rangeDoc?.contains(r.startContainer)&&rangeDoc.contains(r.endContainer)&&!localRangeArea(r))return rangeDoc._rangeAnnotationBinding?.(r)||null;
     const startElement=r.startContainer.nodeType===Node.ELEMENT_NODE?r.startContainer:r.startContainer.parentElement;
     const area=startElement?.closest('.richText'),doc=area?.closest('.visualDocument');
     if(!area||!doc?._owner||!doc._insertBoundAnnotation)return null;
