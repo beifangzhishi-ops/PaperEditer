@@ -365,7 +365,7 @@ function showSyncConflict(){
         done.disabled=!!m.conflicts.length;if(!m.conflicts.length)fields.append(el('p','','已选择全部冲突项。确认后保存。'))
     }draw();
 }
-function syncCanApply(){return !dialog.open&&!dragging&&$('menu').hidden&&(!document.activeElement?.closest('.richText,.editableTitle,math-field,textarea')||!editingEnabled)}
+function syncCanApply(){return !dialog.open&&!dragging&&$('menu').hidden&&(!document.activeElement?.closest('.richText,.editableTitle,math-field,textarea')||!canEditControl(document.activeElement))}
 function syncCanPreserve(local,merged){
     if(dialog.open||dragging||!$('menu').hidden)return false;
     if(syncEqual(local,merged))return true;
@@ -646,7 +646,7 @@ function renderHistoricalPage(pane,p,pi){
     pane.addEventListener('scroll',()=>{h.scrollTop=pane.scrollTop},{passive:true});
 }
 async function restoreHistory(entry,objectId){
-    if(!requireEditMode()||!confirm('恢复此'+(objectId?'对象':'文档')+'版本？当前版本仍会保留在历史中。'))return;
+    if(!confirm('恢复此'+(objectId?'对象':'文档')+'版本？当前版本仍会保留在历史中。'))return;
     if(!await flushDocument())return;
     try{
         await api('/api/history/restore',{id:entry.id,object:objectId,revision:db.revision});
@@ -814,7 +814,7 @@ function select(id,pi=active,object=null){
 function jump(id,other=false){const t=resolve(id);if(!t){showToast('未找到引用：'+id);return}select(t.owner,other?(active===0?1:0):active,t.kind==='node'?null:(t.actualId||t.id))}
 async function copy(s){await writeEditorClipboard(s);showToast('已复制，可直接粘贴')}
 function menuAt(e,items,anchor=null){
-    items=modeMenuItems(items);
+    items=modeMenuItems(items,e.target||toolbarContext()?.event.target);
     const m=$('menu');(dialog.open?dialog:document.body).append(m);m.replaceChildren();for(const [s,fn,disabled] of items){const b=btn(s,()=>{m.hidden=true;fn()});b.disabled=!!disabled;m.append(b)}m.hidden=!items.length;if(!items.length)return;
     m._toolbarAnchor=anchor;m.style.transform='';m.style.transformOrigin='top left';m.style.width='';m.style.maxWidth='';
     if(anchor){positionToolbarMore();return}
@@ -848,16 +848,21 @@ let editingEnabled=!(matchMedia('(pointer:coarse)').matches||innerWidth<=760);
 const MODE_TOOL='切换查看/编辑模式';
 const MORE_TOOL='更多操作';
 const MORE_ACTIONS=new Set(['添加公式','添加独立公式','插入交叉引用']);
-const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','查看历史版本','查看差异','复制版本 ID','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
-function modeMenuItems(items){
-    return editingEnabled?items:items.map(([name,fn,disabled])=>[name,fn,!!disabled||!readOnlyActions.has(name)])
+const readOnlyActions=new Set(['复制','复制交叉引用','复制批注','复制正文（含公式源码）','复制对象源码','复制公式','高级：复制源码','当前页定位','另一页打开','定位批注','查看原图','打开批注','展开内容','折叠内容','展开下级','折叠下级','保存','查看历史版本','查看差异','复制版本 ID','恢复版本','展开版本组','折叠版本组','设置版本名称','清除版本名称']);
+// Annotation editing is independent of the global thesis editing switch.
+function canEditControl(node){return editingEnabled||!!(node?._noteEditor||node?.closest?.('.visualDocument')?._internalObjects)}
+function modeMenuItems(items,target){
+    if(editingEnabled)return items;
+    const note=canEditControl(target);
+    return items.map(([name,fn,disabled])=>[name,fn,!!disabled||!(readOnlyActions.has(name)||name==='新建批注'||note&&name!=='删除批注'&&(!['撤销','重做'].includes(name)||dialog.open))])
 }
-function requireEditMode(){
+function requireEditMode(target=null){
     if(!dialog.open&&panes[active]?.history){showToast('历史版本只读，请切换到当前文档');return false}
-    if(editingEnabled)return true;
+    if(canEditControl(target))return true;
     showToast('当前为查看模式，请先切换到编辑模式');return false
 }
 function setEditorControlMode(node){
+    const editingEnabled=canEditControl(node);
     if(node.matches('.richText')){
         node.contentEditable=String(editingEnabled);
         node.setAttribute('aria-readonly',String(!editingEnabled));
@@ -901,7 +906,7 @@ function toggleEditMode(){
 }
 // These guards also cover native paste/drop/delete shortcuts and touch gestures.
 for(const type of ['beforeinput','cut','paste','drop','dragstart'])document.addEventListener(type,e=>{
-    if(editingEnabled||!e.target.closest?.('.visualDocument,.editableTitle,.navrow'))return;
+    if(canEditControl(e.target)||!e.target.closest?.('.visualDocument,.editableTitle,.navrow'))return;
     e.preventDefault();e.stopImmediatePropagation()
 },true);
 let toolbarTarget=null,toolbarPoint=null;
@@ -1027,15 +1032,15 @@ function currentToolbarItems(preview=false){
     return c?simpleContextMenu(c.event,c.explicit):[]
 }
 function toolbarAction(label){
-    if(!editingEnabled&&!readOnlyActions.has(label)){requireEditMode();return}
+    if(!canEditControl(toolbarContext()?.event.target)&&!readOnlyActions.has(label)&&label!=='新建批注'){requireEditMode();return}
     const item=currentToolbarItems().find(i=>i[0]===label);
     if(item&&!item[2])item[1]();
     else showToast(['剪切','复制'].includes(label)?'请先选中文本或对象':'请先定位正文或对象');
 }
 function toolbarUndo(redo){
     if(!dialog.open&&panes[active]?.history)return;
-    if(!requireEditMode())return;
     const root=dialog.open&&dialog.querySelector('.visualDocument');
+    if(!requireEditMode(root))return;
     if(root?._draftHistory)root._draftHistory(redo);
     else if(!dialog.open)undo(redo)
 }
@@ -1107,10 +1112,10 @@ function scheduleToolbarUpdate(){
             if(!dialog.open&&panes[active]?.history){b.setAttribute('aria-disabled','true');continue}
             if(label===MODE_TOOL){b.setAttribute('aria-disabled','false');continue}
             if(label===MORE_TOOL){b.setAttribute('aria-disabled',String(!items.some(i=>MORE_ACTIONS.has(i[0])&&!i[2])));continue}
-            if(!editingEnabled&&!readOnlyActions.has(label)){b.setAttribute('aria-disabled','true');continue}
+            if(!canEditControl(toolbarContext()?.event.target)&&!readOnlyActions.has(label)&&label!=='新建批注'){b.setAttribute('aria-disabled','true');continue}
             if(label==='撤销'||label==='重做'){
                 const draft=dialog.open&&dialog.querySelector('.visualDocument');
-                b.setAttribute('aria-disabled',String(draft?!(draft._canDraftHistory?.(label==='重做')):dialog.open||!(label==='撤销'?undoStack:redoStack).length));
+                b.setAttribute('aria-disabled',String(draft?!(draft._canDraftHistory?.(label==='重做')):!editingEnabled||dialog.open||!(label==='撤销'?undoStack:redoStack).length));
             }else{const item=items.find(i=>i[0]===label);b.setAttribute('aria-disabled',String(!item||!!item[2]))}
         }
         positionFloatingTools()
@@ -1240,9 +1245,9 @@ function bindNoteToObject(id,binding){
 }
 function simpleContextMenu(e,explicit){
     const noteLabel=e.target.closest(noteLabelSelector);
-    if(noteLabel?._openNote)return modeMenuItems(noteLabelMenu(noteLabel));
+    if(noteLabel?._openNote)return modeMenuItems(noteLabelMenu(noteLabel),noteLabel);
     const rangeDoc=e.target.closest('.visualDocument');
-    if(rangeDoc?._mixedRange?.()&&!localRangeArea(rangeDoc._mixedRange()))return modeMenuItems(rangeDoc._clipboardMenu(e));
+    if(rangeDoc?._mixedRange?.()&&!localRangeArea(rangeDoc._mixedRange()))return modeMenuItems(rangeDoc._clipboardMenu(e),e.target);
     const pane=e.target.closest('.pane'),pi=pane?[...paneBox.children].indexOf(pane):active;
     const docs=pane?[...pane.querySelectorAll('.visualDocument')].filter(d=>d.getClientRects().length):[];
     const distance=d=>{const r=d.getBoundingClientRect();return Math.max(r.top-e.clientY,0,e.clientY-r.bottom)};
@@ -1271,7 +1276,7 @@ function simpleContextMenu(e,explicit){
     if(texTarget(source)&&!draft&&spaceOf(owner?.id)!=='blocks')result.push(['复制交叉引用',()=>copy(refToken(source))]);
     const noteId=draft?dialog._noteId:(source?.kind==='node'&&spaceOf(source.id)==='blocks'?source.id:pane&&owner&&spaceOf(owner.id)==='blocks'?owner.id:null);
     if(noteId&&find(noteId))result.push(['删除批注',()=>deleteNode(find(noteId))]);
-    return modeMenuItems(result);
+    return modeMenuItems(result,e.target);
 }
 function newAnnotation(binding,e){
     const origin=binding?.owner,quote=binding?.quote;
@@ -1586,7 +1591,7 @@ function markdown(raw,host,trail=[],onImageResize=null){
         img.replaceWith(wrap);wrap.append(img);context(wrap,()=>[['查看原图',full],['恢复原始显示大小',()=>{w=100;wrap.style.width='100%';commit()}],...(wrap.closest('.visualCard')?._menu?.()||[])]);
         for(const corner of ['nw','ne','sw','se']){
             const h=el('span','resizeHandle '+corner);h.setAttribute('role','button');h.setAttribute('aria-label','拖动图片'+corner+'角缩放');wrap.append(h);
-            h.addEventListener('pointerdown',e=>{if(!editingEnabled)return;e.preventDefault();e.stopPropagation();activate();h.setPointerCapture(e.pointerId);const startX=e.clientX,startY=e.clientY,startW=wrap.getBoundingClientRect().width,startH=wrap.getBoundingClientRect().height,available=wrap.parentElement.clientWidth||startW,signX=corner.endsWith('e')?1:-1,signY=corner.startsWith('s')?1:-1;let moved=false;
+            h.addEventListener('pointerdown',e=>{if(!canEditControl(wrap))return;e.preventDefault();e.stopPropagation();activate();h.setPointerCapture(e.pointerId);const startX=e.clientX,startY=e.clientY,startW=wrap.getBoundingClientRect().width,startH=wrap.getBoundingClientRect().height,available=wrap.parentElement.clientWidth||startW,signX=corner.endsWith('e')?1:-1,signY=corner.startsWith('s')?1:-1;let moved=false;
                 const move=ev=>{const dx=(ev.clientX-startX)*signX,dy=(ev.clientY-startY)*signY*(startW/Math.max(1,startH));const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy;if(Math.abs(delta)>2)moved=true;w=Math.round(Math.max(10,Math.min(100,(startW+delta)/available*100))*10)/10;wrap.style.width=w+'%'};
                 const end=()=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);if(moved)commit()};h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
             })
@@ -1981,7 +1986,7 @@ document.addEventListener('keydown',e=>{
     else toolbarAction(label);
 },true);
 document.addEventListener('keydown',e=>{
-    if(editingEnabled&&dialog.open&&dialog.classList.contains('blankNoteDialog')&&e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.isComposing&&e.keyCode!==229&&!e.composedPath().some(x=>x.tagName==='MATH-FIELD')){
+    if(dialog.open&&dialog.classList.contains('blankNoteDialog')&&e.key==='Enter'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.isComposing&&e.keyCode!==229&&!e.composedPath().some(x=>x.tagName==='MATH-FIELD')){
         if(!e.target.closest('button')&&dialog.contains(e.target)){e.preventDefault();closeWorkbenchDialog();return}
     }
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();if(currentWorkspace?.history)markVersion();else if(conflict)showSyncConflict();else if(syncNeeded&&!dialog.open)syncNow(true);else save()}

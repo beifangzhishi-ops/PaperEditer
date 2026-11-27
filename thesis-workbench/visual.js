@@ -49,22 +49,23 @@ function inlineFormulaSource(tex){
     return tex.includes('$')?'\\('+tex+'\\)':'$'+tex+'$'
 }
 function formulaObjectSource(tex){return ':::equation eq-'+uid()+'\n'+tex+'\n:::'}
-function visualMath(tex,display,onInput){
+function visualMath(tex,display,onInput,note=false){
     const f=document.createElement('math-field');f.className='visualMath'+(display?' displayMath':'');f.setAttribute('contenteditable','true');f.setAttribute('math-virtual-keyboard-policy','auto');
     f.setAttribute('aria-label','可编辑数学公式');f.value=tex;f._texOriginal=tex;f._texChanged=false;f.dataset.tex=tex;
+    if(note){f._noteEditor=true;f.dataset.noteEditor=""}
     setEditorControlMode(f);
     function configure(){if(!f.isConnected)return;try{
         f.menuItems=[];f.popoverPolicy='off';f.smartFence=true;f.smartSuperscript=true;
         f.inlineShortcuts={...f.inlineShortcuts,'>=':'\\ge','<=':'\\le','!=':'\\ne'};
     }catch(err){/* Wait for MathLive to mount its internal editor. */}}
     customElements.whenDefined('math-field').then(()=>requestAnimationFrame(configure));
-    f.addEventListener('focusin',()=>{configure();if(editingEnabled)showMathPalette(f)});
+    f.addEventListener('focusin',()=>{configure();if(canEditControl(f))showMathPalette(f)});
     f.addEventListener('keydown',e=>{
-        if(e.key==='Escape'&&editingEnabled){e.preventDefault();e.stopPropagation();leaveMathField(f,'forward',true)}
+        if(e.key==='Escape'&&canEditControl(f)){e.preventDefault();e.stopPropagation();leaveMathField(f,'forward',true)}
     },true);
-    f.addEventListener('move-out',e=>{if(editingEnabled&&leaveMathField(f,e.detail.direction,false))e.preventDefault()});
-    f.addEventListener('input',e=>{e.stopPropagation();if(!editingEnabled)return;f._texChanged=true;f.dataset.tex=f.value;onInput(f.value)});
-    f.addEventListener('paste',()=>{if(editingEnabled)requestAnimationFrame(()=>centerAfterPaste(f))},true);
+    f.addEventListener('move-out',e=>{if(canEditControl(f)&&leaveMathField(f,e.detail.direction,false))e.preventDefault()});
+    f.addEventListener('input',e=>{e.stopPropagation();if(!canEditControl(f))return;f._texChanged=true;f.dataset.tex=f.value;onInput(f.value)});
+    f.addEventListener('paste',()=>{if(canEditControl(f))requestAnimationFrame(()=>centerAfterPaste(f))},true);
     // MathLive consumes its own contextmenu event inside the shadow DOM.
     // Route it through the editor menu before the native handler sees it.
     f.addEventListener('contextmenu',e=>{
@@ -74,7 +75,7 @@ function visualMath(tex,display,onInput){
         else menuAt(e,items)
     },true);
     for(const type of ['copy','cut'])f.addEventListener(type,e=>{
-        if(!e.clipboardData||type==='cut'&&(!editingEnabled||f.selectionIsCollapsed))return;
+        if(!e.clipboardData||type==='cut'&&(!canEditControl(f)||f.selectionIsCollapsed))return;
         const tex=f.selectionIsCollapsed?f.value:f.getValue(f.selection,'latex');
         if(!tex)return;
         // Keep the native MathLive atom/JSON export and paste behavior intact.
@@ -92,7 +93,7 @@ let activeMathField=null,activeMathPalette=null;
 function hideMathPalette(){activeMathPalette?.remove();activeMathPalette=null;activeMathField=null}
 function positionMathPalette(){
     const bar=activeMathPalette,field=activeMathField;
-    if(!bar||!field?.isConnected||!editingEnabled){hideMathPalette();return}
+    if(!bar||!field?.isConnected||!canEditControl(field)){hideMathPalette();return}
     const v=window.visualViewport,w=v?.width||innerWidth,h=v?.height||innerHeight,x=v?.offsetLeft||0,y=v?.offsetTop||0;
     const r=field.getBoundingClientRect(),mobile=matchMedia('(pointer:coarse), (max-width:760px)').matches;
     bar.style.maxWidth=Math.max(0,w-16)+'px';
@@ -133,7 +134,7 @@ function mathPanel(field){
     const symbols=[['分数',String.raw`\frac{#@}{#?}`],['上标','^{#?}'],['下标','_{#?}'],['根号',String.raw`\sqrt{#@}`],['积分',String.raw`\int_{#?}^{#?}`],['求和',String.raw`\sum_{#?}^{#?}`],['矩阵',String.raw`\begin{pmatrix}#?&#?\\#?&#?\end{pmatrix}`],['偏导',String.raw`\partial`],['矢量',String.raw`\vec{#@}`],['α',String.raw`\alpha`],['β',String.raw`\beta`],['ρ',String.raw`\rho`],['μ',String.raw`\mu`],['σ',String.raw`\sigma`],['ω',String.raw`\omega`],['π',String.raw`\pi`],['±',String.raw`\pm`],['≤',String.raw`\le`]];
     const glyphs=['a/b','xⁿ','xᵢ','√','∫','∑','▦','∂','x⃗'];
     for(const [i,[name,value]] of symbols.entries()){const b=btn(glyphs[i]||name,()=>{
-        if(!editingEnabled||!field.isConnected)return;field.focus();
+        if(!canEditControl(field)||!field.isConnected)return;field.focus();
         // The initial square is only a visible insertion point, not an operand.
         if(field.value==='\\square'&&!field.selectionIsCollapsed&&field.getValue(field.selection,'latex')==='\\square'){
             field.insert(value.replaceAll('#@','#?'),{insertionMode:'replaceSelection',selectionMode:'placeholder'})
@@ -212,6 +213,7 @@ function visualRef(kind,id,allowRefs=true){
 }
 function visualRich(raw,changed,compact=false,allowRefs=true){
     const host=el('div','richText'+(compact?' compact':''));host.contentEditable='true';host.spellcheck=false;host.setAttribute('role','textbox');host.setAttribute('aria-multiline','true');
+    if(!allowRefs){host._noteEditor=true;host.dataset.noteEditor=""}
     setEditorControlMode(host);
     const tokens=[];
     function token(kind,value){const i=tokens.push({kind,value})-1;return '<span data-wb-token="'+i+'"></span>'}
@@ -220,11 +222,11 @@ function visualRich(raw,changed,compact=false,allowRefs=true){
     for(const p of host.querySelectorAll('[data-wb-token]')){
         const t=tokens[Number(p.dataset.wbToken)];if(!t){p.remove();continue}
         if(t.kind==='math'){
-            const f=visualMath(t.value,false,()=>changed());p.replaceWith(inlineMathAtom(f));
+            const f=visualMath(t.value,false,()=>changed(),!allowRefs);p.replaceWith(inlineMathAtom(f));
         }else p.replaceWith(visualRef(t.kind,t.value,allowRefs))
     }
     if(!host.childNodes.length)host.append(el('p'));
-    host.addEventListener('input',()=>{if(editingEnabled)changed()});
+    host.addEventListener('input',()=>{if(canEditControl(host))changed()});
     // Avoid pasting untrusted HTML; recognized structured text is handled by the parent.
     host.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed();centerAfterPaste(host)});
     return host
@@ -308,7 +310,7 @@ function proseEdge(area,down){
     return {y,rects:rects.filter(r=>Math.abs(center(r)-y)<lh*.55)}
 }
 function crossParagraphArrow(e){
-    if(!editingEnabled)return;
+    if(!canEditControl(e.target))return;
     if(e.key!=='ArrowUp'&&e.key!=='ArrowDown'){verticalCaretX=null;return}
     if(e.defaultPrevented||e.isComposing||e.keyCode===229||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return;
     if(e.composedPath().some(n=>n.tagName==='MATH-FIELD'))return;
@@ -367,6 +369,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     let parts=parseParts(raw),focused=null,selection=null;
     if(!parts.length)parts=[{kind:'text',raw:''}];
     const root=el('div','visualDocument'),body=el('div','visualBody');
+    if(internal)root.dataset.noteEditor="";
     root.append(body);root._owner=owner;root._internalObjects=internal;
     let selectedPart=parts[0],selectedObject=null;
     const value=()=>parts.map(p=>p.raw).filter(x=>x.trim()).join('\n\n')+'\n';
@@ -377,7 +380,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         lastValue=s;onUpdate(s)
     }
     function draftHistory(redo){
-        if(!requireEditMode())return;
+        if(!requireEditMode(root))return;
         const from=redo?draftRedo:draftUndo,to=redo?draftUndo:draftRedo;if(!from.length)return;
         to.push(value());lastValue=from.pop();parts=parseParts(lastValue);if(!parts.length)parts=[{kind:'text',raw:''}];selectedPart=parts[0];selectedObject=null;draw();onUpdate(lastValue);root.focus({preventScroll:true})
     }
@@ -527,7 +530,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             crossed=true;dragging=true;
             if(sameCard&&!includesNote){
                 // Returning to the original paragraph restores native editing.
-                clearMixed();if(editingEnabled)area.focus({preventScroll:true});
+                clearMixed();if(canEditControl(root))area.focus({preventScroll:true});
                 getSelection().setBaseAndExtent(a.node,a.offset,b.node,b.offset);
                 syncRange();scheduleToolbarUpdate();
             }else setRange(a,b)
@@ -612,7 +615,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         return rangeNoteClipboard(cut?raw:remapCopiedObjects(raw,owner,true,map),notes,cut,map)
     }
     function replaceMixed(r,text='',cut=false){
-        if(!editingEnabled||!root.isConnected)return;
+        if(!canEditControl(root)||!root.isConnected)return;
         const pieces=selectedPieces(r,true);if(!pieces.length)return;
         const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
         return annotationEdit(()=>{
@@ -646,12 +649,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(!cut)for(const {note} of notes)if(find(note.id))deleteNode(find(note.id));
         if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd);if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
     }
-    function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
+    function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode(root)){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode(root)){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
     root.addEventListener('contextmenu',e=>{if(touchContextEvent(e)&&e.target.closest('.part-text .richText'))root._prepareTouchRange(e);const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
     for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
         const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
-        if(type==='paste'){if(editingEnabled){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
-        if(type==='cut'&&!editingEnabled)return;const text=mixedClipboard(r,type==='cut');e.clipboardData.setData('text/plain',text);localClipboard=text;localClipboardPreferred=false;if(type==='cut')replaceMixed(r,'',true)
+        if(type==='paste'){if(canEditControl(root)){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
+        if(type==='cut'&&!canEditControl(root))return;const text=mixedClipboard(r,type==='cut');e.clipboardData.setData('text/plain',text);localClipboard=text;localClipboardPreferred=false;if(type==='cut')replaceMixed(r,'',true)
     },true);
     root.addEventListener('keydown',e=>{
         if(e.isComposing||e.keyCode===229)return;
@@ -667,20 +670,20 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(r&&(e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&['c','x','v'].includes(e.key.toLowerCase())){
             e.preventDefault();e.stopImmediatePropagation();
             const key=e.key.toLowerCase(),items=mixedMenu(r);
-            if(key==='c')items[1][1]();else if(editingEnabled)items[key==='x'?0:2][1]();
+            if(key==='c')items[1][1]();else if(canEditControl(root))items[key==='x'?0:2][1]();
             return
         }
-        if(r&&['Delete','Backspace'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();if(editingEnabled)replaceMixed(r);return}
+        if(r&&['Delete','Backspace'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();if(canEditControl(root))replaceMixed(r);return}
         if(r&&e.key==='Escape'){clearMixed();getSelection()?.removeAllRanges();return}
         if(r&&!e.shiftKey&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)){
             e.preventDefault();e.stopImmediatePropagation();const forward=['ArrowRight','ArrowDown','End'].includes(e.key),p=forward?point(r.endContainer,r.endOffset):point(r.startContainer,r.startOffset),card=cardOf(p.node),area=card?.querySelector('.part-text .richText');
             clearMixed();const s=getSelection();
-            if(area?.contains(p.node)){if(editingEnabled)area.focus({preventScroll:true});s.collapse(p.node,p.offset)}
+            if(area?.contains(p.node)){if(canEditControl(root))area.focus({preventScroll:true});s.collapse(p.node,p.offset)}
             else if(card?._part.kind!=='text'&&card){selectObject(card._part,card);root.focus({preventScroll:true})}
             else if(p.node===body){const c=cards()[forward?p.offset-1:p.offset];if(c?._part.kind==='text')placeIn(c.querySelector('.richText'),forward);else if(c){selectObject(c._part,c);root.focus({preventScroll:true})}}
             return
         }
-        if(r&&editingEnabled&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&e.key.length===1){e.preventDefault();e.stopImmediatePropagation();replaceMixed(r,e.key);return}
+        if(r&&canEditControl(root)&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&e.key.length===1){e.preventDefault();e.stopImmediatePropagation();replaceMixed(r,e.key);return}
         if(!r&&e.composedPath().some(n=>n.tagName==='MATH-FIELD'))return;
         if(!e.shiftKey||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)||e.ctrlKey||e.altKey||e.metaKey)return;
         const a=selectionAnchor(),s=getSelection(),b=focusPoint||(s?.focusNode&&body.contains(s.focusNode)?point(s.focusNode,s.focusOffset):null);if(!a||!b)return;
@@ -694,7 +697,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         }else if(b.node===body)next=list[b.offset+(forward?0:-1)];else if(card)next=list[list.indexOf(card)+(forward?1:-1)];
         if(next){e.preventDefault();e.stopImmediatePropagation();setRange(a,edge(next,next._part.kind==='text'?!forward:forward));next.scrollIntoView({block:'nearest'})}
     },true);
-    root.addEventListener('beforeinput',e=>{if(activeMixed()&&!dragging&&editingEnabled&&e.inputType?.startsWith('insert')&&!e.isComposing){e.preventDefault();if(e.inputType==='insertText'&&e.data)replaceMixed(activeMixed(),e.data)}},true);
+    root.addEventListener('beforeinput',e=>{if(activeMixed()&&!dragging&&canEditControl(root)&&e.inputType?.startsWith('insert')&&!e.isComposing){e.preventDefault();if(e.inputType==='insertText'&&e.data)replaceMixed(activeMixed(),e.data)}},true);
     function selectObject(p,card){
         selectedObject=p.kind==='text'?null:p;
         document.querySelectorAll('.selectedImage').forEach(x=>x.classList.remove('selectedImage'));
@@ -804,7 +807,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         return forward?joinProse(p,neighbor):joinProse(neighbor,p)
     }
     root.addEventListener('keydown',e=>{
-        if(!editingEnabled||e.defaultPrevented||e.isComposing||e.keyCode===229)return;
+        if(!canEditControl(root)||e.defaultPrevented||e.isComposing||e.keyCode===229)return;
         const inMath=e.composedPath().some(x=>x.tagName==='MATH-FIELD');
         const area=e.target.closest?.('.richText'),inControl=e.target.closest?.('input,textarea,select,button');
         if(!['Backspace','Delete'].includes(e.key)||e.ctrlKey||e.metaKey||e.altKey||inMath||inControl)return;
@@ -816,7 +819,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     });
     // Mobile soft keyboards may send beforeinput without a keydown.
     root.addEventListener('beforeinput',e=>{
-        if(!editingEnabled||e.defaultPrevented||e.isComposing||!['deleteContentBackward','deleteContentForward'].includes(e.inputType)||e.composedPath().some(x=>x.tagName==='MATH-FIELD'))return;
+        if(!canEditControl(root)||e.defaultPrevented||e.isComposing||!['deleteContentBackward','deleteContentForward'].includes(e.inputType)||e.composedPath().some(x=>x.tagName==='MATH-FIELD'))return;
         const area=e.target.closest?.('.richText');
         if(area&&deleteInRich(area,e.inputType==='deleteContentForward'))e.preventDefault()
     });
@@ -858,7 +861,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         return true
     }
     function addImages(images,after=selectedPart,center=false){
-        if(!editingEnabled||!images.length||!root.isConnected)return;
+        if(!canEditControl(root)||!images.length||!root.isConnected)return;
         const card=[...body.children].find(c=>c._part===after);
         if(after?.kind==='figure'&&card?._appendImages){card._appendImages(images);if(center)centerAfterPaste(card);return}
         const id='fig-'+uid(),data=images[0].name.replace(/[\r\n]/g,' ')+'\n\n'+images.map(imageMarkup).join('\n\n');
@@ -886,11 +889,11 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember();centerAfterPaste(area)})
     }
     function addFormula(area,caret,anchor,standalone=false){
-        if(!requireEditMode()||!root.isConnected)return;
+        if(!requireEditMode(root)||!root.isConnected)return;
         clearMixed();clearObject();
         if(!standalone&&area?.isConnected&&root.contains(area)){
             focused=area;selectedPart=area.closest('.visualCard')?._part;selection=caret;
-            const field=visualMath('\\square',false,()=>area.dispatchEvent(new Event('input',{bubbles:true})));
+            const field=visualMath('\\square',false,()=>area.dispatchEvent(new Event('input',{bubbles:true})),internal);
             insertInline(inlineMathAtom(field));field.focus();field.executeCommand?.('selectAll');return
         }
         const id='eq-'+uid(),tex='\\square';
@@ -898,12 +901,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         cards().find(c=>c._part.id===id)?.querySelector('math-field')?.executeCommand?.('selectAll')
     }
     function pasteFormula(area,tex,anchor){
-        if(!editingEnabled||!root.isConnected||!tex)return;
+        if(!canEditControl(root)||!root.isConnected||!tex)return;
         if(!area){insertPaste(formulaObjectSource(tex),anchor);root.focus({preventScroll:true});return}
         annotationEdit(()=>{
             const s=getSelection(),r=s?.rangeCount&&area.contains(s.getRangeAt(0).commonAncestorContainer)?s.getRangeAt(0).cloneRange():document.createRange();
             if(!area.contains(r.commonAncestorContainer)){r.selectNodeContents(area);r.collapse(false)}
-            const field=visualMath(tex.replace(/\r?\n/g,' '),false,()=>area.dispatchEvent(new Event('input',{bubbles:true})));
+            const field=visualMath(tex.replace(/\r?\n/g,' '),false,()=>area.dispatchEvent(new Event('input',{bubbles:true})),internal);
             const atom=inlineMathAtom(field);
             area.focus({preventScroll:true});r.deleteContents();r.insertNode(atom);r.setStartAfter(atom);r.collapse(true);
             s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember();centerAfterPaste(area)
@@ -944,7 +947,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root._insertBoundAnnotation=(id,binding)=>{
         const {area,range}=binding;
         if(!root.isConnected||!area.isConnected||!root.contains(area)||!area.contains(range.startContainer))return false;
-        try{const r=range.cloneRange();r.collapse(true);const chip=visualRef('embed',id);r.insertNode(chip);area.dispatchEvent(new Event('input',{bubbles:true}));return true}catch(err){console.warn(err);return false}
+        try{const r=range.cloneRange();r.collapse(true);const chip=visualRef('embed',id);r.insertNode(chip);const p=area.closest('.visualCard')?._part;if(!p||p.kind!=='text'){chip.remove();return false}p.raw=richMarkdown(area);flush();return true}catch(err){console.warn(err);return false}
     };
     context(root,e=>root._blankMenu(e));
     function bindRich(area,p){
@@ -1000,7 +1003,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             }else if(p.kind==='text'){
                 const area=visualRich(p.raw,()=>{p.raw=richMarkdown(area);flush()},false,!internal);bindRich(area,p);content.append(area)
             }else if(p.kind==='equation'){
-                const field=visualMath(p.body.trim(),true,value=>{p.body=value;objectRaw(p)});content.append(field);
+                const field=visualMath(p.body.trim(),true,value=>{p.body=value;objectRaw(p)},internal);content.append(field);
                 field.addEventListener('focusin',()=>{clearMixed();clearObject();selectedPart=p});
                 extra=[['公式输入工具',()=>{field.focus();showMathPalette(field)}],['数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}],['复制公式',()=>copy(p.body)]]
             }else if(p.kind==='figure'){
@@ -1066,10 +1069,10 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             const raw=card._clipboardRaw?.()||p.raw;
             text=cut?raw:remapCopiedObjects(raw,owner,true)
         }
-        return {text,remove:()=>{if(!editingEnabled||!root.isConnected||!parts.includes(p))return;if(!image||!card._deleteSelectedImage?.())removePart(p)}};
+        return {text,remove:()=>{if(!canEditControl(root)||!root.isConnected||!parts.includes(p))return;if(!image||!card._deleteSelectedImage?.())removePart(p)}};
     }
     function objectClipboard(e,cut){
-        if(cut&&!editingEnabled){e.preventDefault();return}
+        if(cut&&!canEditControl(root)){e.preventDefault();return}
         if(!selectedObject||e.target.closest('.richText,math-field,input,textarea')||!e.clipboardData)return;
         const p=selectedObject,card=[...body.children].find(c=>c._part===p);if(!card)return;
         const data=objectClipboardData(p,card,cut);
@@ -1095,14 +1098,14 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const text=()=>{const holder=el('div');holder.append(r.cloneContents());return richMarkdown(holder)};
         const object=!!card&&p.kind!=='text'&&!area&&!math;
         const copyOrCut=async cut=>{
-            if(cut&&!requireEditMode())return;
+            if(cut&&!requireEditMode(root))return;
             if(object){const data=objectClipboardData(p,card,cut);await writeEditorClipboard(data.text);if(cut)data.remove();return}
-            if(math){const value=math.selectionIsCollapsed?math.value:math.getValue(math.selection,'latex');if(!value||cut&&math.selectionIsCollapsed)return;await writeEditorClipboard(formulaClipboardText(value));if(cut&&editingEnabled&&math.isConnected){math.executeCommand?.('deleteBackward');math.dispatchEvent(new Event('input',{bubbles:true}))}return}
-            if(!selected)return;await writeEditorClipboard(text());if(cut&&editingEnabled&&restore()){document.execCommand('delete');area.dispatchEvent(new Event('input',{bubbles:true}))}
+            if(math){const value=math.selectionIsCollapsed?math.value:math.getValue(math.selection,'latex');if(!value||cut&&math.selectionIsCollapsed)return;await writeEditorClipboard(formulaClipboardText(value));if(cut&&canEditControl(root)&&math.isConnected){math.executeCommand?.('deleteBackward');math.dispatchEvent(new Event('input',{bubbles:true}))}return}
+            if(!selected)return;await writeEditorClipboard(text());if(cut&&canEditControl(root)&&restore()){document.execCommand('delete');area.dispatchEvent(new Event('input',{bubbles:true}))}
         };
         const paste=async()=>{
-            if(!requireEditMode())return;
-            const value=await readEditorClipboard();if(!editingEnabled||!root.isConnected)return;
+            if(!requireEditMode(root))return;
+            const value=await readEditorClipboard();if(!canEditControl(root)||!root.isConnected)return;
             if(!value){
                 if(!math&&!localClipboardPreferred)try{
                     const items=await navigator.clipboard.read(),files=[];
@@ -1248,7 +1251,7 @@ function openAnnotationNote(n,chip,e,objectBinding=null,freePlacement=null){
         if(!a){const matches=[...paneBox.querySelectorAll('.inlineAnnotation')].filter(x=>x.dataset.token==='[[embed:'+n.id+']]');a=matches.find(x=>x.closest('.pane')===pane)||matches.find(x=>x.closest('.visualDocument')?._owner===owner)||matches[0]}
         return a?.getBoundingClientRect()||null
     };
-    const d=showDialog('',{floating:true,x:e.clientX,y:e.clientY,anchorRect,relativeOffset:freePlacement?.floatOffset||objectBinding?.floatOffset||n.annotation?.floatOffset,onPositionChange:offset=>{if(!editingEnabled)return;if(freePlacement){freePlacement.floatOffset=offset;change(false)}else if(objectBinding){objectBinding.floatOffset=offset;change(false)}else if(n.annotation){n.annotation.floatOffset=offset;change(false)}}});
+    const d=showDialog('',{floating:true,x:e.clientX,y:e.clientY,anchorRect,relativeOffset:freePlacement?.floatOffset||objectBinding?.floatOffset||n.annotation?.floatOffset,onPositionChange:offset=>{if(freePlacement){freePlacement.floatOffset=offset;change(false)}else if(objectBinding){objectBinding.floatOffset=offset;change(false)}else if(n.annotation){n.annotation.floatOffset=offset;change(false)}}});
     dialog.classList.add('blankNoteDialog');
     dialog._noteId=n.id;
     const doc=visualDocument(n.body,()=>{},n.id),initial=doc.getValue();
@@ -1257,13 +1260,14 @@ function openAnnotationNote(n,chip,e,objectBinding=null,freePlacement=null){
         const value=doc.getValue();dialog.close();
         if(value!==initial){checkpoint();n.body=value;n.title=blockLabel(value);change(false);renderNav()}
     };
-    d.append(doc.root);setupNoteResize(d,n.floatSize,size=>{if(editingEnabled){n.floatSize=size;change(false)}});
+    d.append(doc.root);setupNoteResize(d,n.floatSize,size=>{n.floatSize=size;change(false)});
     const handle=d.querySelector('h2');handle.classList.add('noteWindowHandle');handle.setAttribute('aria-label','选中批注浮窗');
     setupNoteLabel(handle,n.id,()=>{doc.root.querySelector('.richText,math-field')?.focus({preventScroll:true})},chip._detachNote?()=>{closeWorkbenchDialog();if(chip.isConnected)chip._detachNote()}:null,true);
     selectNoteLabel(handle);
 }
 function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
-    if(!requireEditMode())return;
+    if(space!=='blocks'&&!requireEditMode())return;
+    if(!dialog.open&&panes[active]?.history)return;
     if(space==='blocks'){
         const d=showDialog('',{...options,floating:true});dialog.classList.add('blankNoteDialog');
         const doc=visualDocument(remapCopiedObjects(body),()=>{},null);

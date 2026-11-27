@@ -40,13 +40,13 @@
 #floatingTools button,#headerActions{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
 #toolHint{position:fixed;z-index:46;pointer-events:none;color:white;background:#263038;border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.45;max-width:calc(100vw - 8px);white-space:normal;box-shadow:0 2px 8px #26303830}
 #toolHint[hidden]{display:none}
-/* Viewing keeps the content selectable but never opens an editing keyboard. */
+/* Viewing locks thesis content; annotation editors remain interactive. */
 #floatingTools #editModeToggle{border-right:1px solid #dce5ec;border-radius:5px;color:#345166}
 #floatingTools #editModeToggle.active{color:#245481;background:#dceaf5}
 #floatingTools [data-tool="新建批注"],#floatingTools [data-tool="撤销"]{border-left:1px solid #e1e7ec;border-radius:0}
-.viewMode .richText{cursor:text;user-select:text;-webkit-user-select:text;caret-color:transparent}
+.viewMode .richText:not([data-note-editor]){cursor:text;user-select:text;-webkit-user-select:text;caret-color:transparent}
 .viewMode .editableTitle{cursor:text;caret-color:transparent}
-.viewMode .mathPalette,.viewMode .emptyFigureAdd,.viewMode .resizeHandle,.viewMode .visualHandle,.viewMode .createBlockButton{display:none!important}
+.viewMode :is(.emptyFigureAdd,.resizeHandle,.visualHandle,.createBlockButton):not([data-note-editor] *){display:none!important}
 .viewMode .visualCard.selectedObject:not(.part-text),.viewMode .selectedImage{outline:1px solid #b9cbd8}
 /* Whole objects in a prose range are atomic, including their captions. */
 ::highlight(paper-range){background:#315fc6;color:white}
@@ -57,7 +57,7 @@
 .rangeHandle::before{content:'';display:block;width:3px;height:9px;background:#315fc6;margin:0 auto}
 .rangeHandle::after{content:'';display:block;width:16px;height:16px;background:#315fc6;border-radius:50%;margin:0 auto;border:1px solid white}
 .rangeHandle[hidden]{display:none}
-.viewMode math-field::part(virtual-keyboard-toggle){display:none!important}
+.viewMode math-field:not([data-note-editor])::part(virtual-keyboard-toggle){display:none!important}
 /* A single formula toolbar, shared by inline and numbered formula fields.
    It lives outside editable content and never becomes part of the document. */
 .mathPalette{display:flex;position:fixed;z-index:10010;box-sizing:border-box;flex-wrap:nowrap;overflow-x:auto;max-height:68px;margin:0;padding:5px;gap:4px;background:#fff;border:1px solid #b9cbd9;border-radius:8px;box-shadow:0 3px 14px #20395024;align-items:center;touch-action:pan-x}

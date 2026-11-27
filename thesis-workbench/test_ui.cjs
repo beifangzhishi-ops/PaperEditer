@@ -566,6 +566,45 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--view-note-only')){
+            for(const mobile of [true,false]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                await p.evaluate(()=>{if(editingEnabled)toggleEditMode();if(!floatingToolsEnabled)toggleFloatingTools();select('demo-start',0)});
+                const target=p.locator('.pane .part-text .richText').first();
+                const tool=name=>p.locator(`#floatingTools [data-tool="${name}"]`);
+                const original=await p.evaluate(()=>find('demo-start').body);
+                assert.equal(await target.getAttribute('contenteditable'),'false');
+                await p.locator('.pane .inlineAnnotation').first().click();
+                const noteId=await p.evaluate(()=>dialog._noteId);
+                const note=p.locator('#dialog .part-text .richText').first();
+                assert.equal(await note.getAttribute('contenteditable'),'true');
+                await note.fill('Edited in view mode');
+                await note.press('Enter');
+                await p.waitForFunction(id=>!dialog.open&&find(id).body.includes('Edited in view mode'),noteId);
+                assert.equal(await p.evaluate(()=>find('demo-start').body),original);
+                await target.evaluate(a=>{const r=document.createRange(),t=a.querySelector('p').firstChild;r.setStart(t,0);r.setEnd(t,9);getSelection().removeAllRanges();getSelection().addRange(r);scheduleToolbarUpdate()});
+                await p.waitForFunction(()=>document.querySelector('#floatingTools [data-tool="新建批注"]').getAttribute('aria-disabled')==='false');
+                assert.equal(await tool('剪切').getAttribute('aria-disabled'),'true');
+                await tool('新建批注').click();
+                const fresh=p.locator('#dialog .part-text .richText').first();
+                await fresh.fill('New in view mode');await fresh.press('Enter');
+                await p.waitForFunction(()=>!dialog.open&&db.blocks.some(n=>n.body.includes('New in view mode')));
+                const created=await p.evaluate(()=>db.blocks.find(n=>n.body.includes('New in view mode')));
+                assert.equal(created.annotation.quote,'A fiction');
+                assert((await p.evaluate(()=>find('demo-start').body)).includes('[[embed:'+created.id+']]'));
+                assert.equal(await p.evaluate(()=>editingEnabled),false);
+                assert.equal(await target.getAttribute('contenteditable'),'false');
+                await p.waitForFunction(()=>!dirty&&!saving);
+                await p.evaluate(id=>{setView('blocks');select(id,0)},created.id);
+                const pageNote=p.locator('.pane.activepane .richText').first();
+                assert.equal(await pageNote.getAttribute('contenteditable'),'true');
+                await pageNote.fill('Edited from annotation list');
+                await p.waitForFunction(id=>find(id).body.includes('Edited from annotation list'),created.id);
+                assert.equal(await p.evaluate(()=>editingEnabled),false);
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: view mode creates bound annotations and edits popups and annotation pages without unlocking thesis');return
+        }
         if(process.argv.includes('--mobile-status-only')){
             for(const width of [320,390,600])for(const history of [false,true]){
                 const {p,context,errors}=await fixture(browser,true);
@@ -937,6 +976,19 @@ async function run(){
             await mobile.p.locator('.historicalPane.activepane').waitFor();
             assert(await mobile.p.locator('.historyPreview').isVisible());
             assert(await mobile.p.locator('.historyPageDiff').isVisible());
+            assert.equal(await mobile.p.evaluate(()=>editingEnabled),false);
+            for(const [id,body,count] of [[a.id,data.state.thesis[0].body,2],[b.id,past.thesis[0].body,3]]){
+                await headerControl(mobile.p,'historyButton','tap');
+                await mobile.p.locator('.historyGroup summary').tap();
+                await mobile.p.locator(`.historyRow[data-commit="${id}"] .historyMore`).tap();
+                assert(await menu(mobile.p,'恢复版本').isEnabled());
+                await menu(mobile.p,'恢复版本').tap();
+                await mobile.p.waitForFunction(({body,count})=>find('demo-start').body===body&&db.revision==='restore-'+count,{body,count});
+                assert.equal(shared.restoreCalls,count);
+                assert.equal(await mobile.p.evaluate(()=>editingEnabled),false);
+                assert(await mobile.p.locator('.historicalPane.activepane').isVisible());
+                assert.equal(await mobile.p.locator('.historyPreview [contenteditable=true],.historyPreview math-field').count(),0);
+            }
             await mobile.p.locator('.historicalPane').getByRole('button',{name:'切换 首页',exact:true}).tap();
             assert(await mobile.p.locator('#panes > .pane').first().isVisible());
             await headerControl(mobile.p,'dual','tap');
@@ -1328,9 +1380,9 @@ async function run(){
         await q.keyboard.press('Delete');
         assert.equal(await q.evaluate(()=>find('demo-start').body),readingOriginal);
         await q.locator('.pane .inlineAnnotation').first().tap();
-        console.log('Mobile: verifying read-only annotation');
+        console.log('Mobile: verifying editable annotation in view mode');
         await q.locator('#dialog .richText').waitFor({state:'visible'});
-        assert.equal(await q.locator('#dialog .richText').first().getAttribute('contenteditable'),'false');
+        assert.equal(await q.locator('#dialog .richText').first().getAttribute('contenteditable'),'true');
         assert.equal(await q.evaluate(()=>document.activeElement?.isContentEditable),false);
         await q.locator('#workspaceName').tap();
         await q.waitForFunction(()=>!document.querySelector('#dialog').open);
