@@ -147,7 +147,31 @@ function mathPanel(field){
 const noteLabelSelector='.inlineAnnotation,.objectNoteMarker,.freeNoteMarker,.noteWindowHandle';
 let selectedNoteId=null;
 let textAnnotationRanges=[];
+let annotatedMath=new Set();
+function mathAtomsInRange(range,area){
+    return [...area.querySelectorAll('.inlineMathAtom')].filter(atom=>{
+        const bounds=document.createRange();bounds.selectNode(atom);
+        return range.compareBoundaryPoints(Range.END_TO_START,bounds)<0&&range.compareBoundaryPoints(Range.START_TO_END,bounds)>0;
+    })
+}
+function annotationMathToken(atom){return '\uFFFC'+JSON.stringify(atom.querySelector('math-field')?.dataset.tex||'')+'\uFFFC'}
+function annotationQuote(range){
+    const quote=range.toString(),fragment=range.cloneContents(),atoms=fragment.querySelectorAll('.inlineMathAtom');
+    if(!atoms.length)return {quote};
+    for(const atom of atoms)atom.replaceWith(document.createTextNode(annotationMathToken(atom)));
+    return {quote,mathQuote:fragment.textContent}
+}
+function syncAnnotationMath(){
+    const next=new Set(),selected=new Set();
+    for(const {chip,math} of textAnnotationRanges)if(chip.isConnected)for(const atom of math||[]){
+        next.add(atom);if(chip.dataset.noteId===selectedNoteId)selected.add(atom)
+    }
+    for(const atom of annotatedMath)if(!next.has(atom))atom.classList.remove('annotationMathHighlight','annotationMathSelected');
+    for(const atom of next){atom.classList.add('annotationMathHighlight');atom.classList.toggle('annotationMathSelected',selected.has(atom))}
+    annotatedMath=next
+}
 function syncNoteSelection(){
+    syncAnnotationMath();
     for(const chip of document.querySelectorAll(noteLabelSelector)){
         const selected=!!selectedNoteId&&chip.dataset.noteId===selectedNoteId;
         chip.classList.toggle('selectedNoteLabel',selected);
@@ -424,11 +448,11 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root._rangeAnnotationBinding=r=>{
         const node=find(owner);
         if(internal||!node||spaceOf(owner)!=='thesis'||dialog.open||!root.closest('.pane:not(.historicalPane)'))return null;
-        const pieces=selectedPieces(r).filter(p=>p.local&&p.local.toString());
+        const pieces=selectedPieces(r).filter(p=>p.local&&(p.local.toString()||mathAtomsInRange(p.local,p.card).length));
         if(!pieces.length)return null;
         const first=pieces[0],area=first.card.querySelector('.richText'),range=first.local.cloneRange();range.collapse(true);
-        const start=cards().indexOf(first.card),segments=pieces.map(p=>({partOffset:cards().indexOf(p.card)-start,quote:p.local.toString()}));
-        return {doc:root,area,range,owner:node,mode:'selection',quote:segments.map(s=>s.quote).join('\n\n'),...(segments.length>1?{segments}:{})}
+        const start=cards().indexOf(first.card),segments=pieces.map(p=>({partOffset:cards().indexOf(p.card)-start,...annotationQuote(p.local)}));
+        return {doc:root,area,range,owner:node,mode:'selection',quote:segments.map(s=>s.quote).join('\n\n'),...(segments.length>1?{segments}:segments[0].mathQuote?{mathQuote:segments[0].mathQuote}:{})}
     };
     function selectedRangeNotes(r,pieces=selectedPieces(r,true)){
         if(internal||!pieces.length)return [];
@@ -440,7 +464,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             if(!piece.local)for(const id of objectIds({body:piece.raw}))ids.add(id);
         }
         for(const {chip,range} of textAnnotationRanges){
-            if(!chip.isConnected||!body.contains(chip)||!range.toString())continue;
+            if(!chip.isConnected||!body.contains(chip)||range.collapsed)continue;
             const piece=pieces.find(p=>p.local&&p.card.contains(range.startContainer));
             if(!piece||piece.local.compareBoundaryPoints(Range.END_TO_START,range)>=0||piece.local.compareBoundaryPoints(Range.START_TO_END,range)<=0)continue;
             const note=db.blocks.find(n=>n.id===chip.dataset.noteId);
@@ -490,7 +514,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     let touchPressSerial=0,preparedTouchSerial=0,touchTap=null,touchLongPressTimer=0;
     function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');CSS.highlights.delete('paper-range-annotation');ownsHighlight=false}}
     let highlightedNotes=[];
-    function clearRangeNotes(){for(const chip of highlightedNotes)chip.classList.remove('rangeNoteSelected');highlightedNotes=[]}
+    function clearRangeNotes(){for(const chip of highlightedNotes)chip.classList.remove('rangeNoteSelected','rangeAnnotationMathSelected');highlightedNotes=[]}
     let highlightedMath=new Set();
     function syncRangeMath(r){
         const next=new Set();
@@ -515,6 +539,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         clearRangeNotes();
         const ids=new Set(cross?selectedRangeNotes(cross).map(x=>x.note.id):[]);
         if(cross){highlightedNotes=[...(root.closest('.page')||root).querySelectorAll(noteLabelSelector)].filter(chip=>ids.has(chip.dataset.noteId));for(const chip of highlightedNotes)chip.classList.add('rangeNoteSelected')}
+        if(cross)for(const {chip,math} of textAnnotationRanges)if(body.contains(chip)&&ids.has(chip.dataset.noteId))for(const atom of math||[]){atom.classList.add('rangeAnnotationMathSelected');highlightedNotes.push(atom)}
         if(cross&&window.CSS?.highlights&&window.Highlight){CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));const h=new Highlight(...textAnnotationRanges.filter(x=>body.contains(x.chip)&&ids.has(x.chip.dataset.noteId)).map(x=>x.range));h.priority=1;CSS.highlights.set('paper-range-annotation',h);ownsHighlight=true}else clearHighlight();
         if(!cross||!window.CSS?.highlights||!window.Highlight||!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length){for(const h of handles)h.hidden=true;return}
         for(let i=0;i<2;i++){
@@ -1345,11 +1370,25 @@ function refreshTextAnnotations(){
         for(const chip of paneBox.querySelectorAll('.richText .inlineAnnotation')){
             const doc=chip.closest('.visualDocument'),owner=doc?._owner,id=chip.dataset.token?.slice(8,-2),note=find(id);
             if(!owner||!note)continue;
-            const bindings=[note.annotation,...(note.textBindings||[])].filter(a=>a?.owner===owner&&a.quote).sort((a,b)=>b.quote.length-a.quote.length);
+            const bindings=[note.annotation,...(note.textBindings||[])].filter(a=>a?.owner===owner&&(a.quote||a.mathQuote||a.segments?.some(s=>s.mathQuote))).sort((a,b)=>(b.quote||'').length-(a.quote||'').length);
             const firstArea=chip.closest('.richText'),cards=[...doc.querySelector(':scope > .visualBody').children],start=cards.indexOf(chip.closest('.visualCard'));
-            function matchQuote(area,quote,marker){
-                if(!area||!quote)return null;
+            function matchQuote(area,quote,marker,mathQuote){
+                if(!area||!(quote||mathQuote))return null;
                 const range=document.createRange();if(marker)range.setStartAfter(marker);else range.setStart(area,0);range.setEnd(area,area.childNodes.length);
+                if(mathQuote){
+                    const walker=document.createTreeWalker(area,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);let length=0;
+                    for(let n=walker.nextNode();n;n=walker.nextNode()){
+                        if(marker&&(marker.contains(n)||!(marker.compareDocumentPosition(n)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
+                        const atom=(n.nodeType===1?n:n.parentElement)?.closest('.inlineMathAtom');
+                        if(atom&&atom!==n)continue;
+                        if(!atom&&n.nodeType!==Node.TEXT_NODE)continue;
+                        const value=atom?annotationMathToken(atom):n.textContent,remaining=mathQuote.slice(length);
+                        if(atom){if(!remaining.startsWith(value))return null;length+=value.length;if(length===mathQuote.length){range.setEndAfter(atom);return range}}
+                        else if(value.startsWith(remaining)){range.setEnd(n,remaining.length);return range}
+                        else {if(!remaining.startsWith(value))return null;length+=value.length}
+                    }
+                    return null
+                }
                 if(!range.toString().startsWith(quote))return null;
                 const walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);let length=0;
                 for(let n=walker.nextNode();n;n=walker.nextNode()){
@@ -1360,12 +1399,12 @@ function refreshTextAnnotations(){
                 return null
             }
             for(const binding of bindings){
-                const segments=Array.isArray(binding.segments)&&binding.segments.length?binding.segments:[{partOffset:0,quote:binding.quote}];
+                const segments=Array.isArray(binding.segments)&&binding.segments.length?binding.segments:[{partOffset:0,quote:binding.quote,mathQuote:binding.mathQuote}];
                 if(segments[0].partOffset!==0)continue;
-                const matched=segments.map(({partOffset,quote})=>matchQuote(partOffset===0?firstArea:cards[start+partOffset]?.querySelector('.part-text .richText'),quote,partOffset===0?chip:null));
+                const matched=segments.map(({partOffset,quote,mathQuote})=>matchQuote(partOffset===0?firstArea:cards[start+partOffset]?.querySelector('.part-text .richText'),quote,partOffset===0?chip:null,mathQuote));
                 // Do not paint a partial or unrelated quote when its text has changed.
                 if(matched.some(r=>!r))continue;
-                for(const range of matched){ranges.push(range);textAnnotationRanges.push({chip,range})}break
+                for(const range of matched){const area=(range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement).closest('.richText');ranges.push(range);textAnnotationRanges.push({chip,range,math:mathAtomsInRange(range,area)})}break
             }
         }
         const highlight=new Highlight(...ranges);highlight.priority=-1;CSS.highlights.set('paper-annotation',highlight);syncNoteSelection();
@@ -1450,7 +1489,7 @@ function newNode(space,parent=null,body='',title='',onCreated=null,options={}){
             const value=remapCopiedObjects(doc.getValue());if(!value.trim()){dialog.close();return}
             checkpoint();const id='block-'+uid(),n={id,title:blockLabel(value),parent,level:parent?ancestors(find(parent)).length+2:1,number:'',file:'blocks/'+id+'.md',source:'',order:db.blocks.length,body:value};
             if(options.binding?.mode==='object')n.objectBindings=[{targetId:options.binding.targetId,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}}];
-            else if(options.binding)n.annotation={owner:options.binding.owner.id,mode:options.binding.mode,quote:options.binding.quote,...(options.binding.segments?{segments:options.binding.segments}:{}),floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}};
+            else if(options.binding)n.annotation={owner:options.binding.owner.id,mode:options.binding.mode,quote:options.binding.quote,...(options.binding.segments?{segments:options.binding.segments}:{}),...(options.binding.mathQuote?{mathQuote:options.binding.mathQuote}:{}),floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}};
             else if(options.freePlacement)n.freePlacements=[{...options.freePlacement,floatOffset:{...(dialog._relativeOffset||{x:14,y:8})}}];
             if(dialog._noteSize)n.floatSize={...dialog._noteSize};
             db.blocks.push(n);normalizeOrder(space);dialog.close();change(false);if(onCreated){onCreated(id);renderNav()}else{select(id);renderPanes()}

@@ -67,6 +67,9 @@
 .visualMath:not(.displayMath):focus-within{outline:1px solid var(--pe-strong-border,#b4c9d9);outline-offset:2px;background:var(--pe-raised,#fafcfe);min-width:20px!important}
 .inlineMathAtom{display:inline-block;vertical-align:baseline;white-space:nowrap;max-width:100%}
 .inlineMathAtom.rangeMathSelected{outline:2px solid #315fc6;outline-offset:0;border-radius:4px;background:var(--pe-range-tint,#315fc614)}
+.inlineMathAtom.annotationMathHighlight{background:var(--pe-note-bg,#fff0b3);box-shadow:inset 0 -1px var(--pe-note-line,#d5a536)}
+.inlineMathAtom:is(.annotationMathSelected,.rangeAnnotationMathSelected){background:var(--pe-active,#c8e2fa);box-shadow:inset 0 -2px var(--pe-accent,#3977b5)}
+.inlineMathAtom.annotationMathHighlight>math-field:not(:focus-within){background:transparent}
 #toast{pointer-events:none}
 @media(max-width:760px){.mathPalette{width:calc(100vw - 16px);max-height:55px}.mathPalette button{min-height:36px;min-width:36px}}
 /* Native fullscreen and immersive fallback share the same full header. */

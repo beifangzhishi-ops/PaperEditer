@@ -1250,6 +1250,33 @@ async function run(){
             }
             console.log('PASS: plain and structured paste center the insertion end on desktop and mobile');return
         }
+        if(process.argv.includes('--annotation-math-highlight-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                if(mobile)await p.locator('#editModeToggle').tap();
+                await p.evaluate(()=>{clearAnnotationPlacement(find('demo-free'));const n=find('demo-note');clearAnnotationPlacement(n);n.annotation={owner:'demo-start',quote:'Alpha  Omega',mode:'selection'};find('demo-start').body='[[embed:demo-note]]Alpha $a+b$ Omega then $c^2$ end';reindex();select('demo-start')});
+                const area=p.locator('.pane .part-text .richText').first(),atoms=area.locator('.inlineMathAtom');
+                await p.waitForFunction(()=>document.querySelectorAll('.annotationMathHighlight').length===1);
+                assert.equal(await atoms.first().evaluate(a=>a.classList.contains('annotationMathHighlight')),true);
+                assert.equal(await atoms.first().evaluate(a=>getComputedStyle(a).backgroundColor),'rgb(255, 240, 179)');
+                await area.locator('.inlineAnnotation').evaluate(chip=>chip._openNote());
+                await p.waitForFunction(()=>document.querySelector('.annotationMathSelected'));
+                await p.evaluate(()=>{closeWorkbenchDialog();clearNoteLabel()});
+                await p.waitForFunction(()=>!document.querySelector('.annotationMathSelected'));
+                // New annotations ending at an atom preserve that endpoint, including formula-only selections.
+                await area.evaluate(a=>{const atom=a.querySelectorAll('.inlineMathAtom')[1],r=document.createRange();r.selectNode(atom);const binding=a.closest('.visualDocument')._rangeAnnotationBinding(r);if(!binding?.mathQuote)throw Error('missing formula binding');const b=atom.getBoundingClientRect();newAnnotation(binding,{clientX:b.left,clientY:b.bottom})});
+                await p.locator('#dialog .richText').first().fill('Formula annotation');
+                await p.evaluate(()=>closeWorkbenchDialog());
+                await p.waitForFunction(()=>document.querySelectorAll('.annotationMathHighlight').length===2);
+                await p.evaluate(()=>renderPanes());
+                await p.waitForFunction(()=>document.querySelectorAll('.annotationMathHighlight').length===2);
+                assert.equal(await atoms.nth(1).evaluate(a=>a.classList.contains('annotationMathHighlight')),true);
+                await p.evaluate(()=>{const note=db.blocks.find(n=>n.annotation?.mathQuote);deleteNode(note)});
+                await p.waitForFunction(()=>document.querySelectorAll('.annotationMathHighlight').length===1);
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: legacy and formula-only annotation math highlights on desktop/mobile');return
+        }
         if(process.argv.includes('--annotation-highlight-only')){
             for(const isMobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,isMobile);

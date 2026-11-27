@@ -1505,9 +1505,9 @@ function annotationBinding(e,pane){
     if(!area||!doc?._owner||!doc._insertBoundAnnotation)return null;
     const rects=[...r.getClientRects()],pad=r.collapsed?22:10;
     if(!rects.some(x=>near(x,pad))&&!near(r.getBoundingClientRect(),pad))return null;
-    const quote=r.collapsed?'':r.toString();
+    const quote=r.collapsed?{quote:''}:annotationQuote(r);
     const start=r.cloneRange();start.collapse(true);
-    return {doc,area,range:start,quote,owner:find(doc._owner),mode:r.collapsed?'caret':'selection'};
+    return {doc,area,range:start,...quote,owner:find(doc._owner),mode:r.collapsed?'caret':'selection'};
 }
 function freeNotePlacements(n){return Array.isArray(n.freePlacements)?n.freePlacements:[]}
 function freeNoteLocation(e){
