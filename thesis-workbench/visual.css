@@ -249,3 +249,14 @@ body.fullscreenHeaderHidden header{display:none}
 .figureDropMarker{position:absolute;z-index:8;background:var(--pe-accent,#3977b5);border-radius:2px;pointer-events:none}
 .viewMode .visualDocument:not([data-note-editor]) .figureImageGap,.viewMode .visualDocument:not([data-note-editor]) .figureRowBreak,.viewMode .visualDocument:not([data-note-editor]) .figureDragHandle{visibility:hidden;pointer-events:none}
 .viewMode .visualDocument:not([data-note-editor]) .figureImageRow img{cursor:pointer}
+/* Immersive image preview: only the image itself is opaque. */
+#dialog:has(.imagePreviewActions){width:max-content;max-width:96vw;max-height:96dvh;padding:12px;border:0;border-radius:0;background:transparent;color:white;box-shadow:none;overflow:auto}
+#dialog:has(.imagePreviewActions)::backdrop{background:rgba(0,0,0,.76)}
+#dialog:has(.imagePreviewActions) #dialogBody{display:flex;flex-direction:column;align-items:center;gap:10px}
+#dialog:has(.imagePreviewActions) h2{margin:0;max-width:90vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500}
+#dialog:has(.imagePreviewActions) .imagefull{display:block;max-width:min(90vw,100%);max-height:calc(90dvh - 112px);width:auto;height:auto;object-fit:contain;margin:0}
+#dialog:has(.imagePreviewActions) #closeDialog{display:none}
+.imagePreviewActions{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}
+.imagePreviewActions button{background:#0006;color:white;border:1px solid #ffffff50;border-radius:7px;padding:7px 13px}
+.imagePreviewActions button:hover,.imagePreviewActions button:focus-visible{background:#ffffff26}
+.imagePreviewStatus{min-height:1.5em;max-width:90vw;color:white;font-size:12px;text-align:center}

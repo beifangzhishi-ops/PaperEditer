@@ -711,6 +711,32 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--image-preview-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                try{
+                    await p.evaluate(()=>{find('demo-start').body=':::figure preview-fig\nCaption\n\n![demo.png](/assets/demo.png "wb-id:preview-image")\n:::';select('demo-start',0)});
+                    const image=p.locator('.pane [data-object="preview-fig"] .resizeImage img'),modal=p.locator('#dialog'),preview=modal.locator('.imagefull');
+                    const open=async()=>{await image.dblclick();await preview.waitFor({state:'visible'});await p.waitForFunction(()=>document.querySelector('.imagefull')?.naturalWidth>0)};
+                    const closed=()=>modal.waitFor({state:'hidden'});
+                    await open();
+                    const appearance=await modal.evaluate(d=>({background:getComputedStyle(d).backgroundColor,backdrop:getComputedStyle(d,'::backdrop').backgroundColor,fit:d.querySelector('.imagefull').getBoundingClientRect().width<=innerWidth}));
+                    assert.equal(appearance.background,'rgba(0, 0, 0, 0)');assert.equal(appearance.backdrop,'rgba(0, 0, 0, 0.76)');assert(appearance.fit);
+                    await preview.click();assert(await modal.isVisible());
+                    await modal.getByRole('button',{name:'复制图像',exact:true}).click();
+                    await p.waitForFunction(()=>document.querySelector('.imagePreviewStatus')?.textContent==='图像已复制');
+                    const copied=await p.evaluate(async()=>{const items=await navigator.clipboard.read();const blob=await items[0].getType('image/png');const img=await createImageBitmap(blob);return [img.width,img.height]});
+                    assert.deepEqual(copied,await preview.evaluate(i=>[i.naturalWidth,i.naturalHeight]));
+                    const pending=p.waitForEvent('download');await modal.getByRole('button',{name:'保存图像',exact:true}).click();const download=await pending;
+                    assert.equal(download.suggestedFilename(),'demo.png');assert.deepEqual(fs.readFileSync(await download.path()),Buffer.from(data.image,'base64'));
+                    await modal.getByRole('button',{name:'关闭',exact:true}).click();await closed();
+                    await open();await p.keyboard.press('Escape');await closed();
+                    await open();await p.mouse.click(2,2);await closed();
+                    assert.deepEqual(errors,[]);
+                }finally{await context.close()}
+            }
+            console.log('PASS: immersive image preview, actual image clipboard, byte-identical download, close button, Escape and backdrop (desktop/mobile)');return
+        }
         if(process.argv.includes('--tree-alignment-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);

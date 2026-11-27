@@ -1902,6 +1902,53 @@ function refSpan(kind,id){
     s.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();jump(id,e.shiftKey)});
     context(s,()=>refMenu(t),()=>resolve(t.id)||t);return s
 }
+function showImagePreview(src,alt){
+    const name=decodeURIComponent(new URL(src,location.href).pathname.split('/').pop());
+    const d=showDialog(alt||name||'图片'),f=el('img','imagefull'),actions=el('div','imagePreviewActions'),status=el('div','imagePreviewStatus');
+    f.src=src;f.alt=alt||name;f.draggable=false;
+    // Preserve the browser's native image menu (also useful on HTTP clients
+    // that cannot use the async system clipboard).
+    for(const type of ['contextmenu','pointerdown'])f.addEventListener(type,e=>e.stopPropagation());
+    status.setAttribute('role','status');
+    const copyButton=btn('复制图像',async()=>{
+        if(!navigator.clipboard?.write||!window.ClipboardItem){status.textContent='当前浏览器不支持直接复制，请右键或长按图片复制';return}
+        copyButton.disabled=true;status.textContent='';
+        try{
+            // Start the clipboard write during the click, before awaiting
+            // network/decoding work, to retain browser user activation.
+            const png=fetch(src).then(async response=>{
+                if(!response.ok)throw new Error('Image unavailable');
+                const blob=await response.blob();
+                if(blob.type==='image/png')return blob;
+                const bitmap=await createImageBitmap(blob);
+                try{
+                    const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;
+                    canvas.getContext('2d').drawImage(bitmap,0,0);
+                    return await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('PNG conversion failed')),'image/png'));
+                }finally{bitmap.close()}
+            });
+            png.catch(()=>{});
+            await navigator.clipboard.write([new ClipboardItem({'image/png':png})]);
+            status.textContent='图像已复制';
+        }catch{status.textContent='复制失败，请检查剪贴板权限，或右键/长按图片复制'}
+        finally{copyButton.disabled=false}
+    });
+    const saveButton=btn('保存图像',async()=>{
+        saveButton.disabled=true;status.textContent='';
+        try{
+            const response=await fetch(src);
+            if(!response.ok)throw new Error('Image unavailable');
+            const url=URL.createObjectURL(await response.blob()),a=el('a');a.href=url;
+            const extension=name.match(/\.[^.]+$/)?.[0];
+            a.download=alt&&extension&&alt.toLowerCase().endsWith(extension.toLowerCase())&&!/[\\/:*?"<>|]/.test(alt)?alt:name;
+            d.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+        }catch{status.textContent='保存失败，请重试'}
+        finally{saveButton.disabled=false}
+    });
+    actions.append(copyButton,saveButton,btn('关闭',closeWorkbenchDialog));
+    d.append(f,actions,status);
+    copyButton.focus({preventScroll:true});
+}
 function markdown(raw,host,trail=[],onImageResize=null){
     if(!raw.trim())return;
     const tokens=[];
@@ -1928,7 +1975,7 @@ function markdown(raw,host,trail=[],onImageResize=null){
         wrap._setImageWidth=value=>{w=value;wrap.style.width=wrap.parentElement?.matches('.figureImageRow')?figureRowWidthStyle(w):w+'%'};
         wrap._getImageWidth=()=>w;
         function activate(){document.querySelectorAll('.resizeImage.selectedImage').forEach(x=>{if(x!==wrap)x.classList.remove('selectedImage')});wrap.classList.add('selectedImage');wrap.closest('.visualCard')?._selectImage?.(wrap);wrap.closest('.visualDocument')?.focus({preventScroll:true})}
-        function full(){const d=showDialog(img.alt||'图片');const f=el('img','imagefull');f.src=src;d.append(f,btn('打开原图',()=>window.open(src,'_blank','noopener')))}
+        function full(){showImagePreview(src,img.alt)}
         function commit(widths=null){if(onImageResize)onImageResize(src,w,index,widths);else localStorage.setItem(key,String(w))}
         // Freeze every other image's displayed width. The selected image can
         // only use the unoccupied width of its explicit row.
@@ -2249,7 +2296,8 @@ dialog.addEventListener('cancel',e=>{if(dialog._commitNote){e.preventDefault();c
 document.addEventListener('pointerdown',e=>{
     if(!dialog.open||isActionSurface(e.target))return;
     const r=dialog.getBoundingClientRect();
-    if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeWorkbenchDialog()
+    const imageBlank=dialog.querySelector('.imagePreviewActions')&&(e.target===dialog||e.target===$('dialogBody'));
+    if(imageBlank||e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeWorkbenchDialog()
 },true);
 document.addEventListener('click',e=>{if(isActionSurface(e.target))return;$('menu').hidden=true;if(!e.target.closest('.resizeImage'))document.querySelectorAll('.selectedImage').forEach(x=>x.classList.remove('selectedImage'))});
 const SHORTCUT_KEY='wb:tool-shortcuts:v2';

@@ -48,6 +48,8 @@ jobs:
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-highlight-only
       - name: Annotation image and private object regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-images-only
+      - name: Immersive image preview regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --image-preview-only
       - name: Mobile reading mode and dock regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --view-mode-only
       - name: Compact mobile header regression tests
