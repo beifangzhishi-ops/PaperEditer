@@ -711,6 +711,39 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--tree-alignment-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                try{
+                    await p.evaluate(()=>{
+                        const parent=find('demo-start'),base=find('demo-method');
+                        for(const [id,title,order,owner] of [
+                            ['test-leaf','Short leaf',100,parent.id],
+                            ['test-branch','A long branch title '.repeat(8),101,parent.id],
+                            ['test-child','Nested child',102,'test-branch']
+                        ])db.thesis.push({...base,id,title,body:'',parent:owner,order});
+                        open.add(parent.id);open.delete('test-branch');renderNav();
+                    });
+                    if(mobile)await p.locator('#drawer').click();
+                    const leaf=p.locator('#nav [data-node-id="test-leaf"]'),branch=p.locator('#nav [data-node-id="test-branch"]');
+                    const check=async()=>{
+                        const a=await leaf.locator('.navlabel').boundingBox(),b=await branch.locator('.navlabel').boundingBox();
+                        const x=await leaf.locator('.navToggle').boundingBox(),y=await branch.locator('.navToggle').boundingBox();
+                        assert(Math.abs(a.x-b.x)<1,'same-depth labels align');
+                        assert.equal(x.width,y.width);assert.equal(x.width,20);
+                        assert(b.height>a.height,'long title wraps');
+                        assert(Math.abs(y.y-b.y)<1,'toggle aligns with first line');
+                    };
+                    await check();await branch.locator('.navToggle').click();await check();
+                    const child=await p.locator('#nav [data-node-id="test-child"] .navlabel').boundingBox();
+                    const parent=await branch.locator('.navlabel').boundingBox();
+                    assert(Math.abs(child.x-parent.x-12)<1,'child keeps one level of indent');
+                    await branch.locator('.navToggle').click();assert.equal(await p.locator('#nav [data-node-id="test-child"]').count(),0);
+                    assert.deepEqual(errors,[]);
+                }finally{await context.close()}
+            }
+            console.log('PASS: tree label alignment, wrapped titles, nested indentation and toggle behavior on desktop/mobile');return
+        }
         if(process.argv.includes('--inline-math-caret-only')){
             await checkInlineMathCaret(browser,false);await checkInlineMathCaret(browser,true);
             console.log('PASS: inline math caret entry, exit, adjacent formulas, pointer placement and vertical navigation on desktop/mobile');return

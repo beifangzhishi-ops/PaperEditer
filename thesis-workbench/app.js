@@ -1705,10 +1705,10 @@ function renderNav(){
     const list=db[view];
     const query=search.trim().toLowerCase();
     function add(n,depth,hit=false){
-        const row=el('div','navrow'+(panes[active].id===n.id?' selected':''));
+        const row=el('div','navrow treeNavRow'+(panes[active].id===n.id?' selected':''));
         row.style.paddingLeft=Math.min(depth,8)*12+'px';row.dataset.nodeId=n.id;row.draggable=true;
         const kids=children(view,n.id);
-        const toggle=btn(kids.length?(open.has(n.id)?'▾':'▸'):'·',()=>{if(open.has(n.id))open.delete(n.id);else open.add(n.id);renderNav()});
+        const toggle=btn(kids.length?(open.has(n.id)?'▾':'▸'):'·',()=>{if(open.has(n.id))open.delete(n.id);else open.add(n.id);renderNav()},'navToggle');
         const rowMenu=()=>view==='blocks'?[...nodeMenu(n),['删除',()=>deleteNode(n)]]:nodeMenu(n);
         const t=el('span','navlabel',label(n));row.append(toggle,t,btn('⋯',e=>menuAt(e,rowMenu())));
         if(hit){const excerpt=n.body.toLowerCase().indexOf(query);if(excerpt>=0){const sub=el('span','searchhit',n.body.slice(Math.max(0,excerpt-14),excerpt+40));t.append(sub)}}
