@@ -453,19 +453,20 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     const handles=[el('span','rangeHandle rangeStart'),el('span','rangeHandle rangeEnd')];
     for(const h of handles){h.hidden=true;root.append(h);h.setAttribute('aria-hidden','true')}
     let ownsHighlight=false;
+    let touchPressSerial=0,preparedTouchSerial=0,touchTap=null,touchLongPressTimer=0;
     function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');CSS.highlights.delete('paper-range-annotation');ownsHighlight=false}}
     let highlightedNotes=[];
     function clearRangeNotes(){for(const chip of highlightedNotes)chip.classList.remove('rangeNoteSelected');highlightedNotes=[]}
     function clearMixed(){mixed=null;anchorPoint=focusPoint=null;for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearRangeNotes();clearHighlight()}
     root._clearMixed=clearMixed;
     function syncRange(){
-        const cross=activeMixed(),r=cross||nativeRange(),pieces=selectedPieces(r);
+        const cross=mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer)?mixed:null,r=cross||nativeRange(),pieces=selectedPieces(r);
         for(const c of cards())c.classList.toggle('rangeSelected',cross&&pieces.some(x=>x.card===c&&!x.local));
         clearRangeNotes();
         const ids=new Set(cross?selectedRangeNotes(cross).map(x=>x.note.id):[]);
         if(cross){highlightedNotes=[...(root.closest('.page')||root).querySelectorAll(noteLabelSelector)].filter(chip=>ids.has(chip.dataset.noteId));for(const chip of highlightedNotes)chip.classList.add('rangeNoteSelected')}
         if(cross&&window.CSS?.highlights&&window.Highlight){CSS.highlights.set('paper-range',new Highlight(...pieces.map(x=>x.local).filter(Boolean)));const h=new Highlight(...textAnnotationRanges.filter(x=>body.contains(x.chip)&&ids.has(x.chip.dataset.noteId)).map(x=>x.range));h.priority=1;CSS.highlights.set('paper-range-annotation',h);ownsHighlight=true}else clearHighlight();
-        if(!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length||(!cross&&!pieces[0].local)){for(const h of handles)h.hidden=true;return}
+        if(!cross||!window.CSS?.highlights||!window.Highlight||!matchMedia('(pointer:coarse)').matches||!r||r.collapsed||!pieces.length){for(const h of handles)h.hidden=true;return}
         for(let i=0;i<2;i++){
             const piece=i?pieces.at(-1):pieces[0],rr=piece.local?.cloneRange();if(rr)rr.collapse(!i);
             const b=rr?caretBounds(rr):piece.card.getBoundingClientRect(),h=handles[i];
@@ -554,14 +555,25 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root.addEventListener('pointerdown',e=>{
         if(e.target.closest('.rangeHandle'))return;
         suppressDragClick=false;
+        const touchProse=e.target.closest('.part-text .richText');
+        if(e.pointerType==='touch'&&e.isPrimary&&e.button===0&&!isActionSurface(e.target)&&!e.target.closest('.resizeHandle,.noteResizeHandle')){
+            if(touchProse)touchPressSerial++;
+            touchTap={id:e.pointerId,x:e.clientX,y:e.clientY,time:Date.now(),moved:false,prose:!!touchProse};
+            clearTimeout(touchLongPressTimer);touchLongPressTimer=setTimeout(()=>{if(touchTap?.id===e.pointerId)touchTap.longPress=true},450)
+        }
         if(e.button===0&&e.shiftKey){
             let a=selectionAnchor();
             if(!a&&selectedObject){const c=cards().find(c=>c._part===selectedObject);if(c)a=edge(c,e.clientY<c.getBoundingClientRect().top)}
             const b=a&&pointAt(e.clientX,e.clientY,a);
             if(a&&b&&(mixed||cardOf(a.node)!==cardOf(b.node)||selectedRangeNotes(rangeOf(a,b)).length)){e.preventDefault();e.stopImmediatePropagation();setRange(a,b);return}
         }
-        if(e.button===0){clearMixed();if(!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey)beginMouseRange(e)}
+        if(e.button===0&&e.pointerType!=='touch'){clearMixed();if(!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey)beginMouseRange(e)}
     },true);
+    root.addEventListener('pointermove',e=>{if(touchTap?.id===e.pointerId&&Math.hypot(e.clientX-touchTap.x,e.clientY-touchTap.y)>10){touchTap.moved=true;clearTimeout(touchLongPressTimer)}},true);
+    root.addEventListener('pointerup',e=>{const t=touchTap;if(!t||e.pointerId!==t.id||!e.isPrimary)return;clearTimeout(touchLongPressTimer);touchTap=null;if(!t.moved&&!t.longPress&&Date.now()-t.time<550)clearMixed()},true);
+    root.addEventListener('pointercancel',e=>{if(touchTap?.id===e.pointerId){touchTap=null;clearTimeout(touchLongPressTimer)}},true);
+    root.addEventListener('lostpointercapture',e=>{if(touchTap?.id===e.pointerId){touchTap=null;clearTimeout(touchLongPressTimer)}},true);
+    root.addEventListener('selectstart',e=>{if(touchTap?.prose&&touchTap.longPress&&!touchTap.moved&&window.CSS?.highlights&&window.Highlight&&e.cancelable)e.preventDefault()},true);
     root.addEventListener('click',e=>{if(suppressDragClick||(e.shiftKey&&activeMixed())){suppressDragClick=false;e.preventDefault();e.stopImmediatePropagation()}},true);
     for(let i=0;i<2;i++)handles[i].addEventListener('pointerdown',e=>{
         const r=activeMixed()||nativeRange();if(!r)return;
@@ -581,9 +593,13 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end);h.addEventListener('lostpointercapture',end)
     });
     root._prepareTouchRange=e=>{
-        if(!e.target.closest('.part-text .richText')||mixed)return;
-        const existing=nativeRange();
-        if(existing&&!existing.collapsed){setRange(point(existing.startContainer,existing.startOffset),point(existing.endContainer,existing.endOffset));return}
+        if(!e.target.closest('.part-text .richText'))return;
+        if(!window.CSS?.highlights||!window.Highlight)return;
+        if(preparedTouchSerial===touchPressSerial)return;
+        preparedTouchSerial=touchPressSerial;
+        // A fresh long press starts from the current prose point, never from a
+        // native selection left behind by an earlier tap or gesture.
+        clearMixed();getSelection()?.removeAllRanges();
         const r=document.caretRangeFromPoint?.(e.clientX,e.clientY),n=r?.startContainer;
         if(n?.nodeType!==Node.TEXT_NODE||!body.contains(n)||!n.textContent.trim())return;
         const segments=[...new Intl.Segmenter(undefined,{granularity:'word'}).segment(n.textContent)];
@@ -631,7 +647,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd);if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
     }
     function mixedMenu(r){return [['剪切',async()=>{if(requireEditMode()){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode()){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]]}
-    root.addEventListener('contextmenu',e=>{const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
+    root.addEventListener('contextmenu',e=>{if(touchContextEvent(e)&&e.target.closest('.part-text .richText'))root._prepareTouchRange(e);const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,mixedMenu(r))}else menuAt(e,mixedMenu(r))},true);
     for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
         const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
         if(type==='paste'){if(editingEnabled){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
@@ -1114,7 +1130,8 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root.tabIndex=0;draw();
     return {root,getValue:value};
 }
-document.addEventListener('pointerdown',e=>{if(isActionSurface(e.target))return;for(const root of document.querySelectorAll('.visualDocument'))if(!root.contains(e.target)){root._clearObject?.();root._clearMixed?.()}},true);
+document.addEventListener('pointerdown',e=>{if(isActionSurface(e.target)||e.pointerType==='touch')return;for(const root of document.querySelectorAll('.visualDocument'))if(!root.contains(e.target)){root._clearObject?.();root._clearMixed?.()}},true);
+document.addEventListener('click',e=>{if(e.pointerType!=='touch'||isActionSurface(e.target)||e.target.closest('.rangeHandle')||Date.now()-touchMenuAt<500)return;for(const root of document.querySelectorAll('.visualDocument'))if(!root.contains(e.target)){root._clearObject?.();root._clearMixed?.()}},true);
 document.addEventListener('selectionchange',()=>{for(const root of document.querySelectorAll('.visualDocument'))root._syncRange?.()});
 document.addEventListener('scroll',()=>{for(const root of document.querySelectorAll('.visualDocument'))root._syncRange?.()},true);
 function editor(n,host,pi,summary=null){
