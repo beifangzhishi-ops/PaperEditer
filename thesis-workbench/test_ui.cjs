@@ -566,6 +566,37 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--theme-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                await p.emulateMedia({colorScheme:'light'});
+                await p.waitForFunction(()=>document.documentElement.dataset.theme==='light');
+                const before=await p.evaluate(()=>find('demo-start').body);
+                await headerControl(p,'themeToggle');
+                assert.equal(await p.locator('html').getAttribute('data-theme'),'dark');
+                assert.equal(await p.locator('body').getAttribute('theme'),'dark');
+                assert.equal(await p.locator('header').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(30, 34, 39)');
+                assert.equal(await p.locator('.pane').first().evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(30, 34, 39)');
+                assert.equal(await p.locator('body').evaluate(e=>getComputedStyle(e).color),'rgb(225, 230, 237)');
+                assert.equal(await p.locator('meta[name="theme-color"]').getAttribute('content'),'#1e2227');
+                await p.evaluate(()=>select('demo-start',0));
+                await p.locator('.pane .inlineAnnotation').first().click();
+                assert.equal(await p.locator('#dialog').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(30, 34, 39)');
+                await p.reload();await p.waitForFunction(()=>typeof db!=='undefined'&&db?.thesis?.length===2);
+                assert.equal(await p.locator('html').getAttribute('data-theme'),'dark');
+                assert.equal(await p.evaluate(()=>find('demo-start').body),before);
+                await headerControl(p,'themeToggle');
+                assert.equal(await p.locator('html').getAttribute('data-theme'),'light');
+                assert.equal(await p.locator('header').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
+                await p.emulateMedia({colorScheme:'dark'});
+                assert.equal(await p.locator('html').getAttribute('data-theme'),'light');
+                await p.evaluate(()=>localStorage.removeItem('wb:theme'));
+                await p.reload();await p.waitForFunction(()=>typeof db!=='undefined'&&db?.thesis?.length===2);
+                assert.equal(await p.locator('html').getAttribute('data-theme'),'dark');
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: theme desktop/mobile, note surfaces, persistence, system default and unchanged document');return;
+        }
         if(process.argv.includes('--view-note-only')){
             for(const mobile of [true,false]){
                 const {p,context,errors}=await fixture(browser,mobile);

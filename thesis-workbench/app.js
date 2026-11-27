@@ -2138,6 +2138,36 @@ async function installPaperEditer(){
 }
 syncInstallButton();
 
+
+// Theme is a per-browser preference, not part of the paper or its history.
+const themeQuery=matchMedia('(prefers-color-scheme: dark)');
+let themePreference=null;
+try{themePreference=localStorage.getItem('wb:theme')}catch{}
+const themeButton=btn('',()=>{
+    themePreference=document.documentElement.dataset.theme==='dark'?'light':'dark';
+    try{localStorage.setItem('wb:theme',themePreference)}catch{}
+    syncTheme();
+});
+themeButton.id='themeToggle';
+themeButton.type='button';
+$('shortcutSettings').after(themeButton);
+function syncTheme(){
+    const dark=themePreference==='dark'||(themePreference!=='light'&&themeQuery.matches);
+    const theme=dark?'dark':'light';
+    document.documentElement.dataset.theme=theme;
+    document.body.setAttribute('theme',theme); // MathLive's explicit theme hook.
+    document.querySelector('meta[name="theme-color"]').content=dark?'#1e2227':'#ffffff';
+    themeButton.textContent=dark?'浅色':'深色';
+    themeButton.title=dark?'切换至浅色模式':'切换至深色模式';
+    themeButton.setAttribute('aria-label','深色模式');
+    themeButton.setAttribute('aria-pressed',String(dark));
+}
+syncTheme();
+themeQuery.addEventListener('change',syncTheme);
+window.addEventListener('storage',e=>{
+    if(e.key==='wb:theme'||e.key===null){themePreference=e.key===null?null:e.newValue;syncTheme()}
+});
+
 // Keep one row on phones. Move the actual controls, not copies, so their
 // disabled/hidden state, handlers and native fullscreen activation are shared.
 const compactHeaderQuery=matchMedia('(max-width: 760px)');
@@ -2155,7 +2185,7 @@ const headerIdentityItems=['workspaceName','status'].map(id=>{
     control.before(marker);return {control,marker};
 });
 const headerStatusDetail=el('div');headerStatusDetail.id='headerStatusDetail';headerMorePanel.append(headerStatusDetail);
-const headerMoreItems=['openWorkspace','historyButton','dual','refresh','fullscreenToggle','shortcutSettings','installApp'].map(id=>{
+const headerMoreItems=['openWorkspace','historyButton','dual','refresh','fullscreenToggle','shortcutSettings','themeToggle','installApp'].map(id=>{
     const control=$(id),marker=document.createComment(id);
     control.before(marker);return {control,marker};
 });
