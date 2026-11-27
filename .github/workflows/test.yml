@@ -49,6 +49,8 @@ jobs:
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --annotation-images-only
       - name: Mobile reading mode and dock regression tests
         run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --view-mode-only
+      - name: Compact mobile header regression tests
+        run: PAPEREDITER_CHROME_PATH="$(command -v google-chrome)" node test_ui.cjs --mobile-status-only
   windows-cli:
     runs-on: windows-latest
     timeout-minutes: 15

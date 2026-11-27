@@ -18,17 +18,7 @@
 #floatingTools[hidden]{display:none}
 #floatingTools button{border:0;border-radius:4px;padding:5px 9px;font-size:13px;min-height:30px}
 @media(pointer:coarse){#floatingTools button{min-height:40px;min-width:42px}#menu button{min-height:38px;padding:5px 10px}}
-@media(max-width:760px){header{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}header::-webkit-scrollbar{display:none}header>*{flex-shrink:0}header .spacer{flex:1 0 0}header #status{display:block;order:-1;flex:0 1 auto;max-width:calc(100vw - 16px);overflow:visible;text-overflow:clip;white-space:normal;font-size:12px}#workspaceName{max-width:92px;overflow:hidden;text-overflow:ellipsis}#menu{max-height:calc(100dvh - 8px)}}
-@media(max-width:480px){
-    header{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:34px 34px 28px;gap:4px;padding:6px 8px;overflow:visible}
-    header .spacer{display:none}
-    header #status{display:block;grid-area:3/1/4/-1;max-width:none;overflow:visible;text-overflow:clip;white-space:normal;align-self:center;min-width:0;font-size:11px;line-height:1.25}
-    header #drawer{grid-area:1/1;justify-self:start}
-    header #workspaceName{grid-area:1/2/2/4;max-width:none}
-    header nav{grid-area:1/4/2/6;justify-content:flex-end}
-    header #openWorkspace{grid-area:2/1}header #dual{grid-area:2/2}header #refresh{grid-area:2/3}header #headerActions{grid-area:2/4}header #shortcutSettings{grid-area:2/5}
-    header button{font-size:12px;padding:3px 4px;min-width:0;height:34px}
-}
+@media(max-width:760px){#menu{max-height:calc(100dvh - 8px)}}
 /* Explicitly toggled, icon-only toolbar; stable while scrolling/typing. */
 #floatingTools{justify-content:center;flex-wrap:wrap;gap:2px;padding:4px;border-radius:11px;white-space:normal;box-shadow:0 4px 18px #26303830}
 #floatingTools button{display:grid;place-items:center;width:35px;height:35px;min-width:0;min-height:0;padding:0;color:#345166;touch-action:manipulation}
@@ -79,17 +69,6 @@
 /* Native fullscreen and immersive fallback share the same full header. */
 #fullscreenToggle{display:grid;place-items:center;min-width:34px;flex:none}
 #fullscreenToggle[aria-pressed="true"]{background:#e6edf5;color:#245481}
-@media(max-width:760px){
-    header #fullscreenToggle{order:-1}
-    header #drawer{order:-2}
-}
-@media(max-width:480px){
-    header{grid-template-columns:repeat(6,minmax(0,1fr))}
-    header nav{grid-area:1/4/2/6}
-    header #fullscreenToggle{grid-area:1/6}
-    header #shortcutSettings{grid-area:2/5}
-    header #installApp{grid-area:2/6}
-}
 #installApp[hidden],#revealFullscreenHeader[hidden]{display:none!important}
 #saveVersion[hidden],#historyButton[hidden]{display:none!important}
 .historyControls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 12px}
@@ -143,20 +122,6 @@
 .historyPageDiff .historicalMarkdown{overflow-x:auto}
 .historyPageDiff .historicalMath{overflow-x:auto}
 .historyPageDiff .historyRemoved img{opacity:.55}
-@media(max-width:480px){
-    body.historyEnabled header{grid-template-columns:repeat(8,minmax(0,1fr))}
-    body.historyEnabled header #workspaceName{grid-area:1/2/2/5}
-    body.historyEnabled header nav{grid-area:1/5/2/7}
-    body.historyEnabled header #fullscreenToggle{grid-area:1/7}
-    body.historyEnabled header #historyButton{grid-area:1/8}
-    body.historyEnabled header #openWorkspace{grid-area:2/1/3/3}
-    body.historyEnabled header #dual{grid-area:2/3}
-    body.historyEnabled header #refresh{grid-area:2/4}
-    body.historyEnabled header #saveVersion{grid-area:2/5}
-    body.historyEnabled header #headerActions{grid-area:2/6;min-width:0}
-    body.historyEnabled header #shortcutSettings{grid-area:2/7}
-    body.historyEnabled header #installApp{grid-area:2/8}
-}
 body{--header-height:58px;--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px);height:100dvh;padding:var(--safe-top) env(safe-area-inset-right,0px) var(--safe-bottom) env(safe-area-inset-left,0px);overflow:hidden}
 header{height:var(--header-height)}
 #layout{height:calc(100dvh - var(--header-height) - var(--safe-top) - var(--safe-bottom))}
@@ -171,10 +136,6 @@ body.fullscreenHeaderHidden header{display:none}
     aside{top:calc(var(--header-height) + var(--safe-top));bottom:var(--safe-bottom);left:env(safe-area-inset-left,0px)}
     #overlay.show{inset:calc(var(--header-height) + var(--safe-top)) 0 var(--safe-bottom)}
 }
-@media(max-width:480px){
-    body{--header-height:120px}
-}
-
 /* A child section has one heading: its summary also hosts the title editor. */
 .child > summary > .editableHeading{display:none;margin:0;vertical-align:middle;width:calc(100% - 22px);gap:5px}
 .child[open][data-loaded] > summary > .childCollapsedTitle{display:none}
@@ -188,3 +149,26 @@ body.fullscreenHeaderHidden header{display:none}
 
 ::highlight(paper-annotation-selected){background-color:#c8e2fa;color:inherit;text-decoration:underline;text-decoration-color:#3977b5;text-decoration-thickness:2px}
 ::highlight(paper-range-annotation){background-color:#c8e2fa;color:inherit;text-decoration:underline;text-decoration-color:#3977b5;text-decoration-thickness:2px}
+
+/* Compact phone header: the overflow panel overlays rather than displaces the document. */
+#headerMore[hidden],#headerMorePanel[hidden]{display:none!important}
+@media(max-width:760px){
+    header{position:relative;display:flex;flex-wrap:nowrap;align-items:center;gap:4px;padding:5px 6px;overflow:visible;z-index:21}
+    body.fullscreenHeaderHidden header{display:none}
+    header .spacer{display:none}
+    header #workspaceName{flex:1 1 0;min-width:0;max-width:none;font-size:13px;overflow:hidden;text-overflow:ellipsis}
+    header nav{flex:none;gap:2px}
+    header button{height:40px;min-width:32px;padding:3px 5px;font-size:12px;touch-action:manipulation}
+    header #drawer,header #headerActions,#headerMore{display:grid;place-items:center;flex:none;width:36px;min-width:36px;padding:0}
+    header #saveVersion{flex:none}
+    #headerMore{position:relative}
+    #headerMore[aria-expanded="true"]{background:#e6edf5;color:#245481}
+    #headerMore.statusAttention:after{content:'';position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#b8892d;box-shadow:0 0 0 1px white}
+    #headerMore.statusError:after{background:#bd4141}
+    #headerMorePanel{position:absolute;top:calc(100% + 4px);right:6px;width:min(280px,calc(100% - 12px));max-height:calc(100dvh - var(--header-height) - var(--safe-top) - var(--safe-bottom) - 12px);overflow:auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:8px;background:white;border:1px solid #dce1e5;border-radius:10px;box-shadow:0 5px 25px #26303833}
+    header #headerMorePanel #status{grid-column:1/-1;display:block;max-width:none;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:12px;line-height:1.4;padding:5px 3px}
+    #headerMorePanel button{width:100%;min-width:0;height:auto;min-height:40px;font-size:13px;white-space:normal}
+    #headerMorePanel #fullscreenToggle,#headerMorePanel #refresh{display:flex;align-items:center;justify-content:center;gap:5px;order:0}
+    #headerMorePanel #fullscreenToggle:after,#headerMorePanel #refresh:after{content:attr(aria-label)}
+    .pane>.toolbar{padding:5px 8px}
+}

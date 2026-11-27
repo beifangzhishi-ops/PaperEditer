@@ -2133,6 +2133,52 @@ async function installPaperEditer(){
 }
 syncInstallButton();
 
+// Keep one row on phones. Move the actual controls, not copies, so their
+// disabled/hidden state, handlers and native fullscreen activation are shared.
+const compactHeaderQuery=matchMedia('(max-width: 760px)');
+const compactHeader=document.querySelector('header');
+const headerMore=btn('更多',()=>setHeaderMore(headerMorePanel.hidden));
+headerMore.id='headerMore';headerMore.type='button';
+headerMore.setAttribute('aria-label','更多页面操作');
+headerMore.setAttribute('aria-controls','headerMorePanel');
+setToolIcon(headerMore,'more');
+const headerMorePanel=el('div');headerMorePanel.id='headerMorePanel';headerMorePanel.hidden=true;
+const headerMoreItems=['status','openWorkspace','historyButton','dual','refresh','fullscreenToggle','shortcutSettings','installApp'].map(id=>{
+    const control=$(id),marker=document.createComment(id);
+    control.before(marker);return {control,marker};
+});
+$('refresh').setAttribute('aria-label','重新读取文件');
+compactHeader.append(headerMore,headerMorePanel);
+function setHeaderMore(open){
+    open=!!open&&compactHeaderQuery.matches&&!headerHidden();
+    headerMorePanel.hidden=!open;headerMore.setAttribute('aria-expanded',String(open));
+}
+function syncCompactHeader(){
+    setHeaderMore(false);
+    for(const {control,marker} of headerMoreItems){
+        if(compactHeaderQuery.matches)headerMorePanel.append(control);
+        else marker.after(control);
+    }
+    headerMore.hidden=!compactHeaderQuery.matches;
+}
+function syncHeaderStatus(){
+    const value=$('status').textContent;
+    const normal=/^(已加载|已同步|已保存|已保存版本)$/.test(value);
+    headerMore.classList.toggle('statusAttention',!normal);
+    headerMore.classList.toggle('statusError',/失败|冲突|异常|切换/.test(value));
+    headerMore.title='更多页面操作 · '+value;
+    headerMore.setAttribute('aria-label','更多页面操作 · '+value);
+}
+new MutationObserver(syncHeaderStatus).observe($('status'),{childList:true,characterData:true,subtree:true});
+syncHeaderStatus();syncCompactHeader();
+compactHeaderQuery.addEventListener('change',syncCompactHeader);
+headerMorePanel.addEventListener('click',e=>{if(e.target.closest('button'))setHeaderMore(false)},true);
+document.addEventListener('pointerdown',e=>{if(!headerMorePanel.hidden&&!e.target.closest('#headerMore,#headerMorePanel'))setHeaderMore(false)},true);
+document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&!headerMorePanel.hidden){e.stopImmediatePropagation();setHeaderMore(false);headerMore.focus()}
+},true);
+new MutationObserver(()=>{if(headerHidden())setHeaderMore(false)}).observe(document.body,{attributes:true,attributeFilter:['class']});
+
 window.addEventListener('pagehide',()=>{captureReading();flushReading()});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){captureReading();flushReading();readingInteracted=false}else syncNow()});
 window.addEventListener('focus',()=>syncNow());

@@ -86,6 +86,11 @@ async function fixture(browser,mobile=false,shared=null,legacy=null){
     await p.goto(origin);await p.waitForFunction(()=>typeof db!=='undefined'&&db?.thesis?.length===2);
     return {p,context,errors};
 }
+async function headerControl(p,id,method='click'){
+    const control=p.locator('#'+id);
+    if(!await control.isVisible()&&await p.locator('#headerMore').isVisible())await p.locator('#headerMore').click();
+    await control[method]();
+}
 const menu=(p,name)=>p.locator('#menu').getByRole('button',{name,exact:true});
 async function contextAt(p,loc){await loc.click({button:'right'});await p.locator('#menu').waitFor({state:'visible'})}
 async function checkSectionMenu(p){
@@ -567,6 +572,7 @@ async function run(){
                 await p.setViewportSize({width,height:844});
                 await p.evaluate(enabled=>{
                     document.body.classList.toggle('historyEnabled',enabled);
+                    document.querySelector('#saveVersion').hidden=!enabled;document.querySelector('#historyButton').hidden=!enabled;
                     const status=document.querySelector('#status');
                     status.textContent='保存失败：版本冲突，请重新加载并合并其他设备的修改后再试。';
                 },history);
@@ -575,6 +581,10 @@ async function run(){
                 await p.evaluate(()=>{conflict=true;syncStatus()});
                 await p.waitForFunction(()=>document.querySelector('#status').textContent==='保存冲突 · 点击刷新处理');
                 await p.evaluate(()=>{document.querySelector('#status').textContent='保存失败：版本冲突，请重新加载并合并其他设备的修改后再试。'});
+                assert(await p.locator('#headerMore').evaluate(e=>e.classList.contains('statusError')));
+                assert(!await p.locator('#status').isVisible());
+                assert(await p.locator('header > button:visible,header nav button:visible,header #workspaceName').evaluateAll(nodes=>nodes.every(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1})));
+                await p.locator('#headerMore').tap();
                 const metrics=await p.evaluate(()=>{
                     const status=document.querySelector('#status'),r=status.getBoundingClientRect(),h=document.querySelector('header').getBoundingClientRect();
                     const controls=[...document.querySelectorAll('header button')].map(x=>x.getBoundingClientRect()).filter(x=>x.width&&x.height);
@@ -586,13 +596,18 @@ async function run(){
                 assert(metrics.controls.every(c=>c.bottom<=metrics.status.top||c.top>=metrics.status.bottom||c.right<=metrics.status.left||c.left>=metrics.status.right),JSON.stringify(metrics));
                 assert.equal(metrics.layout,metrics.header);
                 assert.equal(Number.parseFloat(metrics.aside),metrics.header);
-                assert.equal(metrics.header,width===600?54:120);
+                assert.equal(metrics.header,54);
+                assert(await p.locator('#openWorkspace').isVisible());
+                assert.equal(await p.locator('#historyButton').isVisible(),history);
+                await p.keyboard.press('Escape');assert(!await p.locator('#headerMorePanel').isVisible());
+                await p.locator('#headerMore').tap();
+                await p.locator('#workspaceName').tap();assert(!await p.locator('#headerMorePanel').isVisible());
                 if(width===320&&history){
                     await p.evaluate(()=>document.body.classList.add('fullscreenHeaderHidden'));
                     const hidden=await p.evaluate(()=>({top:document.querySelector('#layout').getBoundingClientRect().top,height:document.querySelector('#layout').getBoundingClientRect().height,aside:getComputedStyle(document.querySelector('aside')).top}));
                     assert.equal(hidden.top,0);assert.equal(hidden.height,844);assert.equal(Number.parseFloat(hidden.aside),0,JSON.stringify(hidden));
                     await p.evaluate(()=>document.body.classList.remove('fullscreenHeaderHidden'));
-                    assert.equal(await p.locator('#layout').evaluate(e=>e.getBoundingClientRect().top),120);
+                    assert.equal(await p.locator('#layout').evaluate(e=>e.getBoundingClientRect().top),54);
                 }
                 assert.deepEqual(errors,[]);await context.close();
             }
@@ -797,7 +812,7 @@ async function run(){
             const desktop=await fixture(browser,false,shared,{'复制':{ctrl:true,alt:true,shift:false,key:'b'}});
             const mobile=await fixture(browser,true,shared,{'复制':{ctrl:true,alt:true,shift:false,key:'d'}});
             const a=desktop.p,b=mobile.p;
-            const open=p=>p.locator('#shortcutSettings').click();
+            const open=p=>headerControl(p,'shortcutSettings');
             const copy=p=>p.getByRole('textbox',{name:'复制快捷键',exact:true});
             const save=p=>p.locator('#dialog').getByRole('button',{name:'保存',exact:true}).click();
             assert.equal(await b.evaluate(()=>shortcutLabel(toolShortcuts['复制'])),'Ctrl+Alt+B');
@@ -840,7 +855,7 @@ async function run(){
             await p.locator('#saveVersion').click();
             await p.waitForFunction(()=>document.querySelector('#status').textContent==='已保存版本');
             assert.equal(shared.tagCalls,1);assert.equal(await p.locator('#dialog').isVisible(),false);
-            await p.locator('#historyButton').click();
+            await headerControl(p,'historyButton','click');
             await p.locator('.historyRow.named').first().waitFor();
             assert.equal(await p.locator('.historyGroup').count(),1);
             assert.equal(await p.locator('.historyGroup').evaluate(x=>x.open),false);
@@ -885,16 +900,16 @@ async function run(){
             assert((await p.locator('.historyPreview').innerText()).includes('Historical body.'));
             await p.getByRole('button',{name:'关闭历史',exact:true}).click();
             assert.equal(await p.locator('#panes > .pane').count(),1);
-            await p.locator('#historyButton').click();
+            await headerControl(p,'historyButton','click');
             await p.locator('.historyRow').filter({hasText:'Renamed'}).waitFor();
             await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'查看差异').click();
             await p.locator('.historyPageDiff').waitFor();assert((await p.locator('.historyPageDiff').innerText()).includes('Historical body.'));
             await p.getByRole('button',{name:'关闭历史',exact:true}).click();
-            await p.locator('#historyButton').click();
+            await headerControl(p,'historyButton','click');
             await p.locator('.historyRow').filter({hasText:'Renamed'}).click({button:'right'});await menu(p,'恢复版本').click();
             await p.waitForFunction(()=>find('demo-start').body.startsWith('Historical body.'));
             assert.equal(shared.restoreCalls,1);assert.deepEqual(errors,[]);await context.close();
-            const mobile=await fixture(browser,true,shared);await mobile.p.locator('#historyButton').tap();
+            const mobile=await fixture(browser,true,shared);await headerControl(mobile.p,'historyButton','tap');
             await mobile.p.locator('.historyRow.named').first().waitFor();assert(await mobile.p.locator('#saveVersion').isVisible());
             await mobile.p.locator('.historyGroup summary').click({button:'right'});
             await menu(mobile.p,'展开版本组').tap();
@@ -910,7 +925,7 @@ async function run(){
             assert(await mobile.p.locator('.historyPageDiff').isVisible());
             await mobile.p.locator('.historicalPane').getByRole('button',{name:'切换 首页',exact:true}).tap();
             assert(await mobile.p.locator('#panes > .pane').first().isVisible());
-            await mobile.p.locator('#dual').tap();
+            await headerControl(mobile.p,'dual','tap');
             assert.equal(await mobile.p.locator('#panes > .pane').count(),1);
             assert.deepEqual(mobile.errors,[]);await mobile.context.close();
             console.log('PASS: direct save tag, grouping, inline rename, rendered scoped diff, live updates, restore, mobile history');return
@@ -1049,7 +1064,7 @@ async function run(){
                 const shared={workspace,recent:[workspace,{id:network,name:'network.json',path:network}],reading:{}};
                 const {p,context,errors}=await fixture(browser,mobile,shared);
                 await p.setViewportSize({width,height:844});
-                await p.locator('#openWorkspace').click();
+                await headerControl(p,'openWorkspace','click');
                 await p.locator('.workspaceRecentRow').nth(1).waitFor();
                 const layout=await p.locator('.workspaceRecentRow').evaluateAll(rows=>rows.map(row=>{
                     const list=row.parentElement,open=row.querySelector('.workspaceRecent'),remove=row.querySelector('.workspaceForget'),label=open.querySelector('span');
@@ -1072,7 +1087,7 @@ async function run(){
             const initial='C:\\Projects\\example.json',network='\\\\server\\share\\network.json';
             const shared={workspace:{id:initial,name:'example.json',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
             const desktop=await fixture(browser,false,shared);
-            await desktop.p.locator('#openWorkspace').click();
+            await headerControl(desktop.p,'openWorkspace','click');
             await desktop.p.getByRole('textbox',{name:'服务器文件路径'}).fill(network);
             await desktop.p.locator('.workspacePathForm button').click();
             await desktop.p.waitForFunction(()=>currentWorkspace?.name==='network.json');assert.equal(shared.requested,network);
@@ -1080,7 +1095,7 @@ async function run(){
             await desktop.p.waitForTimeout(650);assert.equal(shared.reading[network].view,'blocks');
             const mobile=await fixture(browser,true,shared);
             assert.equal(await mobile.p.evaluate(()=>view),'blocks');
-            await mobile.p.locator('#openWorkspace').tap();
+            await headerControl(mobile.p,'openWorkspace','tap');
             await mobile.p.getByRole('textbox',{name:'服务器文件路径'}).fill('C:\\Projects\\missing.json');
             await mobile.p.locator('.workspacePathForm button').tap();
             await mobile.p.getByText('文件不存在',{exact:true}).waitFor();assert.equal(await mobile.p.evaluate(()=>currentWorkspace.name),'network.json');
@@ -1093,7 +1108,7 @@ async function run(){
                 const initial='C:\\Projects\\existing.json',target='C:\\Projects\\new.json';
                 const shared={workspace:{id:initial,name:'existing.json',path:initial},recent:[],reading:{}};shared.recent=[shared.workspace];
                 const {p,context,errors}=await fixture(browser,mobile,shared);
-                await p.locator('#openWorkspace').click();
+                await headerControl(p,'openWorkspace','click');
                 await p.locator('.workspacePathForm button').click();assert.equal(shared.requested,undefined);
                 await p.getByRole('textbox',{name:'服务器文件路径'}).fill(initial);
                 await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.getByText('文件已存在',{exact:true}).waitFor();
@@ -1101,12 +1116,12 @@ async function run(){
                 await p.getByRole('textbox',{name:'服务器文件路径'}).fill(target);
                 await p.getByRole('button',{name:'新建文件',exact:true}).click();await p.waitForFunction(()=>currentWorkspace?.name==='new.json'&&db.thesis.length===2&&db.blocks.length>0);
                 assert.equal(shared.requestedNew,target);
-                await p.locator('#openWorkspace').click();assert.equal(await p.getByRole('button',{name:'打开示例文件',exact:true}).count(),0);
+                await headerControl(p,'openWorkspace','click');assert.equal(await p.getByRole('button',{name:'打开示例文件',exact:true}).count(),0);
                 await p.getByRole('textbox',{name:'服务器文件路径'}).fill('   ');
                 await p.getByRole('button',{name:'新建文件',exact:true}).click();
                 await p.waitForFunction(()=>currentWorkspace?.name==='Untitled-test.json');
                 assert.equal(shared.requestedNew,'');
-                await p.locator('#openWorkspace').click();
+                await headerControl(p,'openWorkspace','click');
                 await p.getByRole('button',{name:'删除打开记录 Untitled-test.json',exact:true}).click();
                 await p.getByRole('button',{name:'删除打开记录 existing.json',exact:true}).click();await p.waitForFunction(()=>!document.querySelector('.workspaceRecentRow [aria-label="删除打开记录 existing.json"]'));
                 await p.getByRole('button',{name:'删除打开记录 new.json',exact:true}).click();await p.getByText('暂无打开记录。',{exact:true}).waitFor();
@@ -1209,7 +1224,7 @@ async function run(){
         const fullMobile=q.locator('#fullscreenToggle');
         const originalHeight=await q.locator('header').evaluate(e=>e.offsetHeight);
         await q.evaluate(()=>{document.documentElement.requestFullscreen=()=>Promise.reject(new Error('Denied'))});
-        await fullMobile.tap();
+        await headerControl(q,'fullscreenToggle','tap');
         await q.waitForFunction(()=>document.body.classList.contains('immersiveMode'));
         assert.equal(await q.locator('header').evaluate(e=>e.offsetHeight),originalHeight);
         assert.equal(await fullMobile.getAttribute('aria-pressed'),'true');
@@ -1240,20 +1255,20 @@ async function run(){
         await h.waitFor({state:'hidden'});
         await reveal.tap();
         await h.waitFor({state:'visible'});
-        await fullMobile.tap();
+        await headerControl(q,'fullscreenToggle','tap');
         await q.waitForFunction(()=>!document.body.classList.contains('immersiveMode'));
         assert.equal(await q.locator('header').evaluate(e=>e.offsetHeight),originalHeight);
         await q.evaluate(()=>{document.documentElement.requestFullscreen=undefined;document.documentElement.webkitRequestFullscreen=undefined});
-        await fullMobile.tap();
+        await headerControl(q,'fullscreenToggle','tap');
         await q.waitForFunction(()=>document.body.classList.contains('immersiveMode'));
-        await fullMobile.tap();
+        await headerControl(q,'fullscreenToggle','tap');
         await q.waitForFunction(()=>!document.body.classList.contains('immersiveMode'));
         assert.equal(await q.locator('link[rel="manifest"]').getAttribute('href'),'/manifest.webmanifest');
         await q.evaluate(()=>{delete document.documentElement.requestFullscreen;delete document.documentElement.webkitRequestFullscreen});
         await swipe(12,350,0,-140);
         assert(await h.isVisible());
         const install=q.locator('#installApp');
-        await install.tap();
+        await headerControl(q,'installApp','tap');
         assert(await q.getByRole('heading',{name:'安装 PaperEditer',exact:true}).isVisible());
         await q.locator('#closeDialog').tap();
         await q.evaluate(()=>{
@@ -1262,7 +1277,7 @@ async function run(){
             e.userChoice=Promise.resolve({outcome:'accepted'});
             window.dispatchEvent(e);
         });
-        await install.tap();
+        await headerControl(q,'installApp','tap');
         await q.waitForFunction(()=>window.testInstallCalled===true);
         await fullscreenTouch.detach();
         console.log('PASS: mobile fullscreen fallback, swipe hide/reveal, exit, install instructions and prompt');
@@ -1378,7 +1393,7 @@ async function run(){
         await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
         assert(!(await q.locator('#menu').isVisible()));
         await q.waitForTimeout(550);
-        await q.locator('#shortcutSettings').tap();
+        await headerControl(q,'shortcutSettings','tap');
         await tools.waitFor({state:'hidden'});
         assert.equal(await q.locator('.shortcutRow').count(),10);
         const copyShortcut=q.getByRole('textbox',{name:'复制快捷键',exact:true});
