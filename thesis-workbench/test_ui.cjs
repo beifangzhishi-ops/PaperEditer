@@ -562,10 +562,41 @@ async function checkAnnotationSelection(browser,mobile){
     await p.evaluate(()=>setView('blocks'));assert.equal(await p.locator('.pane h1').innerText(),'批注一览');assert.equal(await p.locator('.graph,.blockNetwork').count(),0);
     assert.equal(await p.evaluate(()=>db.trash.length),3);assert.deepEqual(errors,[]);await context.close();
 }
+async function checkGroupedUndo(browser,mobile){
+    const {p,context,errors}=await fixture(browser,mobile);
+    await p.evaluate(()=>{find('demo-start').body='Alpha\n\nBeta\n';select('demo-start',0);if(!editingEnabled)toggleEditMode();undoStack=[];redoStack=[]});
+    const area=p.locator('.pane .visualDocument .part-text .richText').first();
+    const end=loc=>loc.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a.querySelector('p')||a);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r)});
+    const raw=()=>p.evaluate(()=>find('demo-start').body);
+    const history=redo=>p.evaluate(redo=>toolbarUndo(redo),redo);
+    await end(area);await p.keyboard.type('abc');assert.equal(await raw(),'Alphaabc\n\nBeta\n');
+    assert.equal(await p.evaluate(()=>undoStack.length),1);
+    await p.waitForTimeout(1100);await p.keyboard.type('def');assert.equal(await p.evaluate(()=>undoStack.length),2);
+    await history(false);assert.equal(await raw(),'Alphaabc\n\nBeta\n');await history(false);assert.equal(await raw(),'Alpha\n\nBeta\n');
+    await history(true);await history(true);assert.equal(await raw(),'Alphaabcdef\n\nBeta\n');
+    await end(area);await p.keyboard.press('Backspace');await p.keyboard.press('Backspace');await p.keyboard.press('Backspace');assert.equal(await raw(),'Alphaabc\n\nBeta\n');
+    await history(false);assert.equal(await raw(),'Alphaabcdef\n\nBeta\n');
+    await end(area);await p.keyboard.type('X');await p.keyboard.press('ArrowLeft');await p.keyboard.type('Y');
+    await history(false);assert.equal(await raw(),'AlphaabcdefX\n\nBeta\n');await history(false);assert.equal(await raw(),'Alphaabcdef\n\nBeta\n');
+    await end(area);await p.keyboard.type('q');await end(p.locator('.pane .visualDocument .part-text .richText').nth(1));await p.keyboard.type('r');
+    await history(false);assert.equal(await raw(),'Alphaabcdefq\n\nBeta\n');await history(false);assert.equal(await raw(),'Alphaabcdef\n\nBeta\n');
+    await end(area);await p.keyboard.type('s');await area.evaluate(a=>{const dt=new DataTransfer();dt.setData('text/plain','PASTE');a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt}))});await p.keyboard.type('t');
+    await history(false);assert.equal(await raw(),'AlphaabcdefsPASTE\n\nBeta\n');await history(false);assert.equal(await raw(),'Alphaabcdefs\n\nBeta\n');await history(false);assert.equal(await raw(),'Alphaabcdef\n\nBeta\n');
+    // Model the interim input events of a Chinese IME, including a long pause.
+    await end(area);await area.evaluate(a=>{a.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));const node=a.querySelector('p').firstChild;node.appendData('n');a.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'n',isComposing:true}))});
+    await p.waitForTimeout(1100);await area.evaluate(a=>{const node=a.querySelector('p').firstChild;node.replaceData(node.length-1,1,'\u4f60');a.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'\u4f60',isComposing:true}));a.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'\u4f60'}))});
+    await history(false);assert.equal(await raw(),'Alphaabcdef\n\nBeta\n');await history(true);assert.equal(await raw(),'Alphaabcdef\u4f60\n\nBeta\n');
+    await p.evaluate(()=>{select('demo-method',0)});
+    const title=p.locator('.pane .editableTitle').first();const originalTitle=await title.inputValue();await title.focus();await title.press('End');await p.keyboard.type('XYZ');await history(false);assert.equal(await title.inputValue(),originalTitle);
+    await p.evaluate(()=>{newNode('blocks')});const note=p.locator('#dialog .richText').first();await note.waitFor();await end(note);await p.keyboard.type('note');
+    await history(false);assert.equal((await note.innerText()).trim(),'');await history(true);assert.equal((await note.innerText()).trim(),'note');
+    assert.deepEqual(errors,[]);await context.close()
+}
 async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--grouped-undo-only')){await checkGroupedUndo(browser,false);await checkGroupedUndo(browser,true);console.log('PASS: grouped typing, deletion, pauses, caret movement, paragraph, paste, IME, title, note undo and redo on desktop/mobile');return}
         if(process.argv.includes('--figure-rows-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);

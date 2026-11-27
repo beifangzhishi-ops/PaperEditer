@@ -459,7 +459,43 @@ async function syncNow(force=false){
     finally{syncBusy=false;if(dirty&&!conflict&&!workspaceChanged&&!syncNeeded){clearTimeout(timer);timer=setTimeout(save,100)}}
 }
 let annotationEditBefore=null,annotationEditCheckpointed=false;
-function checkpoint(){if(annotationEditBefore&&annotationEditCheckpointed)return;undoStack.push(annotationEditBefore||editableSnapshot());if(annotationEditBefore)annotationEditCheckpointed=true;if(undoStack.length>30)undoStack.shift();redoStack=[]}
+// Coalesce consecutive edits in one editing host, not unrelated document mutations.
+const UNDO_TYPING_IDLE=1000;
+let typingUndoGroup=null,typingBefore=null,clipboardEdit=false;
+function endTypingUndo(){typingUndoGroup=null;typingBefore=null}
+function typingHost(target){return target?.closest?.('.richText,.editableTitle')}
+document.addEventListener('beforeinput',e=>{
+    const host=typingHost(e.target);typingBefore=null;
+    if(!host||e.target.closest?.('math-field'))return;
+    if(['historyUndo','historyRedo'].includes(e.inputType)&&e.cancelable&&canEditControl(host)){
+        e.preventDefault();toolbarUndo(e.inputType==='historyRedo');return
+    }
+    const selected=host.matches('input')?host.selectionStart!==host.selectionEnd:!getSelection()?.isCollapsed;
+    typingBefore={host,type:e.inputType,selected};
+},true);
+function typingEdit(e,host){
+    if(!e||!host||clipboardEdit||e.target!==host)return null;
+    const before=typingBefore;typingBefore=null;
+    const type=e.inputType;
+    if(e.isComposing||type==='insertCompositionText'||type==='deleteCompositionText')return {host,kind:'composition'};
+    if(before?.host===host&&before.type===type&&before.selected)return null;
+    if(type==='insertText'&&e.data&&!/[\r\n]/.test(e.data)&&[...e.data].length===1)return {host,kind:'insert'};
+    if(type==='deleteContentBackward'||type==='deleteContentForward')return {host,kind:type};
+    return null
+}
+function pushEditHistory(stack,snapshot,edit,limit){
+    const now=performance.now(),previous=typingUndoGroup;
+    const merge=edit&&previous&&previous.stack===stack&&previous.host===edit.host&&previous.kind===edit.kind&&stack.length&&(edit.kind==='composition'||now-previous.time<=UNDO_TYPING_IDLE);
+    if(!merge){stack.push(typeof snapshot==='function'?snapshot():snapshot);if(stack.length>limit)stack.shift()}
+    typingUndoGroup=edit?{...edit,stack,time:now}:null
+}
+for(const type of ['pointerdown','focusin','compositionstart','compositionend'])document.addEventListener(type,endTypingUndo,true);
+for(const type of ['paste','cut','drop'])document.addEventListener(type,()=>{endTypingUndo();clipboardEdit=true;queueMicrotask(()=>{clipboardEdit=false;endTypingUndo()})},true);
+document.addEventListener('keydown',e=>{
+    if(e.isComposing||e.keyCode===229)return;
+    if(e.ctrlKey||e.metaKey||e.altKey||['Enter','Tab','Escape','Home','End','PageUp','PageDown'].includes(e.key)||e.key.startsWith('Arrow'))endTypingUndo()
+},true);
+function checkpoint(edit=null){if(annotationEditBefore&&annotationEditCheckpointed)return;pushEditHistory(undoStack,annotationEditBefore||editableSnapshot,annotationEditBefore?null:edit,30);if(annotationEditBefore)annotationEditCheckpointed=true;redoStack=[]}
 function annotationEdit(fn){if(annotationEditBefore)return fn();annotationEditBefore=editableSnapshot();annotationEditCheckpointed=false;try{return fn()}finally{annotationEditBefore=null;annotationEditCheckpointed=false}}
 function refreshObjectLabels(){
     for(const el of document.querySelectorAll('.visualRef[data-token],a.ref[data-ref]')){
@@ -1793,7 +1829,7 @@ function remapCopiedObjects(s,own=null,force=false,map=new Map()){
     return s.replace(refPattern(),(m,k,id)=>map.has(id)?'[['+k+':'+map.get(id)+']]':m)
 }
 function createBlockFrom(body,title,id){newNode('blocks',null,body+'\n\n来源：[[ref:'+id+']]\n',title+' · 批注')}
-function undo(redo){if(!requireEditMode())return;const a=redo?redoStack:undoStack,b=redo?undoStack:redoStack;if(!a.length){showToast('无可'+(redo?'重做':'撤销')+'的操作');return}b.push(editableSnapshot());const s=a.pop();db.thesis=s.thesis;db.blocks=s.blocks;db.trash=s.trash;panes.forEach(p=>{if(!find(p.id))p.id=null});change(true)}
+function undo(redo){endTypingUndo();if(!requireEditMode())return;const a=redo?redoStack:undoStack,b=redo?undoStack:redoStack;if(!a.length){showToast('无可'+(redo?'重做':'撤销')+'的操作');return}b.push(editableSnapshot());const s=a.pop();db.thesis=s.thesis;db.blocks=s.blocks;db.trash=s.trash;panes.forEach(p=>{if(!find(p.id))p.id=null});change(true)}
 function math(e,tex,display=false){
     try{katex.render(tex,e,{displayMode:display,throwOnError:false,strict:'ignore',trust:false,macros:{'\\textmu':'\\mu'}})}
     catch(err){e.textContent=tex;e.title=err.message}
@@ -2247,7 +2283,7 @@ document.addEventListener('keydown',e=>{
     const control=e.target.closest?.('input,textarea,select,math-field'),rich=e.target.closest?.('.richText,.visualDocument');
     if(['剪切','复制','粘贴'].includes(label)&&matches(defaultShortcuts[label])&&(control||rich)&&!e.target.closest?.('.selectedNoteLabel'))return;
     if(dialog.open&&!dialog.querySelector('.visualDocument')&&label!=='显示/隐藏工具栏')return;
-    if(['撤销','重做'].includes(label)&&control&&!rich)return;
+    if(['撤销','重做'].includes(label)&&control&&!rich&&!control.matches('.editableTitle'))return;
     // Keep the MathLive native undo for its own formula edits.
     if(['撤销','重做'].includes(label)&&e.target.closest?.('math-field')&&matches(defaultShortcuts[label]))return;
     e.preventDefault();e.stopImmediatePropagation();if(e.repeat)return;

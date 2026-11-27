@@ -230,7 +230,7 @@ function visualRich(raw,changed,compact=false,allowRefs=true){
         }else p.replaceWith(visualRef(t.kind,t.value,allowRefs))
     }
     if(!host.childNodes.length)host.append(el('p'));
-    host.addEventListener('input',()=>{if(canEditControl(host))changed()});
+    host.addEventListener('input',e=>{if(canEditControl(host))changed(typingEdit(e,host))});
     // Avoid pasting untrusted HTML; recognized structured text is handled by the parent.
     host.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed();centerAfterPaste(host)});
     return host
@@ -378,12 +378,13 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     let selectedPart=parts[0],selectedObject=null;
     const value=()=>parts.map(p=>p.raw).filter(x=>x.trim()).join('\n\n')+'\n';
     let lastValue=value(),draftUndo=[],draftRedo=[];
-    function flush(){
+    function flush(edit=null){
         const s=value();if(s===lastValue)return;
-        if(dialog.contains(root)){draftUndo.push(lastValue);if(draftUndo.length>60)draftUndo.shift();draftRedo=[]}
-        lastValue=s;onUpdate(s)
+        if(dialog.contains(root)){pushEditHistory(draftUndo,lastValue,edit,60);draftRedo=[]}
+        lastValue=s;onUpdate(s,edit)
     }
     function draftHistory(redo){
+        endTypingUndo();
         if(!requireEditMode(root))return;
         const from=redo?draftRedo:draftUndo,to=redo?draftUndo:draftRedo;if(!from.length)return;
         to.push(value());lastValue=from.pop();parts=parseParts(lastValue);if(!parts.length)parts=[{kind:'text',raw:''}];selectedPart=parts[0];selectedObject=null;draw();onUpdate(lastValue);root.focus({preventScroll:true})
@@ -1016,7 +1017,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         },true)
         area.addEventListener('copy',e=>{if(e.target.closest('math-field'))return;const s=window.getSelection();if(!s?.rangeCount||s.isCollapsed||!area.contains(s.getRangeAt(0).commonAncestorContainer))return;const clone=s.getRangeAt(0).cloneContents();if(!clone.querySelector('[data-token],math-field'))return;const holder=el('div');holder.append(clone);e.clipboardData.setData('text/plain',richMarkdown(holder));e.preventDefault()});
     }
-    function objectRaw(p){p.raw=':::'+p.kind+' '+p.id+(p.flags?' '+p.flags:'')+'\n'+p.body+'\n:::';flush()}
+    function objectRaw(p,edit=null){p.raw=':::'+p.kind+' '+p.id+(p.flags?' '+p.flags:'')+'\n'+p.body+'\n:::';flush(edit)}
     function draw(){
         clearMixed();body.replaceChildren();focused=null;selection=null;selectedObject=null;
         let paragraphIndex=0;
@@ -1049,14 +1050,14 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                 const n=find(p.ref),chip=visualRef('embed',p.ref);content.append(chip,el('span','small',' '+(n?.title||'批注不存在')));
                 if(n){chip._detachNote=()=>annotationEdit(()=>{clearAnnotationPlacement(n);removePart(p)});extra=noteLabelMenu(chip)}
             }else if(p.kind==='text'){
-                const area=visualRich(p.raw,()=>{p.raw=richMarkdown(area);flush()},false,!internal);bindRich(area,p);content.append(area)
+                const area=visualRich(p.raw,edit=>{p.raw=richMarkdown(area);flush(edit)},false,!internal);bindRich(area,p);content.append(area)
             }else if(p.kind==='equation'){
                 const field=visualMath(p.body.trim(),true,value=>{p.body=value;objectRaw(p)},internal);content.append(field);
                 field.addEventListener('focusin',()=>{clearMixed();clearObject();selectedPart=p});
                 extra=[['公式输入工具',()=>{field.focus();showMathPalette(field)}],['数学键盘',()=>{field.focus();window.mathVirtualKeyboard?.show()}],['复制公式',()=>copy(p.body)]]
             }else if(p.kind==='figure'){
                 const lines=p.body.split('\n'),caption=lines.shift()||'',rest=lines.join('\n').trim();
-                const cap=visualRich(caption,()=>{p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+imageSource;objectRaw(p)},true,!internal);
+                const cap=visualRich(caption,edit=>{p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+imageSource;objectRaw(p,edit)},true,!internal);
                 let imageSource=normalizeFigureImages(rest,p.id);
                 const imgs=el('div','visualImages');
                 const imageId=mark=>[...mark.matchAll(figureImagePattern())][0][3].match(/(?:^|\s)wb-id:([^\s"]+)/)[1];
@@ -1196,12 +1197,12 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                 displayImages()
             }else if(p.kind==='table'){
                 const lines=p.body.split('\n'),caption=lines.shift()||'',rest=lines.join('\n').trim();
-                const cap=visualRich(caption,()=>commitTable(),true,!internal);const wrap=el('div','tablescroll');const table=el('table','visualTable');wrap.append(table);
+                const cap=visualRich(caption,edit=>commitTable(edit),true,!internal);const wrap=el('div','tablescroll');const table=el('table','visualTable');wrap.append(table);
                 let rows=rest.split('\n').filter(s=>s.trim().startsWith('|')).map(s=>s.trim().replace(/^\||\|$/g,'').split(/(?<!\\)\|/).map(x=>x.trim()));if(rows.length>1&&rows[1].every(x=>/^:?-+:?$/.test(x)))rows.splice(1,1);
                 if(!rows.length){rows=[['项目','数值'],['','']];content.append(el('p','muted','原表格存在复杂内容，未修改时保持原始数据；如需改表请核对预览。'))}
                 const cols=Math.max(1,...rows.map(x=>x.length));rows=rows.map(r=>Array.from({length:cols},(_,i)=>r[i]||''));
-                function commitTable(){p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+[rows[0],rows[0].map(()=> '---'),...rows.slice(1)].map(r=>'| '+r.map(x=>x.replace(/\n+/g,' ').replace(/(?<!\\)\|/g,'\\|')).join(' | ')+' |').join('\n');objectRaw(p)}
-                function tableDraw(){table.replaceChildren();rows.forEach((row,i)=>{const tr=el('tr');row.forEach((value,j)=>{const td=el(i===0?'th':'td');const cell=visualRich(value,()=>{rows[i][j]=richMarkdown(cell);commitTable()},true,!internal);bindRich(cell,p);td.append(cell);tr.append(td)});table.append(tr)})}
+                function commitTable(edit=null){p.body=richMarkdown(cap).replace(/\n+/g,' ')+'\n\n'+[rows[0],rows[0].map(()=> '---'),...rows.slice(1)].map(r=>'| '+r.map(x=>x.replace(/\n+/g,' ').replace(/(?<!\\)\|/g,'\\|')).join(' | ')+' |').join('\n');objectRaw(p,edit)}
+                function tableDraw(){table.replaceChildren();rows.forEach((row,i)=>{const tr=el('tr');row.forEach((value,j)=>{const td=el(i===0?'th':'td');const cell=visualRich(value,edit=>{rows[i][j]=richMarkdown(cell);commitTable(edit)},true,!internal);bindRich(cell,p);td.append(cell);tr.append(td)});table.append(tr)})}
                 bindRich(cap,p);content.append(cap,wrap);extra=[['添加行',()=>{rows.push(rows[0].map(()=>''));tableDraw();commitTable()}],['添加列',()=>{rows.forEach(r=>r.push(''));tableDraw();commitTable()}]];tableDraw()
             }
             body.append(card)
@@ -1298,8 +1299,8 @@ function editor(n,host,pi,summary=null){
     const isBlock=spaceOf(n.id)==='blocks';
     if(!isBlock)heading.append(title);else heading.append(el('div','spacer'));
     heading.append(btn('⋯',e=>menuAt(e,sectionMenu()),'sectionMore'));context(heading,sectionMenu,()=>resolve(n.id),true);
-    const doc=visualDocument(n.body,s=>{if(s===n.body)return;checkpoint();n.body=s;if(isBlock)n.title=blockLabel(s);change(false);if(isBlock)renderNav();for(const card of doc.root.querySelectorAll('.visualCard')){const p=card._part;if(p?.id){const label=card.querySelector('.visualNum');if(label)label.textContent=resolve(p.id)?.number||''}}},n.id,pi);
-    title.addEventListener('input',()=>{if(!editingEnabled)return;const t=title.value.trim();if(t===n.title)return;checkpoint();n.title=t;change(false);renderNav();if(summary)summary.querySelector('.childCollapsedTitle').textContent=label(n)});
+    const doc=visualDocument(n.body,(s,edit)=>{if(s===n.body)return;checkpoint(edit);n.body=s;if(isBlock)n.title=blockLabel(s);change(false);if(isBlock)renderNav();for(const card of doc.root.querySelectorAll('.visualCard')){const p=card._part;if(p?.id){const label=card.querySelector('.visualNum');if(label)label.textContent=resolve(p.id)?.number||''}}},n.id,pi);
+    title.addEventListener('input',e=>{if(!editingEnabled)return;const t=title.value.trim();if(t===n.title)return;checkpoint(typingEdit(e,title));n.title=t;change(false);renderNav();if(summary)summary.querySelector('.childCollapsedTitle').textContent=label(n)});
     doc.root._sectionMenu=sectionMenu;
     if(summary){summary.append(heading);title.addEventListener('click',e=>e.stopPropagation());refreshObjectAnnotations(heading)}else host.append(heading);
     host.append(doc.root);refreshObjectAnnotations(host)
