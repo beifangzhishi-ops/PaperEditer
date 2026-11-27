@@ -21,12 +21,12 @@
 cd thesis-workbench
 python -m pip install -r requirements.txt
 npm ci
-python server.py
+python local_runtime.py
 ~~~
 
-浏览器打开 http://127.0.0.1:8191/ 。初次启动不绑定任何项目，不需要私人论文文件。
+启动器会自动打开默认浏览器，服务默认仅监听 localhost。初次启动不绑定任何项目，不需要私人论文文件。
 
-桌面和手机均可通过顶部「打开文件」输入服务器上的绝对路径（包括 UNC 网络共享路径），打开已有文件或选择「新建文件」创建包含各类对象示例的独立 JSON（不覆盖已有文件）。新建时留空则自动在项目根目录下 Git 忽略的 `workspaces/` 中生成唯一文件名。支持按文件名或路径搜索、收藏置顶与排序，删除记录不删除文件或历史。Agent 可用 `paperedit new ABSOLUTE_PATH --background --blank` 创建并登记交付文档而不切换网页。
+桌面和手机均可通过顶部「打开文件」输入服务器上的绝对路径（包括 UNC 网络共享路径），打开已有文件或选择「新建文件」创建包含各类对象示例的独立 JSON（不覆盖已有文件）。新建时留空则自动在用户数据目录下的 `workspaces/` 中生成唯一文件名。支持按文件名或路径搜索、收藏置顶与排序，删除记录不删除文件或历史。Agent 可用 `paperedit new ABSOLUTE_PATH --background --blank` 创建并登记交付文档而不切换网页。
 
 详见 [工作台文档](thesis-workbench/README.md) 和 [安全说明](SECURITY.md)。服务默认只监听本机回环地址，不是可直接部署到公网的多用户服务。
 
@@ -46,3 +46,5 @@ node test_ui.cjs
 程序代码位于 thesis-workbench。用户的正文、批注、图片、历史记录和原始绘图文件均为本地私有资料，不属于公开代码；默认 Git 忽略这些内容。正式文档为单个 UTF-8 JSON（v3），直接存储编辑文本和结构，以绝对路径引用外部文件，历史存放在同级独立裸 Git 仓库。旧格式首次打开时自动迁移并保留备份。编辑器记住上次打开的文档，Agent 通过 CLI 或 API 编辑。
 
 项目目前不附带项目级许可证；公开可见不等于授予开源许可。第三方依赖各自的许可条款仍然适用。
+
+Windows user data defaults to `%LOCALAPPDATA%/PaperEditer`, outside the checkout. See [local-first source application](thesis-workbench/README.md#local-first-source-application) for migration and port configuration.

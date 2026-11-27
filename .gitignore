@@ -63,3 +63,12 @@
 /thesis-workbench/example-data/thesis/*
 !/thesis-workbench/example-data/thesis/demo-start.md
 !/thesis-workbench/example-data/thesis/demo-method.md
+
+!/thesis-workbench/local_runtime.py
+!/thesis-workbench/test_local_runtime.py
+!/thesis-workbench/start_local.pyw
+
+!/thesis-workbench/packaged_main.py
+!/thesis-workbench/PaperEditer.spec
+!/thesis-workbench/PaperEditer.iss
+!/thesis-workbench/test_process_runtime.py

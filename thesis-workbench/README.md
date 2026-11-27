@@ -7,14 +7,14 @@ Python 3.10+、Node.js 22.12+、npm：
 ~~~sh
 python -m pip install -r requirements.txt
 npm ci
-python server.py
+python local_runtime.py
 ~~~
 
-打开 http://127.0.0.1:8191/ 。Windows 也可通过 pythonw.exe start.pyw 无控制台启动，日志保存在本目录。
+启动器自动打开默认浏览器，日志保存在用户数据 logs/。Windows 可双击 start_local.pyw。
 
 默认首次启动不打开任何文档，通过顶部「打开文件」输入 .json 文件绝对路径，打开已有文档或新建包含各类对象示例的文件。可通过 PAPEREDITER_PORT 指定端口；显式设置 PAPEREDITER_DATA_DIR 可启用旧的独立目录模式（用于测试与迁移）。服务仅监听回环地址，不应直接暴露公网。
 
-快捷键设置由服务端保存在本地配置 `workspace.local.json`，同一服务的所有设备和文档共享，不进入论文文件或 Git。已打开的网页会自动同步，旧浏览器的自定义配置仅在服务端尚无配置时迁移一次；同时修改时拒绝过期配置，重新打开设置后即可编辑。
+快捷键设置由服务端保存在本地配置 用户数据目录的 `settings.json`，同一服务的所有设备和文档共享，不进入论文文件或 Git。已打开的网页会自动同步，旧浏览器的自定义配置仅在服务端尚无配置时迁移一次；同时修改时拒绝过期配置，重新打开设置后即可编辑。
 
 桌面布局支持拖动导航栏右边界和双页之间的分割线，双击分割线恢复默认宽度；宽度保存在当前浏览器。手机保持单页切换与抽屉导航。章节正文旁的视窗行号由当前渲染的文字行与对象临时计算，各章节从 1 开始，切换页面或调整宽度后重新计算，不进入文档。历史差异按历史版本到当前版本显示，绿色为新增，红色为删除；差异行号使用当前版本正文的行号，删除内容以短横线标记，差异页换行与正文不同时可合并显示对应的行号范围。
 
@@ -81,9 +81,9 @@ pack 会创建普通文件目录与索引，不覆盖已有文件；migrate 从�
 
 桌面和手机通过网页顶部「打开文件」输入服务器可访问的 .json 文件绝对路径，例如 `C:\Projects\demo.json` 或 `\\server\share\project\demo.json`（UNC 网络共享，须具备服务器进程的读写权限）。服务不绑定项目目录、不扫描磁盘、不管理文件，直接解析并编辑原件。也可从最近成功打开的记录中选择文件。`PAPEREDITER_WORKSPACE` 可显式指定启动文件。
 
-最近打开、当前工作区及每份文档的阅读位置、导航和页面折叠状态由服务端记录在 `workspace.local.json`（不提交到 Git），所有设备共享。切换前保存当前浏览器的修改；其他客户端须刷新后再编辑。刷新或再次打开文档时恢复共享阅读位置，正在阅读的页面不会实时被其他设备滚动位置打断。文件缺失时提示重新选择。备份时须包含 .json 及其引用的文件。
+最近打开、当前工作区及每份文档的阅读位置、导航和页面折叠状态由服务端记录在 用户数据目录的 `settings.json`（不提交到 Git），所有设备共享。切换前保存当前浏览器的修改；其他客户端须刷新后再编辑。刷新或再次打开文档时恢复共享阅读位置，正在阅读的页面不会实时被其他设备滚动位置打断。文件缺失时提示重新选择。备份时须包含 .json 及其引用的文件。
 
-「新建文件」可留空，自动创建项目根目录下 Git 忽略的 `workspaces/` 目录，并生成唯一的 `Untitled-<UUID>.json` 文件。指定路径时仍要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new [ABSOLUTE_PATH]` 行为相同，`paperedit --offline new [ABSOLUTE_PATH]` 仅创建文件而不切换网页；`paperedit new ABSOLUTE_PATH --background --blank` 创建空白交付文档并登记，不切换用户当前文档；`paperedit register ABSOLUTE_PATH` 登记既有文档。
+「新建文件」可留空，自动创建用户数据目录下的 `workspaces/` 目录，并生成唯一的 `Untitled-<UUID>.json` 文件。指定路径时仍要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new [ABSOLUTE_PATH]` 行为相同，`paperedit --offline new [ABSOLUTE_PATH]` 仅创建文件而不切换网页；`paperedit new ABSOLUTE_PATH --background --blank` 创建空白交付文档并登记，不切换用户当前文档；`paperedit register ABSOLUTE_PATH` 登记既有文档。
 
 每份新文档从仓库内的 `example.json` 和 `example-data/` 模板生成，包含章节、子章节、段落、粗斜体、行内及独立公式、图和子图、表格、交叉引用、文本、对象、独立标签批注及自由放置标记。模板不被改写，工作文件及其历史不进入 Git。示例图可直接复制到其他文档；正式交叉引用和图片资源仍属于各自文档，跨文档复制时需重新建立对应引用或登记资源。没有独立的打开示例入口。
 
@@ -137,3 +137,71 @@ python -m unittest test_server
 本应用为本地单用户工具，无独立账号认证、多人协作和公网权限隔离。请通过受信任的私有网络使用，详见根目录安全说明。
 
 工程索引按内容识别，旧 `.paper` 文件仍可打开。
+
+
+## Local-first source application
+
+The source application uses the default browser and runs a loopback-only
+Python service in the background. Double-click `start_local.pyw` on Windows,
+run `python local_runtime.py`, or use the installed `paperedit launch`.
+For login/startup tasks use `paperedit launch --background`.
+The service discovers a free port, remembers the last working port, and
+advertises the actual port in its user-local runtime record. Use Settings >
+Service from a locally launched browser to choose automatic or fixed port.
+A changed setting takes effect after saving all open documents, selecting
+Settings > Service > Exit or running `paperedit stop`, and launching again.
+The service never configures Tailscale or other forwarding tools.
+
+Default user data: `%LOCALAPPDATA%/PaperEditer` on Windows,
+`~/.local/share/PaperEditer` (or XDG_DATA_HOME) on Linux, and
+`~/Library/Application Support/PaperEditer` on macOS.
+Use `PAPEREDITER_USER_DIR` for a separate profile, especially in tests.
+Settings, history, runtime record and logs live there. Existing documents
+and external images retain their original absolute paths. Blank-path new
+documents use the user data workspaces folder. No source checkout data is
+published. `PAPEREDITER_HISTORY_DIR`, `PAPEREDITER_DATA_DIR`,
+`PAPEREDITER_PORT` and `PAPEREDITER_URL` remain explicit overrides.
+
+Before upgrading a legacy source installation, **stop its service and
+offline CLI writers**, then run `python local_runtime.py --migrate-legacy`
+from the original checkout. This copies the legacy settings, central history
+and optional legacy directory data to a new profile, never deletes originals
+or merges into an existing profile. Do not resume the legacy service after
+migration; retain its files as a rollback snapshot. Launch from the same
+checkout after migration. Git >= 2.28 is reused if available; otherwise the
+Windows launcher downloads the official matching Portable Git asset,
+verifies the GitHub release SHA-256 digest and extracts into the user runtime
+directory. On other platforms install Git separately. No global PATH changes.
+
+
+## Windows release build
+
+The developer entry is `start_local.pyw` (create a shortcut named PaperEditer Dev).
+The release entry is `PaperEditer.exe`. Both use the same default user profile,
+runtime discovery and OS service lock; only one background service runs per
+profile. On Windows its executable name is PaperEditer.exe in both modes.
+The CLI works without the service for document operations. Set
+PAPEREDITER_USER_DIR to an isolated directory for tests. Exit from Settings >
+Service or use paperedit stop before switching which implementation runs.
+Forced termination leaves a stale runtime record, but the next launch verifies
+the service identity and starts fresh. Unsent browser edits are not guaranteed
+to survive forced termination.
+
+Build a Windows x64 trial release with Python, the normal project dependencies,
+PyInstaller 6.22.3 and Inno Setup 6.3+:
+
+    npm ci
+    python -m pip install pyinstaller==6.22.3
+    python -m PyInstaller --noconfirm PaperEditer.spec
+    python test_process_runtime.py
+    # PowerShell, optional: run the same tests against the frozen distribution
+    $env:PAPEREDITER_RELEASE_DIR = (Resolve-Path dist/PaperEditer).Path
+    python test_process_runtime.py
+    ISCC.exe PaperEditer.iss
+
+Only program resources are included; no user settings, history, documents,
+logs or test outputs are packaged. The installer creates a user-level
+shortcut and optionally starts the service on sign-in, preserves the user
+data directory on uninstall, and ships paperedit.exe in the installation
+directory. It does not change PATH or Tailscale configuration. The unsigned
+trial installer may trigger Windows SmartScreen.

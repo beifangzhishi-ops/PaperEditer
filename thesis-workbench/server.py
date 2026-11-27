@@ -5,11 +5,16 @@ import json, hashlib, mimetypes, uuid, os, threading, re, datetime, base64, trac
 from workspace import Package
 from document import Document, content, object_value, create_document, EXAMPLE_IMAGE, validate_annotation_locations, path_status, path_key, registered_history_paths
 from merge import merge_content
+from local_runtime import user_dir, service_settings, validate_port_settings, bind_server, write_json, runtime_path, ensure_git, check_profile, FROZEN
+import secrets, hmac
+from document import file_lock
 ROOT=Path(__file__).resolve().parent
-DEFAULT_WORKSPACE_DIR=ROOT.parent/'workspaces'
-DATA=Path(os.environ.get('PAPEREDITER_DATA_DIR',str(ROOT/'data'))).expanduser().resolve()
+DEFAULT_WORKSPACE_DIR=user_dir()/'workspaces'
+DATA=Path(os.environ.get('PAPEREDITER_DATA_DIR',str(user_dir()/'data'))).expanduser().resolve()
 PACKAGE=None
-CONFIG=ROOT/'workspace.local.json'
+CONFIG=user_dir()/'settings.json'
+RUNTIME=None
+STOPPING=False
 WORKSPACE_ERROR=None
 LOCK=threading.RLock()
 CHANGE_EVENT=threading.Condition()
@@ -23,7 +28,7 @@ def settings_load():
     return json.loads(CONFIG.read_text(encoding='utf-8')) if CONFIG.is_file() else {}
 def settings_save(settings):
     settings.pop('roots',None)
-    dump(CONFIG,settings)
+    write_json(CONFIG,settings)
 SHORTCUT_TOOLS={'切换查看/编辑模式','剪切','复制','粘贴','新建批注','添加公式','复制交叉引用','撤销','重做','显示/隐藏工具栏'}
 def shortcut_settings(settings):
     values=settings.get('toolShortcuts')
@@ -347,9 +352,19 @@ class Handler(BaseHTTPRequestHandler):
         ct=mimetypes.guess_type(str(p))[0] or 'application/octet-stream'
         if p.suffix=='.js':ct='text/javascript'
         self.respond(200,p.read_bytes(),ct)
+    def is_admin(self):
+        return bool(RUNTIME and self.headers.get('Host')==f"127.0.0.1:{RUNTIME['port']}" and re.fullmatch(r'[a-f0-9]{64}',self.headers.get('X-PaperEditer-Admin','')) and hmac.compare_digest(self.headers['X-PaperEditer-Admin'],RUNTIME['token']))
     def do_GET(self):
         try:
             u=urlparse(self.path);p=unquote(u.path)
+            if p=='/api/runtime/identity':
+                nonce=parse_qs(u.query).get('nonce',[''])[0]
+                if not RUNTIME or not re.fullmatch(r'[a-f0-9]{64}',nonce):return self.respond(404,{'error':'Not found'})
+                proof=hmac.new(RUNTIME['token'].encode(),nonce.encode(),hashlib.sha256).hexdigest()
+                return self.respond(200,{'instance':RUNTIME['instance'],'proof':proof})
+            if p=='/api/settings/service':
+                if not self.is_admin():return self.respond(403,{'error':'Open local launcher for service settings'})
+                with LOCK:return self.respond(200,{'service':service_settings(settings_load()),'port':RUNTIME['port'],'dataDir':str(user_dir()),'buildType':RUNTIME.get('buildType','source')})
             if p=='/api/events':return self.events()
             if p=='/api/workspaces':
                 with LOCK:return self.respond(200,workspace_catalog())
@@ -429,7 +444,9 @@ class Handler(BaseHTTPRequestHandler):
                     temp=target.with_suffix('.tmp');temp.write_bytes(data);os.replace(temp,target)
         return self.respond(200,{'url':'/assets/'+name})
     def do_POST(self):
+        global STOPPING
         try:
+            if STOPPING:return self.respond(503,{'error':'Service is stopping'})
             if self.headers.get('Origin'):
                 origin=urlparse(self.headers['Origin'])
                 if origin.netloc.lower()!=self.headers.get('Host','').lower():return self.respond(403,{'error':'Origin mismatch'})
@@ -441,6 +458,22 @@ class Handler(BaseHTTPRequestHandler):
             if ct!='application/json':return self.respond(415,{'error':'JSON required'})
             if not 0<n<=32*1024*1024:return self.respond(413,{'error':'Invalid request size'})
             payload=json.loads(self.rfile.read(n))
+            if self.path=='/api/settings/stop':
+                if not self.is_admin():return self.respond(403,{'error':'Local launcher required'})
+                with LOCK:
+                    STOPPING=True
+                    self.respond(200,{'ok':True})
+                threading.Thread(target=self.server.shutdown,daemon=True).start()
+                return
+            if self.path=='/api/settings/service':
+                if not self.is_admin():return self.respond(403,{'error':'Open local launcher for service settings'})
+                with LOCK:
+                    values=validate_port_settings(payload);settings=settings_load()
+                    previous=service_settings(settings)
+                    settings['service']={**previous,**values}
+                    if previous['preferredPort']!=values['preferredPort'] or previous['portMode']!=values['portMode']:settings['service']['lastPort']=None
+                    settings_save(settings)
+                    return self.respond(200,{'service':settings['service'],'port':RUNTIME['port'],'dataDir':str(user_dir()),'buildType':RUNTIME.get('buildType','source')})
             if self.path=='/api/shortcuts':
                 code,result=save_shortcuts(payload);return self.respond(code,result)
             if self.path=='/api/workspaces/open':
@@ -517,7 +550,7 @@ def scan_workspaces():
     # Do not depend on an open browser. Observe the active document while the
     # service runs; failures are logged without overwriting invalid content.
     previous_error=None
-    while True:
+    while not STOPPING:
         try:
             with LOCK:
                 if isinstance(PACKAGE,Document):
@@ -529,20 +562,41 @@ def scan_workspaces():
                 previous_error=str(e);print('Document scan:',previous_error,flush=True)
         threading.Event().wait(2)
 
-if __name__=='__main__':
-    settings=settings_load()
-    if reconcile_file_records(settings):settings_save(settings)
-    filename=os.environ.get('PAPEREDITER_WORKSPACE')
-    if not filename:filename=settings.get('workspace')
-    if filename:
+def run_service():
+    global PACKAGE,WORKSPACE_ERROR,RUNTIME,STOPPING
+    STOPPING=False
+    check_profile()
+    ensure_git()
+    directory=user_dir()
+    directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+    with file_lock(directory/'service.lock',timeout=.1):
+        settings=settings_load()
+        http=bind_server(lambda address:WorkbenchServer(address,Handler),settings,os.environ.get('PAPEREDITER_PORT'))
         try:
-            open_workspace(filename,remember=filename!=settings.get('workspace'))
-        except Exception:
-            PACKAGE=None;WORKSPACE_ERROR='上次打开的工作区无法读取，请重新选择文件。'
-    elif 'PAPEREDITER_DATA_DIR' in os.environ:initialize_data()
-    else:WORKSPACE_ERROR='尚未打开文档，请输入服务器上的 .json 文件路径。'
-    port=int(os.environ.get('PAPEREDITER_PORT','8191'))
-    print(f'PaperEditer 127.0.0.1:{port}',flush=True)
-    threading.Thread(target=scan_workspaces,daemon=True).start()
-    WorkbenchServer(('127.0.0.1',port),Handler).serve_forever()
+            port=http.server_address[1]
+            RUNTIME={'pid':os.getpid(),'port':port,'host':'127.0.0.1','instance':secrets.token_hex(16),'token':secrets.token_hex(32),'buildType':'release' if FROZEN else 'source'}
+            settings['service']={**service_settings(settings),'lastPort':port}
+            settings_save(settings)
+            settings=settings_load()
+            if reconcile_file_records(settings):settings_save(settings)
+            filename=os.environ.get('PAPEREDITER_WORKSPACE')
+            if not filename:filename=settings.get('workspace')
+            if filename:
+                try:
+                    open_workspace(filename,remember=filename!=settings.get('workspace'))
+                except Exception:
+                    PACKAGE=None;WORKSPACE_ERROR='上次打开的工作区无法读取，请重新选择文件。'
+            elif 'PAPEREDITER_DATA_DIR' in os.environ:initialize_data()
+            else:WORKSPACE_ERROR='尚未打开文档，请输入服务器上的 .json 文件路径。'
+            write_json(runtime_path(),RUNTIME)
+            print(f'PaperEditer 127.0.0.1:{port}',flush=True)
+            threading.Thread(target=scan_workspaces,daemon=True).start()
+            http.serve_forever()
+        finally:
+            http.server_close()
+            with LOCK:
+                runtime_path().unlink(missing_ok=True)
+                RUNTIME=None
 
+if __name__=='__main__':
+    run_service()

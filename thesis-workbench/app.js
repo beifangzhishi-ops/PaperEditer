@@ -2159,7 +2159,7 @@ $('shortcutSettings').onclick=shortcutSettings;
 async function openWorkspaceDialog(){
     if(dialog._commitNote)closeWorkbenchDialog();
     const d=showDialog('打开文件');
-    d.append(el('p','small','输入服务器上的 .json 文件绝对路径打开或新建文件。新建时可留空，自动在项目的私有 workspaces 目录创建包含各类对象示例的文件，不覆盖已有文件。支持本地磁盘和 UNC 网络共享路径。'));
+    d.append(el('p','small','输入服务器上的 .json 文件绝对路径打开或新建文件。新建时可留空，自动在用户数据 workspaces 目录创建包含各类对象示例的文件，不覆盖已有文件。支持本地磁盘和 UNC 网络共享路径。'));
     const form=el('form','workspacePathForm'),input=el('input','workspacePath');input.type='text';input.required=true;input.autocomplete='off';input.autocapitalize='off';input.spellcheck=false;input.placeholder='C:\\项目\\文件.json 或 \\\\服务器\\共享\\文件.json';input.setAttribute('aria-label','服务器文件路径');
     const submit=el('button','','打开');submit.type='submit';form.append(input,submit);d.append(form);
     const create=btn('新建文件',()=>openPath(input.value,'new'));
@@ -2310,8 +2310,65 @@ function updateShortcutHints(){
     toolbarShortcutText=s?' ('+shortcutLabel(s)+')':'';
     toggle.dataset.shortcutHint=toolbarShortcutText
 }
+let localAdminToken='';
+try{
+    const fragment=new URLSearchParams(location.hash.slice(1)),token=fragment.get('admin');
+    if(token&&/^[a-f0-9]{64}$/.test(token)&&location.hostname==='127.0.0.1'){
+        sessionStorage.setItem('wb:local-admin',token);
+        history.replaceState(null,'',location.pathname+location.search);
+    }
+    localAdminToken=sessionStorage.getItem('wb:local-admin')||'';
+}catch{}
+function settingsTabs(d,active){
+    const row=el('div','edittools');
+    row.append(btn('快捷键',shortcutSettings),btn('服务',serviceSettingsDialog));
+    row.querySelectorAll('button')[active==='service'?1:0].disabled=true;
+    d.append(row);
+}
+async function serviceSettingsDialog(){
+    const d=showDialog('设置');
+    settingsTabs(d,'service');
+    const generation=dialogPlacementVersion;
+    const message=el('p','small','正在读取服务设置...');
+    d.append(message);
+    async function request(body,endpoint='/api/settings/service'){
+        const options={headers:{'X-PaperEditer-Admin':localAdminToken}};
+        if(body){options.method='POST';options.headers['Content-Type']='application/json';options.body=JSON.stringify(body)}
+        const r=await fetch(endpoint,options);
+        const data=await r.json();if(!r.ok)throw new Error(data.error||'HTTP '+r.status);
+        return data;
+    }
+    try{
+        const data=await request();
+        if(!d.isConnected||!dialog.open||generation!==dialogPlacementVersion)return;
+        message.textContent=(data.buildType==='release'?'发行版':'开发版')+' | '+ '当前端口: '+data.port+' | '+data.dataDir;
+        const mode=el('select'),port=el('input');
+        mode.append(new Option('自动选择端口','auto'),new Option('固定端口','fixed'));
+        mode.value=data.service.portMode;mode.setAttribute('aria-label','端口模式');
+        port.type='number';port.min=1024;port.max=65535;port.value=data.service.preferredPort;port.setAttribute('aria-label','端口');
+        const msg=el('p','small','仅监听 localhost，修改后下次启动服务时生效。');
+        const save=btn('保存',async()=>{
+            save.disabled=true;
+            try{await request({portMode:mode.value,preferredPort:Number(port.value)});msg.textContent='已保存，下次启动生效。'}
+            catch(e){msg.textContent=e.message}finally{save.disabled=false}
+        });
+        const controls=el('div','edittools');controls.append(mode,port,save);
+        const exit=btn('退出程序',async()=>{
+            if(!confirm('请确认其他窗口和设备已保存。退出后将停止后台服务，所有设备断开连接。'))return;
+            exit.disabled=true;
+            try{
+                if(db&&!(await flushDocument()))throw new Error('请先完成保存');
+                await request({},'/api/settings/stop');
+                syncEvents?.close();
+                msg.textContent='服务已停止。可关闭网页，再次点击 PaperEditer 启动。';
+                save.disabled=true;mode.disabled=true;port.disabled=true;
+            }catch(e){msg.textContent=e.message;exit.disabled=false}
+        });
+        d.append(controls,msg,exit);
+    }catch(e){message.textContent='请从本机 PaperEditer 启动器打开浏览器后配置服务。'}
+}
 function shortcutSettings(){
-    const d=showDialog('快捷键设置');let values=clone(toolShortcuts);const revision=shortcutRevision;
+    const d=showDialog('设置');settingsTabs(d,'shortcuts');let values=clone(toolShortcuts);const revision=shortcutRevision;
     const desc=el('p','small','快捷键由服务端统一保存，所有设备和文档共享。点击组合键输入框后按键，或使用下拉框选择；清除可禁用该工具的自定义快捷键。浏览器原生剪贴快捷键仍可使用。');
     const list=el('div','shortcutList'),msg=el('p','small','Ctrl+F 默认替代浏览器查找。系统保留的快捷键可能无法使用。');
     const modifiers=[['c','Ctrl'],['a','Alt'],['ca','Ctrl+Alt'],['cs','Ctrl+Shift'],['as','Alt+Shift'],['cas','Ctrl+Alt+Shift']];

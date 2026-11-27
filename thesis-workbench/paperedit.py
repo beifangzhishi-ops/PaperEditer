@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 import server
+from local_runtime import discover, launch, stop, check_profile
 from document import Document, objects, object_value, revision, recover_document
 
 
@@ -131,12 +132,15 @@ def emit(value):
 def main():
     parser = argparse.ArgumentParser(prog="paperedit", description=__doc__)
     parser.add_argument("--workspace", help="Absolute server-side path; does not change web selection")
-    parser.add_argument("--url", default=os.environ.get("PAPEREDITER_URL", "http://127.0.0.1:" + os.environ.get("PAPEREDITER_PORT", "8191")))
+    parser.add_argument("--url", default=os.environ.get("PAPEREDITER_URL"))
     parser.add_argument("--offline", action="store_true", help="Use the shared locked document core directly")
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("launch", help="Start or reuse the local service and open the browser")
+    p.add_argument("--background", action="store_true", help="Start without opening a browser")
+    sub.add_parser("stop", help="Stop the local service after saving open documents")
     p = sub.add_parser("open", help="Explicitly change active web workspace")
     p.add_argument("path")
-    p = sub.add_parser("new", help="Create and open an example document; omit path to use the private project workspaces directory")
+    p = sub.add_parser("new", help="Create and open an example document; omit path to use the user data workspaces directory")
     p.add_argument("path", nargs="?", default="")
     p.add_argument("--background", action="store_true", help="Register without switching the web document")
     p.add_argument("--blank", action="store_true", help="Create an empty delivery document")
@@ -180,6 +184,21 @@ def main():
         parser.print_help()
         return
     args = parser.parse_args()
+    if args.command == "launch":
+        emit({"url": launch(args.background)})
+        return
+    if args.command == "stop":
+        emit({"stopped": stop()})
+        return
+    if args.url is None:
+        check_profile()
+        record = None if args.offline else discover()
+        if record:
+            args.url = record["url"]
+        else:
+            args.offline = True
+            args.url = "http://127.0.0.1:0"
+
     if args.command in ("open", "new", "forget", "register"):
         if args.offline:
             if args.command != "new":

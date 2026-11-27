@@ -20,3 +20,7 @@
 ## 数据与公开仓库
 
 仓库只维护编辑器代码、文档、测试和虚构示例。遵循 `.gitignore` 白名单、`CONTRIBUTING.md` 和 `SECURITY.md`；真实论文、工作区配置、私人路径、凭据、原图及历史快照不得进入 Git。保持无项目级许可证的现状。
+
+## Local application runtime
+
+Use the source launcher for the owner's daily running instance. After a verified main update, stop the current service with paperedit stop and launch the source checkout with python local_runtime.py --background (from thesis-workbench). Do not rebuild or install the distribution unless the user requests it. Both entry points use the same user profile, so a running release must be stopped before starting the new source code. Development tests use an isolated PAPEREDITER_USER_DIR and port. Preserve the user's data and avoid forwarding-tool changes.

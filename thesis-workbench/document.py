@@ -14,6 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
+from local_runtime import user_dir, ensure_git
 from workspace import Package, json_bytes, replace_bytes, OBJECT
 from merge import merge_content
 from paragraphs import paragraph_index_valid, rebuild, paragraph_value
@@ -238,7 +239,7 @@ class History:
             raise ValueError("PaperEditer history must not have remote repositories")
 
     def run(self, *args, data=None, bare=True, allowed=(0,), env=None):
-        cmd = ["git", "-c", "core.hooksPath=" + os.devnull, "-c", "gc.auto=0",
+        cmd = [ensure_git(), "-c", "core.hooksPath=" + os.devnull, "-c", "gc.auto=0",
                "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false"]
         if bare:
             cmd += ["--git-dir=" + str(self.path)]
@@ -611,7 +612,7 @@ def check_document(doc, validator):
 
 
 def history_root():
-    return Path(os.environ.get("PAPEREDITER_HISTORY_DIR", str(Path(__file__).resolve().parent / "history"))).resolve()
+    return Path(os.environ.get("PAPEREDITER_HISTORY_DIR", str(user_dir() / "history"))).resolve()
 
 
 def path_key(path):
