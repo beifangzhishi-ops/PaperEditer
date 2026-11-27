@@ -491,12 +491,27 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');CSS.highlights.delete('paper-range-annotation');ownsHighlight=false}}
     let highlightedNotes=[];
     function clearRangeNotes(){for(const chip of highlightedNotes)chip.classList.remove('rangeNoteSelected');highlightedNotes=[]}
-    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;clearReadingCaret();for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearRangeNotes();clearHighlight()}
+    let highlightedMath=new Set();
+    function syncRangeMath(r){
+        const next=new Set();
+        if(r&&!r.collapsed)for(const atom of body.querySelectorAll('.inlineMathAtom')){
+            if(atom.closest('.visualDocument')!==root||atom.closest('.visualCard.rangeSelected'))continue;
+            // The outer prose range selects the atom, not MathLive's internal selection.
+            if(atom.contains(r.startContainer)&&atom.contains(r.endContainer))continue;
+            const bounds=document.createRange();bounds.selectNode(atom);
+            if(r.compareBoundaryPoints(Range.END_TO_START,bounds)<0&&r.compareBoundaryPoints(Range.START_TO_END,bounds)>0)next.add(atom)
+        }
+        for(const atom of highlightedMath)if(!next.has(atom))atom.classList.remove('rangeMathSelected');
+        for(const atom of next)if(!highlightedMath.has(atom))atom.classList.add('rangeMathSelected');
+        highlightedMath=next
+    }
+    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;clearReadingCaret();for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearRangeNotes();syncRangeMath(null);clearHighlight()}
     root._clearMixed=clearMixed;
     function syncRange(){
         const cross=mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer)?mixed:null,r=cross||nativeRange(),pieces=selectedPieces(r);
         syncReadingCaret(r);
         for(const c of cards())c.classList.toggle('rangeSelected',cross&&pieces.some(x=>x.card===c&&!x.local));
+        syncRangeMath(r);
         clearRangeNotes();
         const ids=new Set(cross?selectedRangeNotes(cross).map(x=>x.note.id):[]);
         if(cross){highlightedNotes=[...(root.closest('.page')||root).querySelectorAll(noteLabelSelector)].filter(chip=>ids.has(chip.dataset.noteId));for(const chip of highlightedNotes)chip.classList.add('rangeNoteSelected')}

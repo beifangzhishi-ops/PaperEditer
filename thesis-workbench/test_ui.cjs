@@ -291,6 +291,7 @@ async function checkMixedRange(browser,mobile){
         await last.scrollIntoViewIfNeeded();const dest=await textPoint(last,5);await p.keyboard.down('Shift');await p.mouse.click(dest.x,dest.y);await p.keyboard.up('Shift');
     }
     await p.waitForFunction(()=>document.querySelectorAll('.rangeSelected').length===4).catch(async err=>{console.log('range failure',mobile,errors,await p.evaluate(()=>({selected:[...document.querySelectorAll('.rangeSelected')].map(c=>c.className),range:getSelection().toString(),mixed:!!document.querySelector('.pane .visualDocument')._mixedRange(),focus:document.activeElement?.className})));throw err});
+    assert.equal(await first.locator('.inlineMathAtom.rangeMathSelected').count(),1,'cross-object range highlights inline formula on desktop and mobile');
     if(mobile){
         const button=p.locator('#floatingTools [data-tool="复制"]');
         await p.waitForFunction(()=>document.querySelector('#floatingTools [data-tool="复制"]').getAttribute('aria-disabled')==='false');
@@ -360,6 +361,38 @@ async function checkSelectAllRange(browser){
     await first.focus();await p.keyboard.press('Control+A');await p.keyboard.press('Backspace');
     await p.waitForFunction(()=>!find('demo-start').body.trim());
     assert.deepEqual(errors,[]);await context.close();
+}
+async function checkInlineMathRange(browser){
+    const {p,context,errors}=await fixture(browser);
+    const raw='Alpha $a+b$ middle $c^2$ Omega\n\n:::equation range-math\nx^2\n:::\n\nLast paragraph\n';
+    await p.evaluate(raw=>{find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start')},raw);
+    const doc=p.locator('.pane .visualDocument').first(),area=doc.locator('.part-text .richText').first(),atoms=area.locator('.inlineMathAtom');
+    await atoms.nth(1).waitFor();
+    await area.scrollIntoViewIfNeeded();
+    await p.evaluate(async()=>{await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))});
+    const count=()=>area.locator('.rangeMathSelected').count();
+    const at=async(n,i)=>area.evaluate((a,[n,i])=>{const t=[...a.querySelector('p').childNodes].filter(x=>x.nodeType===3)[n],r=document.createRange();r.setStart(t,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:b.y+b.height/2}},[n,i]);
+    const start=await at(0,2),middle=await at(1,3),end=await at(2,3);
+    const initial=await atoms.first().boundingBox();
+    await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(end.x,end.y,{steps:16});
+    await p.waitForFunction(()=>document.querySelectorAll('.inlineMathAtom.rangeMathSelected').length===2).catch(async err=>{console.log('inline range',errors,await p.evaluate(({start,end})=>({selection:getSelection().toString(),anchor:getSelection().anchorNode?.nodeName,focus:getSelection().focusNode?.nodeName,atoms:[...document.querySelectorAll('.inlineMathAtom')].map(a=>({cls:a.className,rect:a.getBoundingClientRect().toJSON()})),hits:[start,end].map(({x,y})=>document.elementFromPoint(x,y)?.outerHTML.slice(0,300))}),{start,end}));throw err});
+    assert.deepEqual(await atoms.first().boundingBox(),initial,'range highlight must not change layout');
+    assert.equal(await atoms.first().evaluate(a=>getComputedStyle(a).outlineWidth),'2px');
+    await p.mouse.move(middle.x,middle.y,{steps:10});await p.mouse.up();
+    await p.waitForFunction(()=>document.querySelectorAll('.inlineMathAtom.rangeMathSelected').length===1);
+    assert.equal(await atoms.first().evaluate(a=>a.classList.contains('rangeMathSelected')),true);
+    // A range ending just before the atom must not select it.
+    await area.evaluate(a=>{const p=a.querySelector('p'),r=document.createRange();r.setStart(p.firstChild,0);r.setEndBefore(p.querySelector('.inlineMathAtom'));getSelection().removeAllRanges();getSelection().addRange(r)});
+    await p.waitForFunction(()=>!document.querySelector('.rangeMathSelected'));
+    await p.mouse.move(end.x,end.y);await p.mouse.down();await p.mouse.move(start.x,start.y,{steps:16});await p.mouse.up();
+    await p.waitForFunction(()=>document.querySelectorAll('.inlineMathAtom.rangeMathSelected').length===2);
+    await p.mouse.click(middle.x,middle.y);await p.waitForFunction(()=>!document.querySelector('.rangeMathSelected'));
+    const field=atoms.first().locator('math-field');await field.focus();await p.keyboard.press('Control+A');
+    assert.equal(await field.evaluate(f=>f.getValue(f.selection,'latex')),await field.evaluate(f=>f.value));
+    assert.equal(await count(),0,'MathLive internal selection is not an outer atom selection');
+    await area.focus();await p.keyboard.press('Control+A');await p.waitForFunction(()=>document.querySelectorAll('.inlineMathAtom.rangeMathSelected').length===2&&document.querySelector('.part-equation.rangeSelected'));
+    await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('.rangeMathSelected'));
+    assert.equal(await p.evaluate(()=>find('demo-start').body),raw);assert.deepEqual(errors,[]);await context.close();
 }
 async function checkMouseRange(browser){
     const {p,context,errors}=await fixture(browser);
@@ -1391,6 +1424,7 @@ async function run(){
         }
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--local-annotation-range-only')){await checkLocalRangeAnnotations(browser);console.log('PASS: same-paragraph annotation highlight selection, copy, cut, delete and undo');return}
+        if(process.argv.includes('--inline-math-range-only')){await checkInlineMathRange(browser);await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: inline math range highlight, reverse and shrink, native MathLive editing, desktop and mobile mixed ranges');return}
         if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);await checkLocalRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}
         if(process.argv.includes('--select-all-range-only')){await checkSelectAllRange(browser);console.log('PASS: full document range, copy, cut, delete, undo, single paragraph and native controls');return}
         if(process.argv.includes('--mixed-range-only')){await checkMixedRange(browser,false);await checkMixedRange(browser,true);console.log('PASS: desktop Shift and mobile long-press cross-object selection, copy, cut and undo');return}
