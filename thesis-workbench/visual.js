@@ -1135,8 +1135,11 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
                             const row=el('div','figureImageRow'),tmp=el('div'),base=offset;
                             markdown(marks.join(' '),tmp,[owner].filter(Boolean),(src,w,i,widths)=>resize(src,w,base+i,widths));
                             const wraps=[...tmp.querySelectorAll('.resizeImage')];
+                            const widths=figureRowWidths(wraps.map(w=>w._getImageWidth()));
+                            figureRowGapStyle(row,wraps.length);
                             wraps.forEach((wrap,i)=>{
                                 row.append(wrap);wrap.dataset.row=r;wrap.dataset.slot=i;
+                                wrap._figureSourceWidth=wrap._getImageWidth();wrap._setImageWidth(widths[i]);
                                 if(i>0)wrap.append(slotButton('figureImageGap',r,i,'\u63d2\u5165\u6362\u884c (Enter)',()=>splitRow(r,i)));
                                 const handle=el('button','figureDragHandle','\u283f');handle.type='button';handle.title='\u62d6\u52a8\u56fe\u7247';handle.setAttribute('aria-label',handle.title);
                                 handle.addEventListener('pointerdown',e=>{e.stopPropagation();e.preventDefault();dragImage(e,wrap,true)});

@@ -22,7 +22,13 @@ function figureImageRows(source){
     }
     return rows
 }
-function figureWidth(title,fallback=100){return Math.max(1,Math.min(100,Number(title?.match(/(?:^|\s)wb-width:(\d+(?:\.\d+)?)(?:\s|$)/)?.[1]||fallback)||100))}
+function figureWidth(title,fallback=100){return Math.max(.001,Math.min(100,Number(title?.match(/(?:^|\s)wb-width:(\d+(?:\.\d+)?)(?:\s|$)/)?.[1]||fallback)||100))}
+function figureRowWidths(widths){
+    const total=widths.reduce((sum,w)=>sum+w,0);
+    return total<=100?widths:widths.map(w=>Math.floor(w/total*100000)/1000)
+}
+function figureRowWidthStyle(width){return 'calc((100% - var(--figure-row-gaps, 0px)) * '+width/100+')'}
+function figureRowGapStyle(row,count){row.style.setProperty('--figure-row-gaps',Math.max(0,count-1)*10+'px')}
 function subfigureLetter(i){let s='';for(i++;i>0;i=Math.floor((i-1)/26))s=String.fromCharCode(97+(i-1)%26)+s;return s}
 let db, view='thesis', panes=[{id:null,edit:false}], active=0, open=new Set(), targets=new Map(), numbers=new Map(), aliases=new Map(), search='', dragging=null, timer, saving=false, dirty=false, conflict=false, version=0, toastTimer, longTimer;
 let undoStack=[], redoStack=[];
@@ -610,9 +616,11 @@ function historyRenderedPart(p,showId=false){
                 const images=el('div','figureImageRows');let index=0;
                 for(const marks of rows){
                     const row=el('div','figureImageRow');
+                    const widths=figureRowWidths(marks.map(mark=>figureWidth([...mark.matchAll(figureImagePattern())][0][3])));
+                    figureRowGapStyle(row,marks.length);
                     for(const mark of marks){
                         const m=[...mark.matchAll(figureImagePattern())][0],wrap=el('div','historicalFigureImage'),img=el('img');
-                        wrap.dataset.subfigure=figureImageId(m[3],p.id,index++);wrap.style.width=figureWidth(m[3])+'%';
+                        wrap.dataset.subfigure=figureImageId(m[3],p.id,index++);wrap.style.width=figureRowWidthStyle(widths[row.children.length]);
                         img.src=m[2];img.alt=m[1];wrap.append(img);row.append(wrap)
                     }
                     images.append(row)
@@ -1823,27 +1831,38 @@ function markdown(raw,host,trail=[],onImageResize=null){
         if(!img.getAttribute('src')?.startsWith('/assets/')){img.replaceWith(el('span','badref','图片来源不在本地资源目录'));continue}
         const index=++imageIndex,src=img.getAttribute('src'),key='wb-image-width:'+src;
         const wrap=el('div','imgwrap resizeImage');let w=figureWidth(img.title,onImageResize?100:localStorage.getItem(key)||100);wrap.style.width=w+'%';img.removeAttribute('title');
-        wrap._setImageWidth=value=>{w=value;wrap.style.width=w+'%'};
+        wrap._setImageWidth=value=>{w=value;wrap.style.width=wrap.parentElement?.matches('.figureImageRow')?figureRowWidthStyle(w):w+'%'};
         wrap._getImageWidth=()=>w;
         function activate(){document.querySelectorAll('.resizeImage.selectedImage').forEach(x=>{if(x!==wrap)x.classList.remove('selectedImage')});wrap.classList.add('selectedImage');wrap.closest('.visualCard')?._selectImage?.(wrap);wrap.closest('.visualDocument')?.focus({preventScroll:true})}
         function full(){const d=showDialog(img.alt||'图片');const f=el('img','imagefull');f.src=src;d.append(f,btn('打开原图',()=>window.open(src,'_blank','noopener')))}
         function commit(widths=null){if(onImageResize)onImageResize(src,w,index,widths);else localStorage.setItem(key,String(w))}
+        // Freeze every other image's displayed width. The selected image can
+        // only use the unoccupied width of its explicit row.
+        function resizeContext(){
+            const row=wrap.parentElement, siblings=row.matches('.figureImageRow')?[...row.querySelectorAll(':scope > .resizeImage')]:[wrap];
+            const other=siblings.filter(x=>x!==wrap),max=Math.max(0,Math.round((100-other.reduce((sum,x)=>sum+x._getImageWidth(),0))*1000)/1000);
+            const gap=siblings.length>1?parseFloat(getComputedStyle(row).columnGap)||0:0;
+            const usable=Math.max(1,(row.clientWidth||wrap.getBoundingClientRect().width)-gap*(siblings.length-1));
+            return {siblings,max,usable}
+        }
+        function commitResize(siblings){
+            // Old rows may contain several 100% images. Record their already
+            // displayed widths once, so a reload cannot rescale the siblings.
+            const changes=siblings.filter(x=>x===wrap||x._figureSourceWidth!==x._getImageWidth()).map(x=>[Number(x.dataset.imageIndex),x._getImageWidth()]);
+            commit(siblings.length>1?changes:null);
+            for(const x of siblings)x._figureSourceWidth=x._getImageWidth()
+        }
         img.loading='lazy';img.draggable=false;img.addEventListener('click',e=>{e.stopPropagation();activate()});img.addEventListener('dblclick',e=>{e.stopPropagation();full()});
-        img.replaceWith(wrap);wrap.append(img);context(wrap,()=>[['查看原图',full],['恢复原始显示大小',()=>{w=100;wrap.style.width='100%';commit()}],...(wrap.closest('.visualCard')?._menu?.()||[])]);
+        img.replaceWith(wrap);wrap.append(img);context(wrap,()=>[['查看原图',full],['恢复原始显示大小',()=>{if(!canEditControl(wrap))return;const {siblings,max}=resizeContext();wrap._setImageWidth(max);commitResize(siblings)}],...(wrap.closest('.visualCard')?._menu?.()||[])]);
         for(const corner of ['nw','ne','sw','se']){
             const h=el('span','resizeHandle '+corner);h.setAttribute('role','button');h.setAttribute('aria-label','拖动图片'+corner+'角缩放');wrap.append(h);
             h.addEventListener('pointerdown',e=>{if(!canEditControl(wrap))return;e.preventDefault();e.stopPropagation();activate();h.setPointerCapture(e.pointerId);const startX=e.clientX,startY=e.clientY,startW=wrap.getBoundingClientRect().width,startH=wrap.getBoundingClientRect().height,available=wrap.parentElement.clientWidth||startW,signX=corner.endsWith('e')?1:-1,signY=corner.startsWith('s')?1:-1;let moved=false;
-                const siblings=wrap.parentElement.matches('.figureImageRow')?[...wrap.parentElement.querySelectorAll(':scope > .resizeImage')]:[wrap];
-                const other=siblings.filter(x=>x!==wrap).map(x=>({wrap:x,width:x.getBoundingClientRect().width,original:x._getImageWidth()}));
-                const total=other.reduce((s,x)=>s+x.width,0),usable=Math.max(1,available-(siblings.length-1)*10),initial=w;
+                const {siblings,max,usable}=resizeContext(),initial=w;
                 const move=ev=>{const dx=(ev.clientX-startX)*signX,dy=(ev.clientY-startY)*signY*(startW/Math.max(1,startH));const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy;if(Math.abs(delta)>2)moved=true;if(!moved)return;
-                    if(other.length){
-                        const target=Math.max(1,Math.min(100-other.length,(startW+delta)/usable*100));
-                        wrap._setImageWidth(Math.round(target*10)/10);
-                        for(const x of other)x.wrap._setImageWidth(Math.round((100-target)*x.width/Math.max(1,total)*10)/10)
-                    }else wrap._setImageWidth(Math.round(Math.max(1,Math.min(100,(startW+delta)/available*100))*10)/10)
+                    const target=Math.max(Math.min(1,max),Math.min(max,Math.round((startW+delta)/usable*1000)/10));
+                    wrap._setImageWidth(target)
                 };
-                const end=ev=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);if(ev.type==='pointercancel'){wrap._setImageWidth(initial);for(const x of other)x.wrap._setImageWidth(x.original)}else if(moved)commit(other.length?siblings.map(x=>[Number(x.dataset.imageIndex),x._getImageWidth()]):null)};h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
+                const end=ev=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);if(ev.type==='pointercancel')wrap._setImageWidth(initial);else if(moved&&w!==initial)commitResize(siblings)};h.addEventListener('pointermove',move);h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end)
             })
         }
     }

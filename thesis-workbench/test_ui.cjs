@@ -589,18 +589,45 @@ async function run(){
                     await a.scrollIntoViewIfNeeded();const ab=await a.boundingBox(),cb=await c.boundingBox();
                     await p.mouse.move(ab.x+ab.width/2,ab.y+ab.height/2);await p.mouse.down();await p.mouse.move(cb.x+cb.width-2,cb.y+cb.height/2,{steps:12});await p.mouse.up();
                     assert.deepEqual(await shape(),[['row-b','row-c','row-a']]);
-                    const b=fig.locator('[data-subfigure="row-b"]');await b.locator('img').click();
-                    const h=b.locator('.resizeHandle.se'),hb=await h.boundingBox(),oldWidth=await b.evaluate(w=>w.offsetWidth);
-                    await p.mouse.move(hb.x+hb.width/2,hb.y+hb.height/2);await p.mouse.down();await p.mouse.move(hb.x+hb.width/2+35,hb.y+hb.height/2,{steps:8});await p.mouse.up();
-                    assert(await b.evaluate(w=>w.offsetWidth)>oldWidth);
-                    assert(await p.evaluate(()=>find('demo-start').body.includes('wb-width:')));
                 }
+                const b=fig.locator('[data-subfigure="row-b"]');
+                const widths=()=>images.evaluateAll(ws=>Object.fromEntries(ws.map(w=>[w.dataset.subfigure,w.offsetWidth])));
+                const before=await widths();
+                const resize=async dx=>{
+                    await click(b.locator('img'));const h=b.locator('.resizeHandle.se'),hb=await h.boundingBox(),x=hb.x+hb.width/2,y=hb.y+hb.height/2;
+                    if(mobile){
+                        const cdp=await context.newCDPSession(p);
+                        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+                        for(let i=1;i<=8;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+dx*i/8,y}]});
+                        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach()
+                    }else{
+                        await p.mouse.move(x,y);await p.mouse.down();await p.mouse.move(x+dx,y,{steps:8});await p.mouse.up()
+                    }
+                };
+                await resize(-30);const smaller=await widths();
+                assert(smaller['row-b']<before['row-b']);
+                for(const id of ['row-a','row-c'])assert.equal(smaller[id],before[id]);
+                const siblingSource=()=>p.evaluate(()=>[...find('demo-start').body.matchAll(figureImagePattern())].filter(m=>!m[3].includes('row-b')).map(m=>m[0]));
+                const siblingsBefore=await siblingSource();
+                await resize(15);const bigger=await widths();
+                assert(bigger['row-b']>smaller['row-b'],JSON.stringify({mobile,before,smaller,bigger,source:await p.evaluate(()=>find('demo-start').body)}));
+                for(const id of ['row-a','row-c'])assert.equal(bigger[id],before[id]);
+                assert.deepEqual(await siblingSource(),siblingsBefore);
+                await resize(100);const capped=await widths();
+                for(const id of ['row-a','row-c'])assert.equal(capped[id],before[id]);
+                assert(Math.abs(capped['row-b']-before['row-b'])<=1);
                 const saved=await p.evaluate(()=>find('demo-start').body);
                 await p.evaluate(()=>renderPanes());assert.equal(await rows.count(),1);
                 assert.equal(await p.evaluate(()=>find('demo-start').body),saved);
+                assert.deepEqual(await widths(),capped);
                 const historical=await p.evaluate(()=>{const part=visualParts(find('demo-start').body)[0],h=historyRenderedPart(part);return [...h.querySelectorAll('.figureImageRow')].map(r=>[...r.children].map(w=>w.dataset.subfigure))});
                 assert.deepEqual(historical,await shape());
-                await click(images.first().locator('img'));await p.keyboard.press('Delete');assert.equal(await images.count(),2);
+                await p.waitForFunction(()=>!document.querySelector('.pane.activepane')?._restoringReading);
+                await images.first().locator('img').scrollIntoViewIfNeeded();
+                await click(images.first().locator('img'));
+                assert(await images.first().evaluate(w=>w.classList.contains('selectedImage')),JSON.stringify({mobile,state:await p.evaluate(()=>({focus:document.activeElement?.className,dialog:dialog.open,editing:editingEnabled,selection:document.querySelector('.selectedImage')?.dataset.subfigure,menu:!$('menu').hidden}))}));
+                await p.keyboard.press('Delete');
+                assert.equal(await images.count(),2,JSON.stringify({mobile,focus:await p.evaluate(()=>document.activeElement?.className),editing:await p.evaluate(()=>editingEnabled)}));
                 assert.deepEqual(errors,[]);await context.close();
             }
             console.log('PASS: figure rows, break insertion/deletion, drag reorder, resize, persistence, history, mobile and single-image deletion');return
