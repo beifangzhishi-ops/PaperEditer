@@ -466,8 +466,8 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     const compare=(a,b)=>collapsed(a).compareBoundaryPoints(Range.START_TO_START,collapsed(b));
     const cardOf=n=>(n.nodeType===1?n:n.parentElement)?.closest('.visualCard');
     function rangeOf(a,b){const r=collapsed(a);if(compare(a,b)<=0)r.setEnd(b.node,b.offset);else r.setStart(b.node,b.offset);return r}
-    function selectedPieces(r,serialize=false){
-        if(!r||r.collapsed||!body.contains(r.startContainer)||!body.contains(r.endContainer))return [];
+    function selectedPieces(r,serialize=false,allowCaret=false){
+        if(!r||r.collapsed&&!allowCaret||!body.contains(r.startContainer)||!body.contains(r.endContainer))return [];
         return cards().flatMap(card=>{
             const bounds=document.createRange();bounds.selectNode(card);
             if(r.compareBoundaryPoints(Range.END_TO_START,bounds)>=0||r.compareBoundaryPoints(Range.START_TO_END,bounds)<=0)return [];
@@ -477,7 +477,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             const local=whole.cloneRange();
             if(area.contains(r.startContainer))local.setStart(r.startContainer,r.startOffset);
             if(area.contains(r.endContainer))local.setEnd(r.endContainer,r.endOffset);
-            if(local.collapsed)return [];
+            if(local.collapsed&&!allowCaret)return [];
             if(!serialize)return [{card,p,local}];
             const before=whole.cloneRange(),after=whole.cloneRange();before.setEnd(local.startContainer,local.startOffset);after.setStart(local.endContainer,local.endOffset);
             const md=x=>{const h=el('div');h.append(x.cloneContents());return richMarkdown(h,true)};
@@ -534,6 +534,13 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const r=nativeRange();return r&&!r.collapsed&&(cardOf(r.startContainer)!==cardOf(r.endContainer)||selectedRangeNotes(r).length)?r:null
     }
     root._mixedRange=activeMixed;
+    // A native same-paragraph range can cover an atomic MathLive wrapper.
+    // The browser's plain-text clipboard cannot serialize that formula.
+    function clipboardRange(){
+        const r=activeMixed();if(r)return r;
+        const local=nativeRange(),area=localRangeArea(local);
+        return local&&!local.collapsed&&area?.closest('.part-text')&&mathAtomsInRange(local,area).some(atom=>!atom.contains(local.startContainer)||!atom.contains(local.endContainer))?local:null
+    }
     const handles=[el('span','rangeHandle rangeStart'),el('span','rangeHandle rangeEnd')];
     for(const h of handles){h.hidden=true;root.append(h);h.setAttribute('aria-hidden','true')}
     // Non-editable prose cannot display a native insertion caret on touch
@@ -738,40 +745,43 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const raw=pieces.map(p=>[notes.filter(n=>n.highlightOnly&&n.piece===p).map(n=>'[[embed:'+n.note.id+']] ').join('')+p.raw,...notes.filter(n=>n.free&&n.piece===p).map(n=>'[[embed:'+n.note.id+']]')].filter(x=>x.trim()).join('\n\n')).filter(Boolean).join('\n\n');
         return rangeNoteClipboard(cut?raw:remapCopiedObjects(raw,owner,true,map),notes,cut,map)
     }
-    function replaceMixed(r,text='',cut=false){
+    function replaceMixed(r,text='',cut=false,allowCaret=false){
         if(!canEditControl(root)||!root.isConnected)return;
-        const pieces=selectedPieces(r,true);if(!pieces.length)return;
+        const pieces=selectedPieces(r,true,allowCaret);if(!pieces.length)return;
         const first=pieces[0],last=pieces.at(-1),i=parts.indexOf(first.p),j=parts.indexOf(last.p);if(i<0||j<i)return;
         return annotationEdit(()=>{
-        const notes=selectedRangeNotes(r,pieces);
+        const notes=r.collapsed?[]:selectedRangeNotes(r,pieces);
         const noteIds=new Set(notes.map(n=>n.note.id));
         const stripSelected=raw=>raw?.replace(refPattern(),(m,k,id)=>k==='embed'&&noteIds.has(id)?'':m);
         first.before=stripSelected(first.before);last.after=stripSelected(last.after);
-        const replacement=text.trim()?parseParts(prepareRangePaste(text,owner)):[];
+        const prepared=text.trim()?prepareRangePaste(text,owner):'',replacement=prepared?parseParts(prepared):[];
+        // A copied inline fragment may begin or end with meaningful spaces.
+        if(replacement.length===1&&replacement[0].kind==='text'&&!/[\r\n]/.test(prepared))replacement[0].raw=prepared;
         const pastedEnd=replacement.at(-1),pasteMarker='WBPASTE'+uid().replace(/-/g,'')+'END';
         for(const {note} of notes)clearAnnotationPlacement(note);
         if(first.before?.trim()){
             if(replacement[0]?.kind==='text')replacement[0].raw=first.before+replacement[0].raw;
             else replacement.unshift({kind:'text',raw:first.before})
         }
+        const caretPart=pastedEnd?.kind==='text'?pastedEnd:!pastedEnd&&replacement.at(-1)?.kind==='text'?replacement.at(-1):null;
         if(last.after?.trim()){
-            if(pastedEnd?.kind==='text')pastedEnd.raw+=pasteMarker;
+            if(caretPart)caretPart.raw+=pasteMarker;
             if(replacement.at(-1)?.kind==='text')replacement.at(-1).raw+=last.after;
             else replacement.push({kind:'text',raw:last.after})
         }
         parts.splice(i,j-i+1,...replacement);if(!parts.length)parts=[{kind:'text',raw:''}];
         selectedPart=pastedEnd||parts[Math.min(i,parts.length-1)];clearMixed();getSelection()?.removeAllRanges();draw();
         let caret=null;
-        if(pastedEnd?.raw.includes(pasteMarker)){
-            pastedEnd.raw=pastedEnd.raw.replace(pasteMarker,'');
-            const area=cards().find(c=>c._part===pastedEnd)?.querySelector('.richText');
+        if(caretPart?.raw.includes(pasteMarker)){
+            caretPart.raw=caretPart.raw.replace(pasteMarker,'');
+            const area=cards().find(c=>c._part===caretPart)?.querySelector('.richText');
             if(area){const walker=document.createTreeWalker(area,NodeFilter.SHOW_TEXT);for(let n=walker.nextNode();n;n=walker.nextNode()){
                 const at=n.data.indexOf(pasteMarker);if(at>=0){n.deleteData(at,pasteMarker.length);caret=document.createRange();caret.setStart(n,at);caret.collapse(true);break}
             }}
         }
         flush();
         if(!cut)for(const {note} of notes)if(find(note.id))deleteNode(find(note.id));
-        if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd);if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
+        if(root.isConnected){const card=cards().find(c=>c._part===selectedPart),dest=card?.querySelector('.part-text .richText');if(dest){placeIn(dest,!!pastedEnd||!!caretPart&&!last.after?.trim());if(caret){getSelection().removeAllRanges();getSelection().addRange(caret)}if(pastedEnd)centerAfterPaste(dest)}else{root.focus({preventScroll:true});if(pastedEnd&&card)centerAfterPaste(card)}}})
     }
     function mixedMenu(r,e){
         const items=[['剪切',async()=>{if(requireEditMode(root)){await writeEditorClipboard(mixedClipboard(r,true));replaceMixed(r,'',true)}}],['复制',()=>writeEditorClipboard(mixedClipboard(r,false))],['粘贴',async()=>{if(requireEditMode(root)){const t=await readEditorClipboard();if(t!=null){const tex=formulaClipboardLatex(null,t);replaceMixed(r,tex?inlineFormulaSource(tex):t)}}}]];
@@ -780,7 +790,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     }
     root.addEventListener('contextmenu',e=>{if(touchContextEvent(e)&&e.target.closest('.part-text .richText'))root._prepareTouchRange(e);const r=activeMixed();if(!r)return;e.preventDefault();e.stopImmediatePropagation();const items=modeMenuItems(mixedMenu(r,e),root);if(touchContextEvent(e)){touchMenuAt=Date.now();showFloatingTools(e,items)}else menuAt(e,items)},true);
     for(const type of ['copy','cut','paste'])root.addEventListener(type,e=>{
-        const r=activeMixed();if(!r||!e.clipboardData)return;e.preventDefault();e.stopImmediatePropagation();
+        const r=clipboardRange();if(!r||!e.clipboardData||e.target.closest('math-field'))return;e.preventDefault();e.stopImmediatePropagation();
         if(type==='paste'){if(canEditControl(root)){const tex=formulaClipboardLatex(e.clipboardData);replaceMixed(r,tex?inlineFormulaSource(tex):e.clipboardData.getData('text/plain'))}return}
         if(type==='cut'&&!canEditControl(root))return;const text=mixedClipboard(r,type==='cut');e.clipboardData.setData('text/plain',text);localClipboard=text;localClipboardPreferred=false;if(type==='cut')replaceMixed(r,'',true)
     },true);
@@ -1100,7 +1110,13 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
             if(label&&find(label[1])&&label[1]!==owner){e.preventDefault();e.stopImmediatePropagation();pasteInline(area,label[0]);return}
             if(/(^:::(equation|figure|table)\s|^\s*\[\[embed:[^\]\n]+\]\]\s*$)/m.test(text)||(internal&&figureImagePattern().test(text))){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
             if(/\[\[(ref|eqref|cite):[^\]\n]+\]\]/.test(text)&&!/\[\[embed:/.test(text)){e.preventDefault();e.stopImmediatePropagation();pasteInline(area,text);return}
-            if(/(\[\[embed:|\$[^$\n]+\$)/m.test(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p)}
+            if(/\[\[embed:/.test(text)){e.preventDefault();e.stopImmediatePropagation();insertPaste(text,p);return}
+            if(/(?<!\\)\$\$[\s\S]+?\$\$|(?<!\\)\$[^\n$]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/.test(text)){
+                e.preventDefault();e.stopImmediatePropagation();
+                const s=getSelection(),r=s?.rangeCount&&area.contains(s.getRangeAt(0).commonAncestorContainer)?s.getRangeAt(0).cloneRange():document.createRange();
+                if(!area.contains(r.commonAncestorContainer)){r.selectNodeContents(area);r.collapse(false)}
+                replaceMixed(r,text,false,true)
+            }
         },true)
         area.addEventListener('copy',e=>{if(e.target.closest('math-field'))return;const s=window.getSelection();if(!s?.rangeCount||s.isCollapsed||!area.contains(s.getRangeAt(0).commonAncestorContainer))return;const clone=s.getRangeAt(0).cloneContents();if(!clone.querySelector('[data-token],math-field'))return;const holder=el('div');holder.append(clone);e.clipboardData.setData('text/plain',richMarkdown(holder));e.preventDefault()});
     }
@@ -1322,7 +1338,7 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         else showToast('已复制，粘贴将生成新 ID')
     }
     root._clipboardMenu=e=>{
-        const multi=activeMixed();if(multi)return mixedMenu(multi,localRangeArea(multi)?null:e);
+        const multi=clipboardRange();if(multi)return mixedMenu(multi,localRangeArea(multi)?null:e);
         const card=e.target.closest('.visualCard'),p=card?._part||(e.target===root&&Number.isFinite(e.clientY)?cards().filter(c=>c.getBoundingClientRect().top<=e.clientY).at(-1)?._part||parts[0]:selectedPart);
         const area=e.target.closest('.richText'),math=e.target.closest('math-field');
         const wrap=e.target.closest('.resizeImage');

@@ -1022,6 +1022,38 @@ async function run(){
             }
             console.log('PASS: mobile toolbar dimensions, rows, screen position and hit target at 1x/2x/3x/5x on 320/390/414px screens; desktop unchanged');return
         }
+        if(process.argv.includes('--inline-math-cut-paste-only')){
+            const {p,context,errors}=await fixture(browser);
+            const original='Before move $E_3=0.01$; after tail.\n\nDestination here.\n';
+            const reset=()=>p.evaluate(raw=>{find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start');renderPanes()},original);
+            const areas=p.locator('.pane .visualDocument').first().locator('.part-text .richText');
+            const raw=()=>p.evaluate(()=>find('demo-start').body);
+            const selectFragment=()=>areas.first().evaluate(a=>{a.focus();const para=a.querySelector('p'),r=document.createRange();r.setStart(para.firstChild,7);r.setEnd(para.lastChild,8);getSelection().removeAllRanges();getSelection().addRange(r)});
+            const fragment='move $E_3=0.01$; after ';
+            await reset();await selectFragment();await p.keyboard.press('Control+C');
+            assert.equal(await p.evaluate(()=>navigator.clipboard.readText()),fragment);
+            assert.equal(await raw(),original);
+            await selectFragment();await p.keyboard.press('Control+X');
+            await p.waitForFunction(()=>find('demo-start').body==='Before tail.\n\nDestination here.\n');
+            assert.equal(await p.evaluate(()=>navigator.clipboard.readText()),fragment);
+            await p.keyboard.press('Control+V');
+            await p.waitForFunction(raw=>find('demo-start').body===raw,original);
+            assert.equal(await areas.count(),2);
+            assert.equal(await areas.first().locator('math-field').evaluate(f=>f.value),'E_3=0.01');
+            await selectFragment();await p.keyboard.press('Control+X');
+            await p.waitForFunction(()=>find('demo-start').body==='Before tail.\n\nDestination here.\n');
+            await areas.nth(1).evaluate(a=>{a.focus();const r=document.createRange();r.setStart(a.querySelector('p').firstChild,12);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r)});
+            await p.keyboard.press('Control+V');
+            await p.waitForFunction(()=>find('demo-start').body==='Before tail.\n\nDestination move $E_3=0.01$; after here.\n');
+            assert.equal(await areas.count(),2);
+            await p.keyboard.type('!');
+            assert.equal(await raw(),'Before tail.\n\nDestination move $E_3=0.01$; after !here.\n');
+            await reset();await selectFragment();
+            await areas.first().evaluate(a=>{const d=new DataTransfer();d.setData('text/plain','first \\(a^2\\) and $b$ ');a.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))});
+            assert.equal(await areas.first().locator('math-field').count(),2);
+            assert.equal(await raw(),'Before first \\(a^2\\) and $b$ tail.\n\nDestination here.\n');
+            assert.deepEqual(errors,[]);await context.close();console.log('PASS: inline math mixed text copy/cut/paste at caret, selection replacement and paragraph preservation');return
+        }
         if(process.argv.includes('--math-clipboard-only')){
             const {p,context,errors}=await fixture(browser);
             await p.evaluate(()=>select('demo-start'));
