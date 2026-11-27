@@ -151,12 +151,17 @@ body.fullscreenHeaderHidden header{display:none}
 ::highlight(paper-range-annotation){background-color:#c8e2fa;color:inherit;text-decoration:underline;text-decoration-color:#3977b5;text-decoration-thickness:2px}
 
 /* Compact phone header: the overflow panel overlays rather than displaces the document. */
-#headerMore[hidden],#headerMorePanel[hidden]{display:none!important}
+#headerIdentity[hidden],#headerMore[hidden],#headerMorePanel[hidden]{display:none!important}
 @media(max-width:760px){
     header{position:relative;display:flex;flex-wrap:nowrap;align-items:center;gap:4px;padding:5px 6px;overflow:visible;z-index:21}
     body.fullscreenHeaderHidden header{display:none}
     header .spacer{display:none}
-    header #workspaceName{flex:1 1 0;min-width:0;max-width:none;font-size:13px;overflow:hidden;text-overflow:ellipsis}
+    #headerIdentity{display:flex;flex-direction:column;justify-content:center;flex:1 1 0;min-width:0;gap:2px;line-height:1.25}
+    header #workspaceName,header #headerIdentity #status{display:block;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    header #workspaceName{font-size:13px}
+    header #headerIdentity #status{font-size:11px;color:#667780}
+    header #headerIdentity #status.statusAttention{color:#89651d}
+    header #headerIdentity #status.statusError{color:#a83232;font-weight:600}
     header nav{flex:none;gap:2px}
     header button{height:40px;min-width:32px;padding:3px 5px;font-size:12px;touch-action:manipulation}
     header #drawer,header #headerActions,#headerMore{display:grid;place-items:center;flex:none;width:36px;min-width:36px;padding:0}
@@ -166,9 +171,14 @@ body.fullscreenHeaderHidden header{display:none}
     #headerMore.statusAttention:after{content:'';position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#b8892d;box-shadow:0 0 0 1px white}
     #headerMore.statusError:after{background:#bd4141}
     #headerMorePanel{position:absolute;top:calc(100% + 4px);right:6px;width:min(280px,calc(100% - 12px));max-height:calc(100dvh - var(--header-height) - var(--safe-top) - var(--safe-bottom) - 12px);overflow:auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:8px;background:white;border:1px solid #dce1e5;border-radius:10px;box-shadow:0 5px 25px #26303833}
-    header #headerMorePanel #status{grid-column:1/-1;display:block;max-width:none;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:12px;line-height:1.4;padding:5px 3px}
+    #headerStatusDetail{grid-column:1/-1;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:12px;line-height:1.4;padding:5px 3px;color:#667780}
     #headerMorePanel button{width:100%;min-width:0;height:auto;min-height:40px;font-size:13px;white-space:normal}
     #headerMorePanel #fullscreenToggle,#headerMorePanel #refresh{display:flex;align-items:center;justify-content:center;gap:5px;order:0}
     #headerMorePanel #fullscreenToggle:after,#headerMorePanel #refresh:after{content:attr(aria-label)}
     .pane>.toolbar{padding:5px 8px}
+}
+@media(max-width:360px){
+    header{gap:3px;padding-inline:4px}
+    header #drawer,header #headerActions,#headerMore{width:32px;min-width:32px}
+    header nav button,header #saveVersion{padding-inline:3px;font-size:11px}
 }

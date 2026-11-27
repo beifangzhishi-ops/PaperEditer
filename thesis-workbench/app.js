@@ -2143,7 +2143,14 @@ headerMore.setAttribute('aria-label','更多页面操作');
 headerMore.setAttribute('aria-controls','headerMorePanel');
 setToolIcon(headerMore,'more');
 const headerMorePanel=el('div');headerMorePanel.id='headerMorePanel';headerMorePanel.hidden=true;
-const headerMoreItems=['status','openWorkspace','historyButton','dual','refresh','fullscreenToggle','shortcutSettings','installApp'].map(id=>{
+const headerIdentity=el('div');headerIdentity.id='headerIdentity';headerIdentity.hidden=true;
+$('workspaceName').before(headerIdentity);
+const headerIdentityItems=['workspaceName','status'].map(id=>{
+    const control=$(id),marker=document.createComment(id);
+    control.before(marker);return {control,marker};
+});
+const headerStatusDetail=el('div');headerStatusDetail.id='headerStatusDetail';headerMorePanel.append(headerStatusDetail);
+const headerMoreItems=['openWorkspace','historyButton','dual','refresh','fullscreenToggle','shortcutSettings','installApp'].map(id=>{
     const control=$(id),marker=document.createComment(id);
     control.before(marker);return {control,marker};
 });
@@ -2155,6 +2162,11 @@ function setHeaderMore(open){
 }
 function syncCompactHeader(){
     setHeaderMore(false);
+    for(const {control,marker} of headerIdentityItems){
+        if(compactHeaderQuery.matches)headerIdentity.append(control);
+        else marker.after(control);
+    }
+    headerIdentity.hidden=!compactHeaderQuery.matches;
     for(const {control,marker} of headerMoreItems){
         if(compactHeaderQuery.matches)headerMorePanel.append(control);
         else marker.after(control);
@@ -2164,6 +2176,10 @@ function syncCompactHeader(){
 function syncHeaderStatus(){
     const value=$('status').textContent;
     const normal=/^(已加载|已同步|已保存|已保存版本)$/.test(value);
+    $('status').title=value;
+    headerStatusDetail.textContent=value;
+    $('status').classList.toggle('statusAttention',!normal);
+    $('status').classList.toggle('statusError',/失败|冲突|异常|切换/.test(value));
     headerMore.classList.toggle('statusAttention',!normal);
     headerMore.classList.toggle('statusError',/失败|冲突|异常|切换/.test(value));
     headerMore.title='更多页面操作 · '+value;

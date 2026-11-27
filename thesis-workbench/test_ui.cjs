@@ -578,15 +578,23 @@ async function run(){
                 },history);
                 await p.evaluate(()=>{workspaceChanged=false;dirty=false;conflict=false;syncStatus()});
                 await p.waitForFunction(()=>document.querySelector('#status').textContent==='已同步');
+                assert(await p.locator('#status').isVisible());
+                assert(await p.locator('#headerMorePanel').isHidden());
+                const states=await p.evaluate(()=>['已加载','已同步','待保存','保存中','已保存','已保存版本','保存冲突'].map(value=>{
+                    status(value);
+                    const e=document.querySelector('#status'),r=e.getBoundingClientRect(),name=document.querySelector('#workspaceName').getBoundingClientRect(),h=document.querySelector('header').getBoundingClientRect();
+                    return {value,fits:e.scrollWidth<=e.clientWidth+1,visible:r.width>0&&r.height>0&&r.top>=name.bottom&&r.bottom<=h.bottom};
+                }));
+                assert(states.every(s=>s.fits&&s.visible),JSON.stringify(states));
                 await p.evaluate(()=>{conflict=true;syncStatus()});
                 await p.waitForFunction(()=>document.querySelector('#status').textContent==='保存冲突 · 点击刷新处理');
                 await p.evaluate(()=>{document.querySelector('#status').textContent='保存失败：版本冲突，请重新加载并合并其他设备的修改后再试。'});
                 assert(await p.locator('#headerMore').evaluate(e=>e.classList.contains('statusError')));
-                assert(!await p.locator('#status').isVisible());
+                assert(await p.locator('#status').isVisible());
                 assert(await p.locator('header > button:visible,header nav button:visible,header #workspaceName').evaluateAll(nodes=>nodes.every(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1})));
                 await p.locator('#headerMore').tap();
                 const metrics=await p.evaluate(()=>{
-                    const status=document.querySelector('#status'),r=status.getBoundingClientRect(),h=document.querySelector('header').getBoundingClientRect();
+                    const status=document.querySelector('#headerStatusDetail'),r=status.getBoundingClientRect(),h=document.querySelector('header').getBoundingClientRect();
                     const controls=[...document.querySelectorAll('header button')].map(x=>x.getBoundingClientRect()).filter(x=>x.width&&x.height);
                     return {width:innerWidth,status:{left:r.left,right:r.right,top:r.top,bottom:r.bottom,scrollWidth:status.scrollWidth,clientWidth:status.clientWidth},header:h.height,layout:document.querySelector('#layout').getBoundingClientRect().top,aside:getComputedStyle(document.querySelector('aside')).top,controls:controls.map(x=>({left:x.left,right:x.right,top:x.top,bottom:x.bottom})),display:getComputedStyle(status).display};
                 });
@@ -597,6 +605,7 @@ async function run(){
                 assert.equal(metrics.layout,metrics.header);
                 assert.equal(Number.parseFloat(metrics.aside),metrics.header);
                 assert.equal(metrics.header,54);
+                assert.equal(await p.locator('#headerStatusDetail').innerText(),await p.locator('#status').innerText());
                 assert(await p.locator('#openWorkspace').isVisible());
                 assert.equal(await p.locator('#historyButton').isVisible(),history);
                 await p.keyboard.press('Escape');assert(!await p.locator('#headerMorePanel').isVisible());
@@ -612,6 +621,11 @@ async function run(){
                 assert.deepEqual(errors,[]);await context.close();
             }
             const {p,context,errors}=await fixture(browser,false);
+            assert(await p.locator('header > #status').isVisible());
+            await p.setViewportSize({width:390,height:844});
+            await p.locator('#headerIdentity > #status').waitFor({state:'visible'});
+            await p.setViewportSize({width:1280,height:900});
+            await p.locator('header > #status').waitFor({state:'visible'});
             await p.locator('#headerActions').click();
             assert.equal(await p.locator('#floatingTools [aria-label="复制交叉引用"]').count(),0);
             assert.deepEqual(errors,[]);await context.close();
