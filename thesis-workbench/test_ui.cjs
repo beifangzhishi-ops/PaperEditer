@@ -362,6 +362,50 @@ async function checkSelectAllRange(browser){
     await p.waitForFunction(()=>!find('demo-start').body.trim());
     assert.deepEqual(errors,[]);await context.close();
 }
+async function checkInlineMathCaret(browser,mobile){
+    const {p,context,errors}=await fixture(browser,mobile);
+    const raw='Alpha $a+b$ middle $c^2$ Omega\n\nBefore $x$\\(y\\) after\n\n01234567890123456789\n\nPrefix $abcdefghijklmnop$ suffix';
+    await p.evaluate(raw=>{find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start');if(!editingEnabled)toggleEditMode()},raw);
+    const areas=p.locator('.pane .part-text .richText'),area=areas.first(),field=area.locator('math-field').first();
+    await field.waitFor();await p.waitForFunction(()=>document.querySelector('.pane .richText math-field')?.lastOffset===3);
+    await p.evaluate(async()=>{await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))});
+    const setText=async(loc,index,offset)=>loc.evaluate((a,[i,o])=>{a.focus();getSelection().collapse(a.querySelector('p').childNodes[i],o)},[index,offset]);
+    const textAt=async(text,offset)=>p.waitForFunction(([t,o])=>{const s=getSelection();return document.activeElement?.classList.contains('richText')&&s.isCollapsed&&s.focusNode?.data===t&&s.focusOffset===o},[text,offset]);
+    const mathAt=async(loc,offset)=>{await p.waitForFunction(()=>document.activeElement?.tagName==='MATH-FIELD');assert.equal(await loc.evaluate(f=>document.activeElement===f),true);await p.waitForFunction(o=>document.activeElement?.position===o,offset)};
+    for(const [index,offset,key,near,entry,exit,far] of [[0,5,'ArrowRight',6,0,' middle ',0],[2,1,'ArrowLeft',0,3,'Alpha ',6]]){
+        await setText(area,index,offset);
+        await p.keyboard.press(key);await textAt(index===0?'Alpha ':' middle ',near);
+        await p.keyboard.press(key);await mathAt(field,entry);
+        for(let i=1;i<=3;i++){await p.keyboard.press(key);await mathAt(field,key==='ArrowRight'?i:3-i)}
+        await p.keyboard.press(key);await textAt(exit,far);
+        await p.keyboard.press(key);await textAt(exit,far+(key==='ArrowRight'?1:-1))
+    }
+    // Pointer clicks next to the formula must land in the surrounding text,
+    // not the nested contenteditable or the start of the paragraph.
+    for(const [index,offset,text] of [[0,4,'Alpha '],[2,2,' middle ']]){
+        const pos=await area.evaluate((a,[i,o])=>{const r=document.createRange();r.setStart(a.querySelector('p').childNodes[i],o);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.x,y:(b.top+b.bottom)/2}},[index,offset]);
+        if(mobile)await p.touchscreen.tap(pos.x,pos.y);else await p.mouse.click(pos.x,pos.y);
+        await textAt(text,offset)
+    }
+    const adjacent=areas.nth(1),adjacentFields=adjacent.locator('math-field');
+    await adjacent.evaluate(a=>{a.focus();const atom=a.querySelector('.inlineMathAtom');getSelection().collapse(atom.previousSibling,atom.previousSibling.length)});
+    await p.keyboard.press('ArrowRight');await mathAt(adjacentFields.first(),0);
+    await p.keyboard.press('ArrowRight');await mathAt(adjacentFields.first(),1);
+    await p.keyboard.press('ArrowRight');
+    await p.waitForFunction(()=>document.activeElement?.classList.contains('richText'));
+    await p.keyboard.press('ArrowRight');await mathAt(adjacentFields.nth(1),0);
+    await p.keyboard.press('ArrowRight');await mathAt(adjacentFields.nth(1),1);
+    await p.keyboard.press('ArrowRight');await textAt(' after',0);
+    // Align the caret in the previous paragraph with the interior of a
+    // formula on the next line. ArrowDown should land beside that formula.
+    const from=areas.nth(2),to=areas.nth(3);
+    await to.scrollIntoViewIfNeeded();
+    const dest=await to.locator('.inlineMathAtom').boundingBox();
+    await from.evaluate((a,x)=>{a.focus();const n=a.querySelector('p').firstChild;let best=0,d=Infinity;for(let i=0;i<=n.length;i++){const r=document.createRange();r.setStart(n,i);r.collapse(true);const delta=Math.abs(r.getBoundingClientRect().x-x);if(delta<d){best=i;d=delta}}getSelection().collapse(n,best)},dest.x+dest.width*.3);
+    await p.keyboard.press('ArrowDown');await textAt('Prefix ',7);
+    assert.equal(await p.evaluate(()=>find('demo-start').body),raw);
+    assert.deepEqual(errors,[]);await context.close()
+}
 async function checkInlineMathRange(browser){
     const {p,context,errors}=await fixture(browser);
     const raw='Alpha $a+b$ middle $c^2$ Omega\n\n:::equation range-math\nx^2\n:::\n\nLast paragraph\n';
@@ -667,6 +711,10 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--inline-math-caret-only')){
+            await checkInlineMathCaret(browser,false);await checkInlineMathCaret(browser,true);
+            console.log('PASS: inline math caret entry, exit, adjacent formulas, pointer placement and vertical navigation on desktop/mobile');return
+        }
         if(process.argv.includes('--close-second-pane-only')){await checkCloseSecondPane(browser,false);await checkCloseSecondPane(browser,true);console.log('PASS: close only secondary pane on desktop/mobile, retain primary selection');return}
         if(process.argv.includes('--grouped-undo-only')){await checkGroupedUndo(browser,false);await checkGroupedUndo(browser,true);console.log('PASS: grouped typing, deletion, pauses, caret movement, paragraph, paste, IME, title, note undo and redo on desktop/mobile');return}
         if(process.argv.includes('--history-point-only')){await checkHistoryPointDiff(browser,false);await checkHistoryPointDiff(browser,true);console.log('PASS: previous point, folded group across pagination, expanded row, initial version and live comparison on desktop/mobile');return}

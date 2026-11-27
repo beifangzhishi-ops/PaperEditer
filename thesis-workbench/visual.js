@@ -84,6 +84,42 @@ function visualMath(tex,display,onInput,note=false){
     },true);
     return f;
 }
+// Keep the outer caret on a real prose boundary, never in MathLive's
+// nested editing host. Adjacent text offsets also give Chromium a visible
+// caret when the field loses focus.
+function inlineMathEdge(atom,after){
+    const r=document.createRange(),sibling=after?atom.nextSibling:atom.previousSibling;
+    if(sibling?.nodeType===Node.TEXT_NODE)r.setStart(sibling,after?0:sibling.length);
+    else if(after)r.setStartAfter(atom);else r.setStartBefore(atom);
+    r.collapse(true);return r
+}
+function enterAdjacentInlineMath(e,area){
+    if(e.defaultPrevented||e.isComposing||e.keyCode===229||e.shiftKey||e.ctrlKey||e.altKey||e.metaKey||!canEditControl(area)||!['ArrowLeft','ArrowRight'].includes(e.key)||e.composedPath().some(n=>n.tagName==='MATH-FIELD'))return;
+    const s=getSelection();
+    if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.focusNode))return;
+    const caret=s.getRangeAt(0),forward=e.key==='ArrowRight',node=s.focusNode;
+    const inside=(node.nodeType===Node.ELEMENT_NODE?node:node.parentElement)?.closest('.inlineMathAtom');
+    let atom=inside;
+    if(!atom){
+        const atoms=[...area.querySelectorAll('.inlineMathAtom')];if(!forward)atoms.reverse();
+        for(const candidate of atoms){
+            const edge=document.createRange();edge.selectNode(candidate);edge.collapse(forward);
+            const cmp=edge.compareBoundaryPoints(Range.START_TO_START,caret);
+            if(forward?cmp<0:cmp>0)continue;
+            const gap=document.createRange();
+            if(forward){gap.setStart(caret.startContainer,caret.startOffset);gap.setEnd(edge.startContainer,edge.startOffset)}
+            else{gap.setStart(edge.startContainer,edge.startOffset);gap.setEnd(caret.startContainer,caret.startOffset)}
+            const content=gap.cloneContents();
+            if(!content.textContent&&!content.querySelector('br,img,[data-token],.inlineMathAtom')&&
+                (node.nodeType===Node.ELEMENT_NODE?node:node.parentElement)?.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote')===candidate.closest('p,li,h1,h2,h3,h4,h5,h6,blockquote'))atom=candidate;
+            break
+        }
+    }
+    const field=atom?.querySelector('math-field');
+    if(!field||field.readOnly||typeof field.lastOffset!=='number')return;
+    e.preventDefault();e.stopPropagation();
+    field.focus({preventScroll:true});field.position=forward?0:field.lastOffset
+}
 // MathLive itself must remain editable. The wrapper, not its editor, is
 // atomic to the surrounding contenteditable prose.
 function inlineMathAtom(field){
@@ -117,10 +153,9 @@ function leaveMathField(field,direction,selectWhole){
     const area=field.closest('.richText'),card=field.closest('.visualCard');
     const backwards=direction==='backward'||direction==='upward';
     if(area){
-        area.focus({preventScroll:true});const r=document.createRange();
         const atom=field.closest('.inlineMathAtom')||field;
-        if(backwards)r.setStartBefore(atom);else r.setStartAfter(atom);
-        r.collapse(true);const s=getSelection();s.removeAllRanges();s.addRange(r);hideMathPalette();return true
+        area.focus({preventScroll:true});const r=inlineMathEdge(atom,!backwards);
+        const s=getSelection();s.removeAllRanges();s.addRange(r);hideMathPalette();return true
     }
     if(!card)return false;
     if(!selectWhole){
@@ -254,6 +289,7 @@ function visualRich(raw,changed,compact=false,allowRefs=true){
         }else p.replaceWith(visualRef(t.kind,t.value,allowRefs))
     }
     if(!host.childNodes.length)host.append(el('p'));
+    host.addEventListener('keydown',e=>enterAdjacentInlineMath(e,host));
     host.addEventListener('input',e=>{if(canEditControl(host))changed(typingEdit(e,host))});
     // Avoid pasting untrusted HTML; recognized structured text is handled by the parent.
     host.addEventListener('paste',e=>{if(e.defaultPrevented||e.target.closest('math-field'))return;const items=[...(e.clipboardData?.items||[])];if(items.some(x=>x.type.startsWith('image/')))return;e.preventDefault();const text=e.clipboardData?.getData('text/plain')||'';document.execCommand('insertText',false,text);changed();centerAfterPaste(host)});
@@ -369,7 +405,11 @@ function crossParagraphArrow(e){
     const fragment=dest.rects.sort((a,b)=>distance(a)-distance(b))[0];
     const x=Math.max(fragment.left+.5,Math.min(verticalCaretX,Math.max(fragment.left+.5,fragment.right-.5)));
     let target=document.caretRangeFromPoint?.(x,dest.y);
-    if(!target||!next.contains(target.startContainer)||((target.startContainer.nodeType===Node.ELEMENT_NODE?target.startContainer:target.startContainer.parentElement)?.closest('[contenteditable=false],math-field'))){
+    // When the destination column falls on a formula, choose its nearest
+    // prose edge rather than jumping to the beginning/end of the paragraph.
+    const atom=document.elementsFromPoint(x,dest.y).map(n=>n.closest('.inlineMathAtom')).find(n=>n&&next.contains(n));
+    if(atom){const rect=atom.getBoundingClientRect();target=inlineMathEdge(atom,x>rect.left+rect.width/2)}
+    else if(!target||!next.contains(target.startContainer)||((target.startContainer.nodeType===Node.ELEMENT_NODE?target.startContainer:target.startContainer.parentElement)?.closest('[contenteditable=false],math-field'))){
         target=document.createRange();target.selectNodeContents(next);target.collapse(down)
     }else target.collapse(true);
     next.focus({preventScroll:true});sel.removeAllRanges();sel.addRange(target)
