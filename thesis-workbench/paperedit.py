@@ -24,33 +24,28 @@ class Client:
         self.url = url.rstrip("/")
         self.info = None
         self.doc = None
+        self.scoped = False
         if filename is not None:
             filename = str(server.workspace_path(filename))
         local_url = urllib.parse.urlparse(self.url).hostname in ("127.0.0.1", "localhost", "::1")
         if not offline:
             try:
-                active = self.request("/api/state")
-            except APIError as exc:
-                # An explicit local file may be used without opening it in
-                # the UI, even if that UI currently has no valid document.
-                if not (local_url and filename and exc.status == 409):
-                    raise
-                active = None
+                if filename and local_url:
+                    result = self.request("/api/document", {"path": filename, "action": "state"})
+                    self.info = result["workspace"]
+                    self.scoped = True
+                else:
+                    active = self.request("/api/state")
+                    if active.get("workspace", {}).get("history"):
+                        info = active["workspace"]
+                        if filename is None or Path(filename).resolve() == Path(info["path"]).resolve():
+                            self.info = info
+                    if self.info is None:
+                        raise ValueError("No active single-file document; specify --workspace")
             except urllib.error.URLError as exc:
-                # Do not silently redirect failed remote requests, timeouts,
-                # invalid responses or HTTP failures into a local write.
-                reason = exc.reason
-                if not local_url or not isinstance(reason, ConnectionRefusedError):
+                # Only a refused local connection may fall back to the core.
+                if not local_url or not isinstance(exc.reason, ConnectionRefusedError):
                     raise
-                active = None
-            if active and active.get("workspace", {}).get("history"):
-                info = active["workspace"]
-                if filename is None or Path(filename).resolve() == Path(info["path"]).resolve():
-                    self.info = info
-            if self.info is None and not local_url:
-                raise ValueError("Remote workspace not active; refusing local fallback")
-            if active is not None and self.info is None and filename is None:
-                raise ValueError("No active single-file document; specify --workspace")
         if self.info is None:
             filename = filename or server.settings_load().get("workspace")
             if not filename:
@@ -79,7 +74,11 @@ class Client:
     def query(self, endpoint, **params):
         return self.request(endpoint + "?" + urllib.parse.urlencode(dict(workspace=self.info["id"], **{k:v for k,v in params.items() if v is not None})))
 
+    def scoped_request(self, action, **params):
+        return self.request("/api/document", dict(path=self.info["path"], id=self.info["id"], action=action, **params))
+
     def state(self):
+        if self.scoped:return self.scoped_request("state")
         if self.doc:
             return self.doc.state()
         state = self.request("/api/state")
@@ -88,14 +87,17 @@ class Client:
         return state
 
     def history(self, offset=0, limit=100, object_id=None):
+        if self.scoped:return self.scoped_request("history", offset=offset, limit=limit, object=object_id)
         if self.doc:
             return self.doc.history_list(offset, limit, object_id)
         return self.query("/api/history", offset=offset, limit=limit, object=object_id)
 
     def item(self, oid):
+        if self.scoped:return self.scoped_request("item", version=oid)
         return self.doc.history_item(oid) if self.doc else self.query("/api/history/item", id=oid)
 
     def edit(self, operations, expected, message):
+        if self.scoped:return self.scoped_request("edit", operations=operations, revision=expected, message=message)
         if self.doc:
             code, result = self.doc.edit(operations, expected, message)
             if code != 200:
@@ -104,11 +106,13 @@ class Client:
         return self.request("/api/cli/edit", dict(operations=operations, revision=expected, message=message))
 
     def tag(self, oid=None, name=None, clear=False, expected=None):
+        if self.scoped:return self.scoped_request("tag", version=oid, name=name, clear=clear, revision=expected)["tag"]
         if self.doc:
             return self.doc.tag(oid, name, clear, expected)
         return self.request("/api/history/tag", dict(id=oid, name=name, clear=clear, revision=expected))["tag"]
 
     def restore(self, oid, expected, object_id):
+        if self.scoped:return self.scoped_request("restore", version=oid, revision=expected, object=object_id)
         if self.doc:
             code, result = self.doc.restore(oid, expected, object_id)
             if code != 200:
@@ -134,6 +138,10 @@ def main():
     p.add_argument("path")
     p = sub.add_parser("new", help="Create and open an example document; omit path to use the private project workspaces directory")
     p.add_argument("path", nargs="?", default="")
+    p.add_argument("--background", action="store_true", help="Register without switching the web document")
+    p.add_argument("--blank", action="store_true", help="Create an empty delivery document")
+    p = sub.add_parser("register", help="Register an existing document without switching the web document")
+    p.add_argument("path")
     p = sub.add_parser("forget", help="Remove an exact path from recent opens without deleting the file")
     p.add_argument("path")
     sub.add_parser("status", help="Show current workspace, revision and history head")
@@ -172,16 +180,19 @@ def main():
         parser.print_help()
         return
     args = parser.parse_args()
-    if args.command in ("open", "new", "forget"):
+    if args.command in ("open", "new", "forget", "register"):
         if args.offline:
             if args.command != "new":
                 raise ValueError("Opening a web workspace requires the service")
-            doc = server.create_workspace(args.path)
+            doc = server.create_workspace(args.path, args.blank)
             emit(dict(id=doc.id, path=str(doc.filename), name=doc.filename.name, history=True))
             return
         c = object.__new__(Client)
         c.url, c.info = args.url.rstrip("/"), None
-        emit(c.request("/api/workspaces/" + args.command, {"path": args.path}))
+        payload = {"path": args.path}
+        if args.command == "new":
+            payload.update(background=args.background, blank=args.blank)
+        emit(c.request("/api/workspaces/" + args.command, payload))
         return
     if args.command == "recover":
         if not args.workspace:

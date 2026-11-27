@@ -48,3 +48,5 @@
 :root[data-theme="dark"] dialog {background:var(--pe-paper);color:var(--pe-text)}
 :root[data-theme="dark"] a {color:var(--pe-link)}
 :root[data-theme="dark"] ::selection {background:#315fc6;color:white}
+
+.workspaceRecordActions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;max-width:110px}.workspaceRecordAction{width:auto;padding:4px 7px;font-size:12px}.workspaceRecordActions .workspaceForget{padding:4px 7px}.workspaceRecentList h3{margin:8px 0 4px}.workspaceFileActions{flex-wrap:wrap}

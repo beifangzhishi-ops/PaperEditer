@@ -2,7 +2,7 @@
 
 正式文档为单个 UTF-8 JSON（格式 v3）。正文、目录、批注、回收站和稳定对象 ID 在文件内；图片、TeX、PPT 等外部资源使用服务端绝对路径（支持 UNC）。正文 Markdown 不是独立工作文件。旧 v2 格式在打开时迁移，保留原索引备份及原数据目录；不要编辑旧副本。
 
-文档默认只读。Agent 可以读取文档，但修改必须通过 PaperEditer CLI 或 API，禁止直接解除只读后覆盖。CLI 与网页共享校验、并发合并和历史记录。默认目标是服务当前工作区；`--workspace ABSOLUTE_PATH` 可操作其他文档而不切换网页。命令可在任意目录运行；若未安装，先在编辑器目录执行 `python install_cli.py`：
+文档默认只读。Agent 可以读取文档，但修改必须通过 PaperEditer CLI 或 API，禁止直接解除只读后覆盖。CLI 与网页共享校验、并发合并和历史记录。默认目标是服务当前工作区；`--workspace ABSOLUTE_PATH` 可通过本机服务操作其他文档而不切换网页。Agent 应显式指定目标路径；交付时使用 `paperedit new ABSOLUTE_PATH --background --blank` 新建空白文档，或 `paperedit register ABSOLUTE_PATH` 登记已有文档。命令可在任意目录运行；若未安装，先在编辑器目录执行 `python install_cli.py`：
 
 ~~~sh
 paperedit status
@@ -16,7 +16,7 @@ paperedit tag --name "重要版本"
 paperedit restore COMMIT --object OBJECT_ID --revision REVISION
 ~~~
 
-edit 批量文件格式：`{"revision":"读取时返回的版本","operations":[{"op":"update","id":"OBJECT_ID","body":"新内容"}]}`。不能用猜测或刷新得到的新 revision 强行覆盖旧草稿；并发冲突时重新读取、合并并提交。每次有效保存自动进入独立本地 Git，不需要额外 commit；tag 只命名版本。历史仓库不设远程，不得推送用户数据。
+edit 批量文件格式：`{"revision":"读取时返回的版本","operations":[{"op":"update","id":"OBJECT_ID","body":"新内容"}]}`。不能用猜测或刷新得到的新 revision 强行覆盖旧草稿；并发冲突时重新读取、合并并提交。每次有效保存自动进入编辑器私有 history/ 内的独立本地 Git（路径和 SHA-256 关联，不使用文档级 UUID），不需要额外 commit；tag 只命名版本。历史仓库不设远程，不得推送用户数据。
 
 Windows 使用原生 `paperedit.exe`，Python 可直接 `subprocess.run(["paperedit", ...], capture_output=True, check=True)`，不需要 shell 或脚本绝对路径。用 `json.loads(result.stdout)` 解析结果；批量文件使用 UTF-8，标准输入使用 UTF-8 JSON 字节。不要将 API 超时或内部错误当成切换工作区的理由。
 

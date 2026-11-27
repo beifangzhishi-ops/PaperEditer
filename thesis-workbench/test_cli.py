@@ -24,6 +24,7 @@ class CLITests(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=".test-cli-", dir=Path(__file__).resolve().parent)))
+        stack.enter_context(patch.dict(os.environ, {"PAPEREDITER_HISTORY_DIR": str(self.root / "history")}))
         self.cwd = self.root / "caller dir"
         self.cwd.mkdir()
         for name, value in (("DATA", self.root / "data"), ("CONFIG", self.root / "config.json"), ("DEFAULT_WORKSPACE_DIR", self.root / "workspaces"), ("PACKAGE", None), ("WORKSPACE_ERROR", None)):
@@ -77,6 +78,18 @@ class CLITests(unittest.TestCase):
             return self.run_cli("edit", "--file", "-", "-m", message, raw=raw, success=success, offline=offline)
         (self.cwd / "changes 中文.json").write_bytes(raw)
         return self.run_cli("edit", "--file", "changes 中文.json", "-m", message, success=success, offline=offline)
+
+    def test_background_delivery_and_register(self):
+        target=self.root/'delivery.json'
+        current=self.run_cli('status',explicit=False)['workspace']['id']
+        result=self.run_cli('new',str(target),'--background','--blank',explicit=False)
+        self.assertNotEqual(result['id'],current)
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],current)
+        self.assertEqual(json.loads(target.read_bytes())['thesis'],[])
+        self.run_cli('forget',str(target),explicit=False)
+        registered=self.run_cli('register',str(target),explicit=False)
+        self.assertEqual(registered['id'],result['id'])
+        self.assertEqual(self.run_cli('status',explicit=False)['workspace']['id'],current)
 
     def test_new_example_and_offline_creation(self):
         target=self.root/'new document.json'
@@ -184,14 +197,14 @@ class CLITests(unittest.TestCase):
         other = Document(self.other, server.validate_document_state)
         p = subprocess.run(["paperedit","--url",self.url,"--workspace",str(self.other),"status"], cwd=self.cwd, env=self.env, capture_output=True, check=True, timeout=90)
         other_status = json.loads(p.stdout)
-        self.assertEqual(other_status["mode"],"local-core")
+        self.assertEqual(other_status["mode"],"api")
         self.assertEqual(other_status["revision"],other.state()["revision"])
         r = self.run_cli("status",explicit=False)
         self.assertEqual(Path(r["workspace"]["path"]),self.file)
         switched = self.run_cli("open",str(self.other),explicit=False)
         self.assertEqual(Path(switched["path"]),self.other)
         self.assertEqual(Path(self.run_cli("status",explicit=False)["workspace"]["path"]),self.other)
-        self.assertEqual(self.run_cli("status")["mode"],"local-core")
+        self.assertEqual(self.run_cli("status")["mode"],"api")
         # Corruption recovery saves original bytes, and never touches the other document.
         before = self.file.read_bytes()
         readonly(self.file,False)

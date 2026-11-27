@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import shutil
 import subprocess
 import threading
 import time
@@ -117,12 +118,14 @@ def create_document(filename, validator, initial=None):
     if not filename.parent.is_dir():
         raise FileNotFoundError("Parent directory does not exist")
     history = filename.with_name(filename.name + ".history.git")
-    if filename.exists() or history.exists():
+    with history_index() as index:
+        registered = any(path_key(row["path"]) == path_key(filename) for row in index.values())
+    if filename.exists() or history.exists() or registered:
         raise FileExistsError("Document or history already exists")
     with file_lock(filename.with_name(filename.name + ".lock")):
         if filename.exists() or history.exists():
             raise FileExistsError("Document or history already exists")
-        doc = dict(format="paperediter", version=VERSION, id=uuid.uuid4().hex,
+        doc = dict(format="paperediter", version=VERSION,
                    thesis=[], blocks=[], trash=[], originalLabels={}, importReport={},
                    assets={}, sources={}, uploadDirectory=str(filename.with_name(filename.stem + "-assets")))
         if initial is not None:
@@ -138,7 +141,7 @@ def create_document(filename, validator, initial=None):
             f.flush()
             os.fsync(f.fileno())
         readonly(filename)
-    return Document(filename, validator)
+    return Document(filename, validator, new_copy=True)
 
 
 def digest(data):
@@ -590,7 +593,7 @@ def apply_operations(doc, operations):
 def check_document(doc, validator):
     if not isinstance(doc, dict) or doc.get("format") != "paperediter" or doc.get("version") != VERSION:
         raise ValueError("Not a single-file PaperEditer document")
-    if not isinstance(doc.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", doc["id"]):
+    if "id" in doc and (not isinstance(doc["id"], str) or not re.fullmatch(r"[0-9a-f]{32}", doc["id"])):
         raise ValueError("Invalid document ID")
     validator(content(doc))
     for key in ("originalLabels", "importReport", "assets", "sources"):
@@ -607,14 +610,182 @@ def check_document(doc, validator):
     return doc
 
 
+def history_root():
+    return Path(os.environ.get("PAPEREDITER_HISTORY_DIR", str(Path(__file__).resolve().parent / "history"))).resolve()
+
+
+def path_key(path):
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
+def content_hash(doc):
+    # Stable across JSON formatting and removal of the legacy document UUID.
+    return revision({k: v for k, v in doc.items() if k != "id"})
+
+
+def path_status(path):
+    try:
+        Path(path).stat()
+        return "present"
+    except FileNotFoundError:
+        # An unavailable network share/drive is not evidence of a move.
+        anchor = Path(path).anchor
+        try:
+            Path(anchor).stat()
+        except OSError:
+            return "unknown"
+        return "missing"
+    except OSError:
+        return "unknown"
+
+
+@contextlib.contextmanager
+def history_index():
+    root = history_root()
+    root.mkdir(parents=True, exist_ok=True)
+    with file_lock(root / "index.lock", timeout=120):
+        path = root / "index.json"
+        index = json.loads(path.read_bytes()) if path.exists() else {}
+        before = copy.deepcopy(index)
+        yield index
+        if index != before:
+            replace_bytes(path, json_bytes(index))
+
+
+def registered_history_paths():
+    root = history_root()
+    if not (root / "index.json").exists():
+        return {}
+    with file_lock(root / "index.lock", timeout=120):
+        return {rid: row["path"] for rid, row in json.loads((root / "index.json").read_bytes()).items()}
+
+
+def index_versions(history):
+    head = history.head()
+    ids = history.run("rev-list", history.ref).decode().splitlines() if head else []
+    ids.reverse()
+    result = {}
+    # Large histories can contain gigabytes of uncompressed JSON. Bound
+    # each Git batch instead of buffering the entire document history.
+    for start in range(0, len(ids), 32):
+        batch = ids[start:start + 32]
+        for oid, doc in zip(batch, history.versions(batch)):
+            result[content_hash(doc)] = oid
+    return result
+
+
+def resolve_history(filename, doc=None, attach_from=None, recover=False, new_copy=False):
+    """Resolve identity under the registry lock; never rewrite old commits."""
+    filename = Path(filename).resolve()
+    root = history_root()
+    key = path_key(filename)
+    legacy = filename.with_name(filename.name + ".history.git")
+    with history_index() as index:
+        found = next(((rid, row) for rid, row in index.items() if path_key(row["path"]) == key), None)
+        if attach_from:
+            if found or legacy.exists():
+                raise ValueError("Target already has a history; refusing to overwrite it")
+            matches = [(rid, row) for rid, row in index.items() if path_key(row["path"]) == path_key(attach_from)]
+            if len(matches) != 1 or path_status(matches[0][1]["path"]) == "present":
+                raise ValueError("Select an unavailable registered source history")
+            found = matches[0]
+        if found:
+            if new_copy:raise ValueError("This path already has a history; open it normally")
+            rid, row = found
+            target = root / (rid + ".git")
+            if (legacy.exists() or row.get("versions") or attach_from) and not target.exists():
+                raise ValueError("Registered history repository is missing; refusing to create a replacement")
+            old_path = row["path"]
+            row["path"] = str(filename)
+            return rid, target, old_path
+        if not legacy.exists() and doc is not None:
+            h = content_hash(doc)
+            matches = [(rid, row) for rid, row in index.items() if h in row.get("versions", {})]
+            absent = [(rid, row) for rid, row in matches if path_status(row["path"]) != "present"]
+            if len(absent) == 1 and len(matches) == 1 and path_status(absent[0][1]["path"]) == "missing" and absent[0][1].get("headHash") == h:
+                rid, row = absent[0]
+                if not (root / (rid + ".git")).is_dir():
+                    raise ValueError("Matched history repository is missing")
+                old_path = row["path"]
+                row["path"] = str(filename)
+                return rid, root / (rid + ".git"), old_path
+            if absent:
+                raise ValueError("History match is ambiguous or not the latest version. Use Relocate on the original record, or open as a new copy.")
+        if recover and not legacy.exists():
+            raise FileNotFoundError("No document history")
+        # Keep the old internal identifier if unique so reading positions survive.
+        old_id = doc.get("id") if doc else None
+        rid = old_id if old_id and old_id not in index and not (root / (old_id + ".git")).exists() else uuid.uuid4().hex
+        target = root / (rid + ".git")
+        row = {"path": str(filename), "versions": {}, "headHash": None}
+        if legacy.exists():
+            source = History(legacy)
+            current = source.current()
+            if doc and current and doc.get("id") and current.get("id") and doc["id"] != current["id"]:
+                raise ValueError("Legacy history belongs to a different document")
+            source.run("fsck", "--full")
+            row["versions"] = index_versions(source)
+            row["headHash"] = content_hash(current) if current else None
+            # Copy and verify first, then publish the registry; retain the old
+            # directory until the index is durable (cleanup below).
+            staging = root / (rid + ".migrating-" + uuid.uuid4().hex)
+            shutil.copytree(legacy, staging)
+            copied = History(staging)
+            copied.run("fsck", "--full")
+            if copied.run("show-ref", allowed=(0, 1)) != source.run("show-ref", allowed=(0, 1)):
+                raise RuntimeError("Legacy history changed during migration")
+            staging.rename(target)
+        index[rid] = row
+    return rid, target, str(filename)
+
+
+def update_history_index(rid, filename, history, doc, oid):
+    with history_index() as index:
+        row = index[rid]
+        if path_key(row["path"]) != path_key(filename):
+            raise ValueError("Document was relocated; reopen it")
+        # Initial v2 import and old repositories need all historical hashes.
+        if not row["versions"]:
+            row["versions"] = index_versions(history)
+        h = content_hash(doc)
+        row["versions"][h] = oid
+        row["headHash"] = h
+
+
+def assert_history_path(rid, filename):
+    # Coordinate with index replacement, including Windows file sharing.
+    root = history_root()
+    with file_lock(root / "index.lock", timeout=120):
+        index = json.loads((root / "index.json").read_bytes())
+        if path_key(index[rid]["path"]) != path_key(filename):
+            raise ValueError("Document was relocated; reopen it")
+
+
+def cleanup_legacy(filename, history):
+    legacy = filename.with_name(filename.name + ".history.git")
+    if legacy.exists():
+        source = History(legacy)
+        # Ensure every old ref is still present, allowing a new migration commit.
+        refs = source.run("show-ref", allowed=(0, 1)).decode().splitlines()
+        for line in refs:
+            oid, ref = line.split()
+            if ref == History.ref:
+                history.run("merge-base", "--is-ancestor", oid, History.ref)
+            elif history.run("rev-parse", ref).decode().strip() != oid:
+                raise ValueError("Legacy history ref mismatch; original retained")
+        def clear_readonly(func, path, exc):
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+            func(path)
+        shutil.rmtree(legacy, onerror=clear_readonly)
+
+
 class Document:
-    def __init__(self, filename, validator):
+    def __init__(self, filename, validator, attach_from=None, new_copy=False):
         self.filename = Path(filename).resolve()
         self.validator = validator
         self.lock = threading.RLock()
         self.local = threading.local()
         self.lockpath = self.filename.with_name(self.filename.name + ".lock")
-        self.historypath = self.filename.with_name(self.filename.name + ".history.git")
         self._known = None
         self._known_head = None
         self._last_gc = time.monotonic()
@@ -625,11 +796,23 @@ class Document:
         with self.lock, file_lock(self.lockpath):
             raw = self.filename.read_bytes()
             index = json.loads(raw)
-            if index.get("format") == "paperediter" and index.get("version") == 2:
+            legacy_v2 = index.get("format") == "paperediter" and index.get("version") == 2
+            if not legacy_v2:
+                check_document(index, self.validator)
+            self.id, self.historypath, self.previous_path = resolve_history(
+                self.filename, None if legacy_v2 or new_copy else index, attach_from, new_copy=new_copy)
+            if legacy_v2:
                 self.migrate(raw)
             doc = self.read_doc()
-            self.id = doc["id"]
             self.history = History(self.historypath)
+            self.legacy_id = doc.get("id")
+            if "id" in doc:
+                # Preserve the pre-migration version and its commit identity.
+                self.record(doc, "Initial version", "initial")
+                doc.pop("id")
+                self.replace(self.filename.read_bytes(), doc)
+                self.record(doc, "Remove document UUID", "migration")
+            cleanup_legacy(self.filename, self.history)
             if not paragraph_index_valid(doc):
                 old = self.history.current()
                 doc["paragraphs"] = rebuild(old, doc)
@@ -650,7 +833,7 @@ class Document:
             index = tx["index"]
             def load(name, default=None):
                 return json.loads(old.read(name)) if old.exists(name) else default
-            doc = dict(format="paperediter", version=VERSION, id=uuid.uuid4().hex,
+            doc = dict(format="paperediter", version=VERSION,
                        thesis=[], blocks=[], trash=load("trash.json", []),
                        originalLabels=load("original_labels.json", {}), importReport=load("import-report.json", {}),
                        assets={}, sources={}, uploadDirectory=str(self.filename.with_name(self.filename.stem + "-assets")))
@@ -728,18 +911,14 @@ class Document:
 
     def read_doc(self):
         doc = check_document(json.loads(self.filename.read_bytes()), self.validator)
-        if hasattr(self, "id") and doc["id"] != self.id:
-            raise ValueError("Document identity changed externally")
         return doc
 
     def record(self, doc, message, source):
         head = self.history.head()
         if self._known == doc and self._known_head == head:
             return head
-        previous = self.history.current(head)
-        if previous and previous.get("id") != doc["id"]:
-            raise ValueError("History belongs to a different document")
         oid = self.history.append(doc, message, source)
+        update_history_index(self.id, self.filename, self.history, doc, oid)
         if oid != head:
             self._writes_since_gc += 1
         self._known, self._known_head = copy.deepcopy(doc), oid
@@ -752,13 +931,16 @@ class Document:
             yield existing
             return
         with self.lock, file_lock(self.lockpath):
+            assert_history_path(self.id, self.filename)
             raw = self.filename.read_bytes()
             if raw == self._cached_raw:
                 doc = copy.deepcopy(self._cached_doc)
             else:
                 doc = check_document(json.loads(raw), self.validator)
-                if doc["id"] != self.id:
-                    raise ValueError("Document identity changed externally")
+                if "id" in doc:
+                    doc.pop("id")
+                    self.replace(raw, doc)
+                    raw = self.filename.read_bytes()
                 if not paragraph_index_valid(doc):
                     old = self.history.current()
                     doc["paragraphs"] = rebuild(old, doc)
@@ -772,8 +954,6 @@ class Document:
                     self.record(doc, "Separate legacy annotation placements", "migration")
                     raw = self.filename.read_bytes()
                 self._cached_raw, self._cached_doc = raw, copy.deepcopy(doc)
-            if doc["id"] != self.id:
-                raise ValueError("Document identity changed externally")
             readonly(self.filename)
             self.record(doc, "External modification / recovered save", "external")
             self.local.doc = doc
@@ -857,8 +1037,6 @@ class Document:
             if expected != revision(doc):
                 return 409, {"error": "Document revision changed; synchronize before restoring"}
             past = self.history.item(oid)
-            if past["id"] != doc["id"]:
-                raise ValueError("History identity mismatch")
             if object_id:
                 old, current = object_value(past, object_id), object_value(doc, object_id)
                 if not old or not current:
@@ -884,7 +1062,7 @@ class Document:
                 for key in ("assets", "sources"):
                     next_doc[key] = {**past[key], **next_doc[key]}
             else:
-                next_doc = past
+                next_doc = {k: v for k, v in past.items() if k != "id"}
             if split_annotation_locations(next_doc) or not paragraph_index_valid(next_doc):
                 next_doc["paragraphs"] = rebuild(doc, next_doc)
             check_document(next_doc, self.validator)
@@ -1021,16 +1199,15 @@ def recover_document(filename, validator, oid=None):
     """Explicit recovery only: retain a byte-for-byte copy of corrupt input."""
     filename = Path(filename).resolve()
     lockpath = filename.with_name(filename.name + ".lock")
-    historypath = filename.with_name(filename.name + ".history.git")
-    if not historypath.is_dir():
-        raise FileNotFoundError("No document history")
     with file_lock(lockpath):
+        rid, historypath, _ = resolve_history(filename, recover=True)
+        if not historypath.is_dir():
+            raise FileNotFoundError("No document history")
         history = History(historypath)
         head = history.current()
         target = history.item(oid) if oid else head
         check_document(target, validator)
-        if target["id"] != head["id"]:
-            raise ValueError("History identity mismatch")
+        target.pop("id", None)
         raw = filename.read_bytes() if filename.exists() else None
         if raw is not None:
             try:
@@ -1052,5 +1229,7 @@ def recover_document(filename, validator, oid=None):
         finally:
             if filename.exists():
                 readonly(filename)
-        history.append(target, "Recover corrupt document", "restore")
+        oid = history.append(target, "Recover corrupt document", "restore")
+        update_history_index(rid, filename, history, target, oid)
+        cleanup_legacy(filename, history)
         return {"revision": revision(target), "backup": str(backup) if raw is not None else None}

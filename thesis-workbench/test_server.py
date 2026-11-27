@@ -1,3 +1,4 @@
+import os
 import tempfile
 import json
 import sqlite3
@@ -19,6 +20,8 @@ class WorkspaceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='.test-data-', dir=Path(__file__).resolve().parent)
         self.addCleanup(self.tmp.cleanup)
         self.data = Path(self.tmp.name) / "data"
+        scope=patch.dict(os.environ,{"PAPEREDITER_HISTORY_DIR":str(Path(self.tmp.name)/"history")})
+        scope.start();self.addCleanup(scope.stop)
         self.context = patch.object(server, "DATA", self.data)
         self.context.start()
         self.addCleanup(self.context.stop)
@@ -69,7 +72,8 @@ class WorkspaceTests(unittest.TestCase):
             saved=new.read_bytes()
             server.forget_workspace(str(second))
             self.assertTrue(second.is_file())
-            self.assertTrue(second.with_name(second.name+'.history.git').is_dir())
+            self.assertTrue((root/'history'/(example['id']+'.git')).is_dir())
+            self.assertFalse(second.with_name(second.name+'.history.git').exists())
             self.assertEqual([f['path'] for f in server.workspace_catalog()['files']],[str(new)])
             server.forget_workspace(str(new))
             self.assertEqual(server.workspace_catalog()['files'],[])
@@ -80,6 +84,53 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(new.read_bytes(),saved)
             server.open_workspace(str(new))
             self.assertEqual(len(server.workspace_catalog()['files']),1)
+
+    def test_favorites_copy_move_and_background_delivery(self):
+        import shutil
+        from document import readonly, history_root
+        root=Path(self.tmp.name)
+        with patch.object(server,'CONFIG',root/'settings.json'), patch.object(server,'PACKAGE',None), patch.object(server,'WORKSPACE_ERROR',None):
+            a=root/'a.json'; b=root/'b.json'; c=root/'c.json'; d=root/'d.json'
+            first=server.new_workspace(str(a))
+            server.favorite_workspace(str(a),True)
+            server.save_reading({'view':'thesis','panes':[{}]})
+            tag=server.PACKAGE.tag(name='keep this')
+            head=server.PACKAGE.history.head()
+            a.rename(b)
+            moved=server.open_workspace(str(b))
+            self.assertEqual(first['id'],moved['id'])
+            self.assertEqual(server.PACKAGE.history.head(),head)
+            self.assertEqual(server.PACKAGE.tag()['id'],tag['id'])
+            self.assertEqual(server.reading_position(),{'view':'thesis','panes':[{}]})
+            self.assertEqual(server.workspace_catalog()['files'][0]['path'],str(b))
+            self.assertTrue(server.workspace_catalog()['files'][0]['favorite'])
+            shutil.copyfile(b,c)
+            copied=server.register_workspace(str(c))
+            self.assertNotEqual(copied['id'],first['id'])
+            self.assertEqual(server.workspace_info()['id'],first['id'])
+            self.assertEqual(c.read_bytes(),b.read_bytes())
+            server.favorite_workspace(str(c),True)
+            server.reorder_favorites([str(c),str(b)])
+            self.assertEqual([x['path'] for x in server.workspace_catalog()['files'][:2]],[str(c),str(b)])
+            delivery=server.new_workspace(str(d),activate=False,blank=True)
+            self.assertEqual(server.workspace_info()['id'],first['id'])
+            self.assertEqual(json.loads(d.read_bytes())['thesis'],[])
+            self.assertEqual(server.workspace_catalog()['files'][-1]['path'],str(d))
+            self.assertNotIn('id',json.loads(d.read_bytes()))
+            server.forget_workspace(str(c))
+            self.assertTrue(c.exists())
+            self.assertTrue((history_root()/(copied['id']+'.git')).exists())
+            b.rename(a)
+            readonly(a,False)
+            body=json.loads(a.read_bytes());body['thesis'][0]['body']+='\nChanged after move.'
+            a.write_text(json.dumps(body),encoding='utf-8')
+            self.assertEqual(server.open_workspace(str(a),attach_from=str(b))['id'],first['id'])
+            self.assertTrue(server.workspace_catalog()['files'][0]['favorite'])
+            from document import Document
+            a.rename(b)
+            self.assertEqual(Document(b,server.validate_document_state).id,first['id'])
+            self.assertEqual(server.workspace_catalog()['files'][0]['path'],str(b))
+            self.assertTrue(server.workspace_catalog()['files'][0]['favorite'])
 
     def test_default_workspace_creation(self):
         root=Path(self.tmp.name)
@@ -92,7 +143,7 @@ class WorkspaceTests(unittest.TestCase):
                 path=Path(info['path'])
                 self.assertEqual(path.parent,directory)
                 self.assertEqual(path.suffix,'.json')
-                self.assertTrue(path.with_name(path.name+'.history.git').is_dir())
+                self.assertTrue((root/'history'/(info['id']+'.git')).is_dir())
             self.assertNotEqual(first['id'],second['id'])
             self.assertNotEqual(first['path'],second['path'])
             self.assertEqual(Path(first['path']).read_bytes(),original)

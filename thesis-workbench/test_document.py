@@ -29,6 +29,8 @@ class DocumentTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix=".test-v3-", dir=Path(__file__).resolve().parent)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        scope = patch.dict(os.environ, {"PAPEREDITER_HISTORY_DIR": str(self.root / "history")})
+        scope.start(); self.addCleanup(scope.stop)
         self.data = self.root / "data"
         p = patch.object(server, "DATA", self.data)
         p.start()
@@ -49,7 +51,8 @@ class DocumentTests(unittest.TestCase):
     def test_migration_history_and_tag(self):
         doc = json.loads(self.file.read_bytes())
         self.assertEqual(doc["version"], 3)
-        self.assertEqual(doc["id"], self.doc.id)
+        self.assertNotIn("id", doc)
+        self.assertEqual(self.doc.historypath.parent,self.root / "history")
         self.assertTrue(doc["thesis"][0]["body"].endswith("Last.\n"))
         self.assertEqual(len(list(self.root.glob("*.backup"))), 1)
         self.assertEqual(next(self.root.glob("*.backup")).read_bytes(), self.original)
@@ -151,6 +154,27 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(len(copies), 2)
         self.assertEqual({len(annotation_locations(result)[n['id']]) for n in copies}, {1})
         self.assertEqual(opened.history_list()['items'][0]['source'], 'migration')
+
+    def test_legacy_v3_history_migration_preserves_commits_and_tags(self):
+        from document import History
+        import uuid
+        path=self.root/'legacy.json'
+        doc=json.loads(self.file.read_bytes())
+        doc['id']=uuid.uuid4().hex
+        path.write_text(json.dumps(doc),encoding='utf-8')
+        legacy=path.with_name(path.name+'.history.git')
+        repo=History(legacy)
+        oid=repo.append(doc,'old version')
+        tag=repo.tag(oid,'old tag')
+        migrated=Document(path,server.validate_document_state)
+        self.assertEqual(migrated.id,doc['id'])
+        self.assertFalse(legacy.exists())
+        self.assertNotIn('id',json.loads(path.read_bytes()))
+        self.assertEqual(migrated.history.item(oid),doc)
+        self.assertEqual(migrated.history.tags()[oid],tag)
+        self.assertEqual(migrated.restore(oid,migrated.state()['revision'])[0],200)
+        self.assertNotIn('id',json.loads(path.read_bytes()))
+        migrated.history.run('fsck','--full')
 
     def test_resource_registration_and_invalid_external_change(self):
         image = self.root / "image.png"

@@ -22,9 +22,9 @@ python server.py
 
 桌面鼠标拖选、Shift 延伸选区和手机长按拖动选区支持跨段落与整公式、图片、表格、批注。文本标签与选中对象的绑定批注随选区复制、剪切和删除；当前页面上处于选区纵向范围内的自由放置批注也随之选中。批量复制生成独立批注 ID，剪切粘贴移动原 ID；绑定对象的批注随对象保留绑定，自由放置批注批量粘贴为正文内标签。删除批注进入回收站，撤销恢复整个选区。
 
-新格式将全部可编辑文本、结构和回收站内联在一个 UTF-8 JSON 内，带永久文档 UUID。原 v2 多文件索引在打开时自动迁移：保留原 manifest 的字节备份和旧数据目录，将旧历史导入独立的 `<文档名>.history.git` 裸仓库，校验后才替换入口。旧工具仍可用于 v2/SQLite 导入，不用于 v3 的直接编辑。
+全部可编辑文本、结构和回收站内联在单个 UTF-8 JSON 中，保留对象 ID，不再要求文档级 UUID。历史统一放入编辑器私有 `history/`（可通过 `PAPEREDITER_HISTORY_DIR` 指定），`index.json` 保存路径、内部记录 ID、当前与历史版本的规范化 JSON SHA-256。原 v2 多文件索引仍在打开时迁移并保留原 manifest 和旧数据目录；旧 v3 文档在打开时迁移其同级 Git 仓库，验证对象和引用后移除旧仓库，旧提交和标签保留。旧工具仍可用于 v2/SQLite 导入，不用于 v3 的直接编辑。
 
-图片和原始资源记录绝对路径（服务端视角，包括 UNC），不嵌入二进制；上传目录可用 CLI `upload-directory` 操作指定，默认文档同级的 `<文档名>-assets`。外部资源不改变权限。移动资源可用 `repath` 批量替换绝对路径前缀。移动文档时要将其独立历史仓库一起移动，UUID 不变。备份当前 JSON、历史仓库及必要外部资源。锁文件不存业务数据。Windows 只读属性用于防误操作，不是账户级安全隔离；跨进程锁协调 CLI 和服务，外部绕过权限的修改由扫描检测，非法内容不会被静默覆盖。
+图片和原始资源记录绝对路径（服务端视角，包括 UNC），不嵌入二进制；上传目录可用 CLI `upload-directory` 操作指定，默认文档同级的 `<文档名>-assets`。外部资源不改变权限。移动资源可用 `repath` 批量替换绝对路径前缀。移动或重命名后，唯一匹配且原路径确定不存在的最新版本自动继承历史；原路径仍存在则作为独立副本。旧版本、多个匹配或不可访问的路径需要手动选择「重新定位」或「作为新副本打开」。移动后再外部修改可手动关联。无需携带历史仓库，图片路径不自动修复。备份当前 JSON、编辑器整个 history/（包括索引）及必要外部资源。锁文件不存业务数据。Windows 只读属性用于防误操作，不是账户级安全隔离；跨进程锁协调 CLI 和服务，外部绕过权限的修改由扫描检测，非法内容不会被静默覆盖。
 
 批注及其内部图、公式、表不参与论文编号或 TeX 交叉引用索引。正式章节、公式、图、子图、表等仍可交叉引用。批注一览取代原关联图；每条批注最多一个正文位置（文字、对象或自由放置）。编辑模式下单击标签选中，再次点击打开；浮窗顶部或边框可选中整条批注，点击正文则编辑内容。复制粘贴创建新 ID，剪切粘贴移动原 ID，Delete 删除整条批注并移入回收站。剪切后暂未粘贴的批注保留在一览中为未放置状态。旧多位置批注在打开时拆为独立批注，原始版本留在文档 Git 历史；旧交叉引用保留兼容显示但不可新建指向批注的引用。复制图片到正文时创建正式图对象（复用资源路径），复制到批注时保持内部对象语义。旧批注中的本地 Markdown 图片在编辑时转换成内部图对象，打开而未修改不会改写文件。
 
@@ -32,10 +32,12 @@ python server.py
 
 ### CLI
 
-首次安装在本目录执行 `python install_cli.py`。Windows 默认在当前 Python 的 Scripts 目录安装原生 `paperedit.exe`（需要 pip 自带的 distlib 或独立 distlib），Linux/macOS 默认为 `~/.local/bin`；如未在 PATH 中，按提示添加即可。安装后在任意目录执行 `paperedit`（无参显示帮助），命令自动使用原代码仓库的最新版本；相对批量文件路径仍相对于调用者当前目录。Python 可直接用 `subprocess.run(["paperedit", "status"], capture_output=True, check=True)`，无需 shell。默认操作当前文档；指定绝对路径 `--workspace` 不切换网页。服务关闭可用 `--offline`。仅本机连接被拒绝时允许自动回退到本地核心；远程 API 失败、超时、服务器内部错误不会静默回退。所有日常命令输出 JSON，Windows 管道输出使用兼容旧 PowerShell 的 ASCII 转义（JSON 解码后仍为原始 Unicode）。`edit --file -` 支持 UTF-8 JSON 字节输入；文件输入支持 UTF-8 和 UTF-8 BOM。
+首次安装在本目录执行 `python install_cli.py`。Windows 默认在当前 Python 的 Scripts 目录安装原生 `paperedit.exe`（需要 pip 自带的 distlib 或独立 distlib），Linux/macOS 默认为 `~/.local/bin`；如未在 PATH 中，按提示添加即可。安装后在任意目录执行 `paperedit`（无参显示帮助），命令自动使用原代码仓库的最新版本；相对批量文件路径仍相对于调用者当前目录。Python 可直接用 `subprocess.run(["paperedit", "status"], capture_output=True, check=True)`，无需 shell。默认操作当前文档；指定绝对路径 `--workspace` 通过本机服务操作独立文档，不切换网页，也不依赖当前打开的文件。服务关闭可用 `--offline`。仅本机连接被拒绝时允许自动回退到本地核心；远程 API 失败、超时、服务器内部错误不会静默回退。所有日常命令输出 JSON，Windows 管道输出使用兼容旧 PowerShell 的 ASCII 转义（JSON 解码后仍为原始 Unicode）。`edit --file -` 支持 UTF-8 JSON 字节输入；文件输入支持 UTF-8 和 UTF-8 BOM。
 
 ~~~sh
 paperedit new [ABSOLUTE_PATH]
+paperedit new ABSOLUTE_PATH --background --blank
+paperedit register ABSOLUTE_PATH
 paperedit forget ABSOLUTE_PATH
 paperedit status
 paperedit list --space thesis
@@ -81,11 +83,11 @@ pack 会创建普通文件目录与索引，不覆盖已有文件；migrate 从�
 
 最近打开、当前工作区及每份文档的阅读位置、导航和页面折叠状态由服务端记录在 `workspace.local.json`（不提交到 Git），所有设备共享。切换前保存当前浏览器的修改；其他客户端须刷新后再编辑。刷新或再次打开文档时恢复共享阅读位置，正在阅读的页面不会实时被其他设备滚动位置打断。文件缺失时提示重新选择。备份时须包含 .json 及其引用的文件。
 
-「新建文件」可留空，自动创建项目根目录下 Git 忽略的 `workspaces/` 目录，并生成唯一的 `Untitled-<UUID>.json` 文件。指定路径时仍要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new [ABSOLUTE_PATH]` 行为相同，`paperedit --offline new [ABSOLUTE_PATH]` 仅创建文件而不切换网页。
+「新建文件」可留空，自动创建项目根目录下 Git 忽略的 `workspaces/` 目录，并生成唯一的 `Untitled-<UUID>.json` 文件。指定路径时仍要求完整的 .json 绝对路径，父目录必须已存在，不覆盖任何现存文档或历史仓库。每次生成独立的 v3 示例文档和 Git 历史并打开；`paperedit new [ABSOLUTE_PATH]` 行为相同，`paperedit --offline new [ABSOLUTE_PATH]` 仅创建文件而不切换网页；`paperedit new ABSOLUTE_PATH --background --blank` 创建空白交付文档并登记，不切换用户当前文档；`paperedit register ABSOLUTE_PATH` 登记既有文档。
 
 每份新文档从仓库内的 `example.json` 和 `example-data/` 模板生成，包含章节、子章节、段落、粗斜体、行内及独立公式、图和子图、表格、交叉引用、文本、对象、独立标签批注及自由放置标记。模板不被改写，工作文件及其历史不进入 Git。示例图可直接复制到其他文档；正式交叉引用和图片资源仍属于各自文档，跨文档复制时需重新建立对应引用或登记资源。没有独立的打开示例入口。
 
-最近打开记录旁的「删除记录」仅移除共享的路径记录，不关闭当前文件、不删除文件、历史版本或阅读位置。重启不会自动恢复已删除的当前记录；主动再次打开文件会重新加入记录。CLI `paperedit forget ABSOLUTE_PATH` 使用记录中的完整路径执行相同操作。
+打开文件窗口支持按名称和绝对路径搜索、收藏置顶、拖动或上下按钮排序，收藏及完整最近记录跨端共用。最近打开记录旁的「删除记录」仅移除共享的路径及收藏记录，不关闭当前文件、不删除文件、历史版本或阅读位置。重启不会自动恢复已删除的当前记录；主动再次打开文件会重新加入记录。CLI `paperedit forget ABSOLUTE_PATH` 使用记录中的完整路径执行相同操作。
 
 ## 多设备同步与并发编辑
 

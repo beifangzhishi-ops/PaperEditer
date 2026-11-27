@@ -2164,9 +2164,12 @@ async function openWorkspaceDialog(){
     const submit=el('button','','打开');submit.type='submit';form.append(input,submit);d.append(form);
     const create=btn('新建文件',()=>openPath(input.value,'new'));
     const actions=el('div','workspaceFileActions');actions.append(create);d.append(actions);
-    const message=el('p','small');d.append(message,el('h3','','最近打开'));
+    const message=el('p','small');d.append(message);
+    const filter=el('input','workspacePath');filter.type='search';filter.placeholder='\u641c\u7d22\u6587\u4ef6\u540d\u6216\u8def\u5f84';filter.setAttribute('aria-label','\u641c\u7d22\u6587\u4ef6');d.append(filter);
     const list=el('div','workspaceRecentList');d.append(list);
-    async function openPath(path,mode='open'){
+    let catalogData=null,dragPath=null;
+    filter.oninput=()=>{if(catalogData)renderRecent(catalogData)};
+    async function openPath(path,mode='open',extra={}){
         if((mode!=='new'&&!path.trim())||submit.disabled)return;
         input.disabled=submit.disabled=create.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;message.textContent=mode==='new'?'正在新建…':'正在打开…';
         try{
@@ -2175,26 +2178,62 @@ async function openWorkspaceDialog(){
             if(dirty)await save();
             if(dirty||conflict)throw new Error('当前工作区有未保存的内容，不能切换。');
             captureReading();await flushReading();
-            await api('/api/workspaces/'+mode,{path:path.trim()});
+            await api('/api/workspaces/'+mode,{path:path.trim(),...extra});
             readingReady=false;readingInteracted=false;dialog.close();await load(true);
         }catch(e){message.textContent=e.message;input.disabled=submit.disabled=create.disabled=false;for(const button of list.querySelectorAll('button'))button.disabled=false}
     }
     form.addEventListener('submit',e=>{e.preventDefault();openPath(input.value)});
-    function renderRecent(catalog){
-        list.replaceChildren();
-        if(!catalog.files.length)list.append(el('p','small','暂无打开记录。'));
-        for(const f of catalog.files){
-            const row=el('div','workspaceRecentRow');
-            const b=btn('',()=>openPath(f.path),'workspaceRecent');b.append(el('strong','',f.name+(f.active?'（当前）':'')),el('span','small',f.path));
-            const remove=btn('删除记录',async()=>{
-                if(submit.disabled)return;
-                input.disabled=submit.disabled=create.disabled=true;for(const button of list.querySelectorAll('button'))button.disabled=true;
-                try{renderRecent(await api('/api/workspaces/forget',{path:f.path}));message.textContent='已删除打开记录，文件未删除。'}catch(e){message.textContent=e.message}
-                finally{input.disabled=submit.disabled=create.disabled=false;for(const button of list.querySelectorAll('button'))button.disabled=false}
-            },'workspaceForget');remove.title='仅删除打开记录，不删除文件';remove.setAttribute('aria-label','删除打开记录 '+f.name);
-            row.append(b,remove);list.append(row)
-        }
+    async function changeRecords(endpoint,payload){
+        if(submit.disabled)return;
+        input.disabled=submit.disabled=create.disabled=true;
+        try{renderRecent(await api('/api/workspaces/'+endpoint,payload));message.textContent='';}
+        catch(e){message.textContent=e.message}
+        finally{input.disabled=submit.disabled=create.disabled=false}
     }
+    function renderRecent(catalog){
+        catalogData=catalog;list.replaceChildren();
+        const q=filter.value.trim().toLocaleLowerCase();
+        const visible=catalog.files.filter(f=>f.path.toLocaleLowerCase().includes(q)||f.name.toLocaleLowerCase().includes(q));
+        const favorites=catalog.files.filter(f=>f.favorite);
+        function reorder(from,to){
+            const paths=favorites.map(f=>f.path),a=paths.indexOf(from),b=paths.indexOf(to);
+            if(a<0||b<0||a===b)return;
+            paths.splice(a,1);paths.splice(b,0,from);changeRecords('reorder',{paths});
+        }
+        for(const [title,group] of [['\u6536\u85cf',visible.filter(f=>f.favorite)],['\u6700\u8fd1\u6253\u5f00',visible.filter(f=>!f.favorite)]]){
+            list.append(el('h3','',title));
+            if(!group.length)list.append(el('p','small',title==='\u6536\u85cf'?'\u6682\u65e0\u6536\u85cf':'\u6682\u65e0\u6253\u5f00\u8bb0\u5f55\u3002'));
+            for(const f of group){
+                const row=el('div','workspaceRecentRow');
+                const b=btn('',()=>openPath(f.path),'workspaceRecent');b.append(el('strong','',f.name+(f.active?'\uff08\u5f53\u524d\uff09':'')),el('span','small',f.path));
+                if(f.availability&&f.availability!=='present')b.append(el('span','small',f.availability==='missing'?'\u6587\u4ef6\u5df2\u4e22\u5931':'\u6587\u4ef6\u6682\u4e0d\u53ef\u8bbf\u95ee'));
+                const star=btn(f.favorite?'\u2605':'\u2606',()=>changeRecords('favorite',{path:f.path,favorite:!f.favorite}),'workspaceRecordAction');
+                star.title=f.favorite?'\u53d6\u6d88\u6536\u85cf':'\u6dfb\u52a0\u6536\u85cf';star.setAttribute('aria-label',star.title+' '+f.name);
+                const remove=btn('\u5220\u9664\u8bb0\u5f55',()=>changeRecords('forget',{path:f.path}),'workspaceForget');remove.title='\u4ec5\u5220\u9664\u8bb0\u5f55\uff0c\u4fdd\u7559\u6587\u4ef6\u53ca\u5386\u53f2';
+                const controls=el('div','workspaceRecordActions');row.append(b,controls);controls.append(star);
+                if(f.favorite){
+                    const i=favorites.findIndex(x=>x.path===f.path);
+                    const up=btn('\u2191',()=>reorder(f.path,favorites[i-1]?.path),'workspaceRecordAction');up.disabled=i===0;up.title='\u5411\u4e0a\u79fb\u52a8\u6536\u85cf';
+                    const down=btn('\u2193',()=>reorder(f.path,favorites[i+1]?.path),'workspaceRecordAction');down.disabled=i===favorites.length-1;down.title='\u5411\u4e0b\u79fb\u52a8\u6536\u85cf';
+                    controls.append(up,down);
+                    row.draggable=true;row.ondragstart=e=>{dragPath=f.path;e.dataTransfer.setData('text/plain',f.path)};
+                    row.ondragover=e=>{if(dragPath)e.preventDefault()};
+                    row.ondrop=e=>{e.preventDefault();reorder(dragPath,f.path);dragPath=null};
+                    row.ondragend=()=>{dragPath=null};
+                }
+                if(f.availability&&f.availability!=='present'){
+                    const locate=btn('\u91cd\u65b0\u5b9a\u4f4d',()=>{
+                        const target=input.value.trim();
+                        if(!target){message.textContent='\u8bf7\u5728\u4e0a\u65b9\u8f93\u5165\u65b0\u6587\u4ef6\u7684\u7edd\u5bf9\u8def\u5f84\uff0c\u518d\u70b9\u51fb\u91cd\u65b0\u5b9a\u4f4d\u3002';input.focus();return}
+                        if(confirm('\u5c06\u6b64\u6587\u4ef6\u5173\u8054\u5230\u9009\u4e2d\u7684\u5386\u53f2\u4e0e\u6536\u85cf\uff1f'))openPath(target,'open',{attachFrom:f.path})
+                    },'workspaceRecordAction');controls.append(locate)
+                }
+                remove.setAttribute('aria-label','\u5220\u9664\u6253\u5f00\u8bb0\u5f55 '+f.name);controls.append(remove);list.append(row)
+            }
+        }
+        if(!visible.length&&q)list.append(el('p','small','\u6ca1\u6709\u5339\u914d\u6587\u4ef6'));
+    }
+    const asCopy=btn('\u4f5c\u4e3a\u65b0\u526f\u672c\u6253\u5f00',()=>{if(input.value.trim()&&confirm('\u4e3a\u6b64\u6587\u4ef6\u5efa\u7acb\u72ec\u7acb\u5386\u53f2\uff1f'))openPath(input.value,'open',{newCopy:true})});actions.append(asCopy);
     try{
         const catalog=await api('/api/workspaces');
         if(catalog.error)message.textContent=catalog.error;

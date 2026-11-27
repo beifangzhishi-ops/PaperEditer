@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
 import json, hashlib, mimetypes, uuid, os, threading, re, datetime, base64, traceback, contextlib
 from workspace import Package
-from document import Document, content, object_value, create_document, EXAMPLE_IMAGE, validate_annotation_locations
+from document import Document, content, object_value, create_document, EXAMPLE_IMAGE, validate_annotation_locations, path_status, path_key, registered_history_paths
 from merge import merge_content
 ROOT=Path(__file__).resolve().parent
 DEFAULT_WORKSPACE_DIR=ROOT.parent/'workspaces'
@@ -58,35 +58,88 @@ def workspace_path(filename):
 def workspace_info():
     if PACKAGE is None:return {'id':'directory','name':'示例工作区'}
     return {'id':PACKAGE.id if isinstance(PACKAGE,Document) else sha(str(PACKAGE.filename))[:24],'name':PACKAGE.filename.name,'path':str(PACKAGE.filename),'history':isinstance(PACKAGE,Document)}
+def reconcile_file_records(settings):
+    # Direct offline CLI relocation may update the history registry before
+    # the server sees the new path. Favorites follow the internal record.
+    ids=settings.get('recordIds',{})
+    if not ids:return False
+    paths=registered_history_paths()
+    changed=False
+    for field in ('recent','favorites','workspace'):
+        values=settings.get(field,[] if field!='workspace' else None)
+        if values is None:continue
+        source=[values] if field=='workspace' else values
+        result=[]
+        for old in source:
+            rid=ids.get(path_key(old))
+            new=paths.get(rid,old)
+            if new!=old:
+                ids[path_key(new)]=rid
+                changed=True
+            result.append(new)
+        settings[field]=result[0] if field=='workspace' else list(dict.fromkeys(result))
+    return changed
 def workspace_catalog():
     settings=settings_load();files=[]
-    for filename in settings.get('recent',[]):
-        if isinstance(filename,str):files.append({'path':filename,'name':Path(filename).name,'active':PACKAGE is not None and os.path.normcase(filename)==os.path.normcase(str(PACKAGE.filename))})
+    if reconcile_file_records(settings):settings_save(settings)
+    favorites=settings.get('favorites',[])
+    for filename in dict.fromkeys(favorites+settings.get('recent',[])):
+        if isinstance(filename,str):
+            files.append({'path':filename,'name':Path(filename).name,'active':PACKAGE is not None and path_key(filename)==path_key(PACKAGE.filename),'favorite':filename in favorites,'availability':path_status(filename)})
     return {'files':files,'current':workspace_info(),'error':WORKSPACE_ERROR}
-def record_workspace(p,remember=True):
-    settings=settings_load();filename=str(p);key=os.path.normcase(filename)
-    settings['workspace']=filename
-    if remember:settings['recent']=[filename]+[x for x in settings.get('recent',[]) if isinstance(x,str) and os.path.normcase(x)!=key]
+def record_workspace(p,remember=True,activate=True,previous=None,legacy_id=None,rid=None):
+    settings=settings_load();filename=str(p);key=path_key(filename)
+    reconcile_file_records(settings)
+    if previous and path_key(previous)!=key:
+        for field in ('recent','favorites'):
+            settings[field]=list(dict.fromkeys(filename if path_key(x)==path_key(previous) else x for x in settings.get(field,[]) if isinstance(x,str)))
+        if settings.get('workspace') and path_key(settings['workspace'])==path_key(previous):
+            settings['workspace']=filename
+    if activate:settings['workspace']=filename
+    if remember:settings['recent']=[filename]+[x for x in settings.get('recent',[]) if isinstance(x,str) and path_key(x)!=key]
+    if rid:
+        settings.setdefault('recordIds',{})[key]=rid
+        reading=settings.setdefault('reading',{})
+        old_key=sha(str(p))[:24]
+        if old_key in reading and rid not in reading:reading[rid]=reading[old_key]
     settings_save(settings)
 def forget_workspace(filename):
     if not isinstance(filename,str) or not filename:raise ValueError('Invalid recent path')
-    settings=settings_load();key=os.path.normcase(filename)
-    settings['recent']=[x for x in settings.get('recent',[]) if isinstance(x,str) and os.path.normcase(x)!=key]
+    settings=settings_load();key=path_key(filename)
+    for field in ('recent','favorites'):
+        settings[field]=[x for x in settings.get(field,[]) if isinstance(x,str) and path_key(x)!=key]
     settings_save(settings)
     return workspace_catalog()
-def open_workspace(filename,remember=True):
+def favorite_workspace(filename, enabled):
+    filename=str(workspace_path(filename))
+    settings=settings_load()
+    if not any(path_key(x)==path_key(filename) for x in settings.get('recent',[])+settings.get('favorites',[])):
+        raise ValueError('Unknown file record')
+    values=settings.get('favorites',[])
+    values=[x for x in values if path_key(x)!=path_key(filename)]
+    if enabled:values.append(filename)
+    settings['favorites']=values
+    settings_save(settings)
+    return workspace_catalog()
+def reorder_favorites(paths):
+    settings=settings_load();old=settings.get('favorites',[])
+    if not isinstance(paths,list) or any(not isinstance(x,str) for x in paths) or sorted(paths)!=sorted(old):
+        raise ValueError('Favorites changed; refresh the list')
+    settings['favorites']=paths;settings_save(settings)
+    return workspace_catalog()
+def register_workspace(filename,attach_from=None,new_copy=False):
+    candidate=Document(workspace_path(filename),validate_document_state,attach_from,new_copy)
+    record_workspace(candidate.filename,activate=False,previous=candidate.previous_path,rid=candidate.id)
+    return {'id':candidate.id,'path':str(candidate.filename),'name':candidate.filename.name,'history':True}
+def open_workspace(filename,remember=True,attach_from=None,new_copy=False):
     global PACKAGE,WORKSPACE_ERROR
     p=workspace_path(filename)
-    candidate=Document(p,validate_document_state)
+    candidate=Document(p,validate_document_state,attach_from,new_copy)
     previous,previous_error=PACKAGE,WORKSPACE_ERROR
     try:
         PACKAGE=candidate
         initialize_data();state()
-        record_workspace(p,remember)
-        settings=settings_load()
-        old_key=sha(str(p))[:24]
-        if old_key in settings.get('reading',{}) and candidate.id not in settings['reading']:
-            settings['reading'][candidate.id]=settings['reading'][old_key];settings_save(settings)
+        record_workspace(p,remember,previous=candidate.previous_path,rid=candidate.id)
         WORKSPACE_ERROR=None
     except BaseException:
         PACKAGE,WORKSPACE_ERROR=previous,previous_error
@@ -106,16 +159,18 @@ def example_content():
     initial['blocks'].append(dict(id='demo-independent',title='独立标签批注示例',parent=None,level=1,number='',file='blocks/demo-independent.md',source='',order=2,body='批注：选中标签或浮窗可以复制、剪切和删除。'))
     initial['blocks'].append(dict(id='demo-object',title='对象批注示例',parent=None,level=1,number='',file='blocks/demo-object.md',source='',order=3,body='这是公式对象上的批注。',objectBindings=[{'targetId':'demo-eq','floatOffset':{'x':14,'y':8}}]))
     return initial
-def create_workspace(filename):
+def create_workspace(filename,blank=False):
     if isinstance(filename,str) and not filename.strip():
         DEFAULT_WORKSPACE_DIR.mkdir(parents=True,exist_ok=True)
         path=DEFAULT_WORKSPACE_DIR/('Untitled-'+uuid.uuid4().hex+'.json')
     else:
         path=workspace_path(filename)
-    return create_document(path,validate_document_state,example_content())
-def new_workspace(filename):
-    doc=create_workspace(filename)
-    return open_workspace(str(doc.filename))
+    return create_document(path,validate_document_state,None if blank else example_content())
+def new_workspace(filename,activate=True,blank=False):
+    doc=create_workspace(filename,blank)
+    if activate:return open_workspace(str(doc.filename))
+    record_workspace(doc.filename,activate=False,rid=doc.id)
+    return {'id':doc.id,'path':str(doc.filename),'name':doc.filename.name,'history':True}
 def reading_position():
     return settings_load().get('reading',{}).get(workspace_info()['id'])
 def save_reading(position):
@@ -390,12 +445,41 @@ class Handler(BaseHTTPRequestHandler):
                 code,result=save_shortcuts(payload);return self.respond(code,result)
             if self.path=='/api/workspaces/open':
                 with LOCK:
-                    result=open_workspace(payload['path']);notify_change()
+                    result=open_workspace(payload['path'],attach_from=payload.get('attachFrom'),new_copy=payload.get('newCopy',False));notify_change()
                 return self.respond(200,result)
             if self.path=='/api/workspaces/new':
                 with LOCK:
-                    result=new_workspace(payload['path']);notify_change()
+                    result=new_workspace(payload['path'],activate=not payload.get('background',False),blank=payload.get('blank',False))
+                    if not payload.get('background',False):notify_change()
                 return self.respond(200,result)
+            if self.path=='/api/document':
+                # Explicit path CLI operations never depend on the selected UI document.
+                with LOCK:
+                    path=workspace_path(payload['path'])
+                    active=isinstance(PACKAGE,Document) and path_key(path)==path_key(PACKAGE.filename)
+                    doc=PACKAGE if active else Document(path,validate_document_state)
+                    if not active and path_key(doc.previous_path)!=path_key(path):record_workspace(path,remember=False,activate=False,previous=doc.previous_path,rid=doc.id)
+                    if payload.get('id') and payload['id']!=doc.id:
+                        return self.respond(409,{'error':'Document history changed; reopen it'})
+                    action=payload['action']
+                    if action=='state':
+                        result=doc.state()
+                        result['workspace']={'id':doc.id,'path':str(doc.filename),'name':doc.filename.name,'history':True}
+                        return self.respond(200,result)
+                    if action=='history':return self.respond(200,doc.history_list(payload.get('offset',0),payload.get('limit',100),payload.get('object')))
+                    if action=='item':return self.respond(200,doc.history_item(payload['version']))
+                    if action=='tag':return self.respond(200,{'tag':doc.tag(payload.get('version'),payload.get('name'),payload.get('clear',False),payload.get('revision'))})
+                    if action=='edit':code,result=doc.edit(payload['operations'],payload['revision'],payload.get('message'))
+                    elif action=='restore':code,result=doc.restore(payload['version'],payload['revision'],payload.get('object'))
+                    else:raise ValueError('Unknown document action')
+                    if active and code==200 and result.get('revision')!=payload.get('revision'):notify_change()
+                    return self.respond(code,result)
+            if self.path=='/api/workspaces/register':
+                with LOCK:return self.respond(200,register_workspace(payload['path']))
+            if self.path=='/api/workspaces/favorite':
+                with LOCK:return self.respond(200,favorite_workspace(payload['path'],payload['favorite']))
+            if self.path=='/api/workspaces/reorder':
+                with LOCK:return self.respond(200,reorder_favorites(payload['paths']))
             if self.path=='/api/workspaces/forget':
                 with LOCK:return self.respond(200,forget_workspace(payload['path']))
             if self.path=='/api/reading':
@@ -447,6 +531,7 @@ def scan_workspaces():
 
 if __name__=='__main__':
     settings=settings_load()
+    if reconcile_file_records(settings):settings_save(settings)
     filename=os.environ.get('PAPEREDITER_WORKSPACE')
     if not filename:filename=settings.get('workspace')
     if filename:
