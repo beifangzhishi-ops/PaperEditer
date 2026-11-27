@@ -914,7 +914,6 @@ const toolPaths={
     paste:'<rect x="5" y="5" width="14" height="16" rx="2"/><rect x="9" y="3" width="6" height="4" rx="1" fill="white"/><path d="M9 13h6m-6 4h6"/>',
     note:'<path d="M20 15a3 3 0 0 1-3 3H9l-5 3V6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3zM9 10h6m-3-3v6"/>',
     insert:'<path d="M5 3h10l4 4v13H5zM15 3v5h4M9 14h6m-3-3v6"/>',
-    link:'<path d="M10 13a4 4 0 0 0 6 1l4-4a4 4 0 0 0-6-6l-2 2m2 5a4 4 0 0 0-6-1l-4 4a4 4 0 0 0 6 6l2-2"/>',
     undo:'<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>',
     redo:'<path d="m15 14 5-5-5-5m5 5H10a6 6 0 0 0 0 12h3"/>',
     more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
@@ -1147,7 +1146,7 @@ function showFloatingTools(e,items){
 function initFloatingTools(){
     const bar=$('floatingTools');
     const mode=toolIcon(btn('',toggleEditMode),'eye',MODE_TOOL);mode.id='editModeToggle';bar.append(mode);
-    for(const [name,label] of [['cut','剪切'],['copy','复制'],['paste','粘贴'],['note','新建批注'],['link','复制交叉引用']])bar.append(toolIcon(btn('',()=>toolbarAction(label)),name,label));
+    for(const [name,label] of [['cut','剪切'],['copy','复制'],['paste','粘贴'],['note','新建批注']])bar.append(toolIcon(btn('',()=>toolbarAction(label)),name,label));
     bar.append(toolIcon(btn('',()=>toolbarUndo(false)),'undo','撤销'),toolIcon(btn('',()=>toolbarUndo(true)),'redo','重做'));
     const more=toolIcon(btn('',toolbarMore),'more',MORE_TOOL);more.id='toolbarMore';more.setAttribute('aria-haspopup','menu');bar.append(more);
     for(const b of bar.querySelectorAll('button'))b.dataset.tool=b.getAttribute('aria-label');

@@ -18,22 +18,21 @@
 #floatingTools[hidden]{display:none}
 #floatingTools button{border:0;border-radius:4px;padding:5px 9px;font-size:13px;min-height:30px}
 @media(pointer:coarse){#floatingTools button{min-height:40px;min-width:42px}#menu button{min-height:38px;padding:5px 10px}}
-@media(max-width:760px){header{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}header::-webkit-scrollbar{display:none}header>*{flex-shrink:0}header .spacer{flex:1 0 0}#workspaceName{max-width:92px;overflow:hidden;text-overflow:ellipsis}#menu{max-height:calc(100dvh - 8px)}}
+@media(max-width:760px){header{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}header::-webkit-scrollbar{display:none}header>*{flex-shrink:0}header .spacer{flex:1 0 0}header #status{display:block;order:-1;flex:0 1 auto;max-width:calc(100vw - 16px);overflow:visible;text-overflow:clip;white-space:normal;font-size:12px}#workspaceName{max-width:92px;overflow:hidden;text-overflow:ellipsis}#menu{max-height:calc(100dvh - 8px)}}
 @media(max-width:480px){
-    header{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:34px 34px;height:86px;gap:4px;padding:6px 8px;overflow:visible}
-    header .spacer,header #status{display:none}
+    header{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:34px 34px 28px;gap:4px;padding:6px 8px;overflow:visible}
+    header .spacer{display:none}
+    header #status{display:block;grid-area:3/1/4/-1;max-width:none;overflow:visible;text-overflow:clip;white-space:normal;align-self:center;min-width:0;font-size:11px;line-height:1.25}
     header #drawer{grid-area:1/1;justify-self:start}
     header #workspaceName{grid-area:1/2/2/4;max-width:none}
     header nav{grid-area:1/4/2/6;justify-content:flex-end}
     header #openWorkspace{grid-area:2/1}header #dual{grid-area:2/2}header #refresh{grid-area:2/3}header #headerActions{grid-area:2/4}header #shortcutSettings{grid-area:2/5}
     header button{font-size:12px;padding:3px 4px;min-width:0;height:34px}
-    #layout{height:calc(100dvh - 86px)}aside{top:86px}#overlay.show{inset:86px 0 0}
 }
 /* Explicitly toggled, icon-only toolbar; stable while scrolling/typing. */
 #floatingTools{justify-content:center;flex-wrap:wrap;gap:2px;padding:4px;border-radius:11px;white-space:normal;box-shadow:0 4px 18px #26303830}
 #floatingTools button{display:grid;place-items:center;width:35px;height:35px;min-width:0;min-height:0;padding:0;color:#345166;touch-action:manipulation}
 #floatingTools button svg,#headerActions svg{display:block;pointer-events:none}
-#floatingTools button:nth-child(4),#floatingTools button:nth-child(7){border-left:1px solid #e1e7ec;border-radius:0}
 #headerActions{display:grid;place-items:center;min-width:38px;padding:4px 8px}
 #headerActions.active{color:#245481;background:#dceaf5;border-color:#97b6d0}
 .floatingToolsEnabled .page{padding-bottom:110px}
@@ -54,8 +53,7 @@
 /* Viewing keeps the content selectable but never opens an editing keyboard. */
 #floatingTools #editModeToggle{border-right:1px solid #dce5ec;border-radius:5px;color:#345166}
 #floatingTools #editModeToggle.active{color:#245481;background:#dceaf5}
-#floatingTools button:nth-child(4),#floatingTools button:nth-child(7){border-left:0;border-radius:4px}
-#floatingTools button:nth-child(5),#floatingTools button:nth-child(8){border-left:1px solid #e1e7ec;border-radius:0}
+#floatingTools [data-tool="新建批注"],#floatingTools [data-tool="撤销"]{border-left:1px solid #e1e7ec;border-radius:0}
 .viewMode .richText{cursor:text;user-select:text;-webkit-user-select:text;caret-color:transparent}
 .viewMode .editableTitle{cursor:text;caret-color:transparent}
 .viewMode .mathPalette,.viewMode .emptyFigureAdd,.viewMode .resizeHandle,.viewMode .visualHandle,.viewMode .createBlockButton{display:none!important}
@@ -174,7 +172,7 @@ body.fullscreenHeaderHidden header{display:none}
     #overlay.show{inset:calc(var(--header-height) + var(--safe-top)) 0 var(--safe-bottom)}
 }
 @media(max-width:480px){
-    body{--header-height:86px}
+    body{--header-height:120px}
 }
 
 /* A child section has one heading: its summary also hosts the title editor. */

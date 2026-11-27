@@ -475,6 +475,10 @@ async function checkAnnotationImages(browser,mobile){
     assert(formalSub?.number);assert(copied.includes(formalSub.id));
     await contextAt(p,p.locator('[data-subfigure="'+formalSub.id+'"] img'));
     assert.equal(await menu(p,'复制交叉引用').count(),1);
+    await menu(p,'复制交叉引用').click();
+    await p.waitForFunction(id=>localClipboard===`[[ref:${id}]]`,formalSub.id);
+    await contextAt(p,p.locator('[data-subfigure="'+formalSub.id+'"] img'));
+    assert.equal(await menu(p,'复制交叉引用').count(),1);
     await menu(p,'复制').click();
     await p.waitForFunction(id=>localClipboard?.startsWith(':::subfigure')&&!localClipboard.includes(id),formalSub.id);
     await activate(note);await images.first().waitFor();
@@ -521,6 +525,47 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--mobile-status-only')){
+            for(const width of [320,390,600])for(const history of [false,true]){
+                const {p,context,errors}=await fixture(browser,true);
+                await p.setViewportSize({width,height:844});
+                await p.evaluate(enabled=>{
+                    document.body.classList.toggle('historyEnabled',enabled);
+                    const status=document.querySelector('#status');
+                    status.textContent='保存失败：版本冲突，请重新加载并合并其他设备的修改后再试。';
+                },history);
+                await p.evaluate(()=>{workspaceChanged=false;dirty=false;conflict=false;syncStatus()});
+                await p.waitForFunction(()=>document.querySelector('#status').textContent==='已同步');
+                await p.evaluate(()=>{conflict=true;syncStatus()});
+                await p.waitForFunction(()=>document.querySelector('#status').textContent==='保存冲突 · 点击刷新处理');
+                await p.evaluate(()=>{document.querySelector('#status').textContent='保存失败：版本冲突，请重新加载并合并其他设备的修改后再试。'});
+                const metrics=await p.evaluate(()=>{
+                    const status=document.querySelector('#status'),r=status.getBoundingClientRect(),h=document.querySelector('header').getBoundingClientRect();
+                    const controls=[...document.querySelectorAll('header button')].map(x=>x.getBoundingClientRect()).filter(x=>x.width&&x.height);
+                    return {width:innerWidth,status:{left:r.left,right:r.right,top:r.top,bottom:r.bottom,scrollWidth:status.scrollWidth,clientWidth:status.clientWidth},header:h.height,layout:document.querySelector('#layout').getBoundingClientRect().top,aside:getComputedStyle(document.querySelector('aside')).top,controls:controls.map(x=>({left:x.left,right:x.right,top:x.top,bottom:x.bottom})),display:getComputedStyle(status).display};
+                });
+                assert.notEqual(metrics.display,'none',`${width}px history=${history}`);
+                assert(metrics.status.left>=0&&metrics.status.right<=width,JSON.stringify(metrics));
+                assert(metrics.status.scrollWidth<=metrics.status.clientWidth+1,JSON.stringify(metrics));
+                assert(metrics.controls.every(c=>c.bottom<=metrics.status.top||c.top>=metrics.status.bottom||c.right<=metrics.status.left||c.left>=metrics.status.right),JSON.stringify(metrics));
+                assert.equal(metrics.layout,metrics.header);
+                assert.equal(Number.parseFloat(metrics.aside),metrics.header);
+                assert.equal(metrics.header,width===600?54:120);
+                if(width===320&&history){
+                    await p.evaluate(()=>document.body.classList.add('fullscreenHeaderHidden'));
+                    const hidden=await p.evaluate(()=>({top:document.querySelector('#layout').getBoundingClientRect().top,height:document.querySelector('#layout').getBoundingClientRect().height,aside:getComputedStyle(document.querySelector('aside')).top}));
+                    assert.equal(hidden.top,0);assert.equal(hidden.height,844);assert.equal(Number.parseFloat(hidden.aside),0,JSON.stringify(hidden));
+                    await p.evaluate(()=>document.body.classList.remove('fullscreenHeaderHidden'));
+                    assert.equal(await p.locator('#layout').evaluate(e=>e.getBoundingClientRect().top),120);
+                }
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            const {p,context,errors}=await fixture(browser,false);
+            await p.locator('#headerActions').click();
+            assert.equal(await p.locator('#floatingTools [aria-label="复制交叉引用"]').count(),0);
+            assert.deepEqual(errors,[]);await context.close();
+            console.log('PASS: mobile status visibility and header offsets at 320/390/600px, with and without history; floating toolbar omits cross-reference');return
+        }
         if(process.argv.includes('--selection-toolbar-only')){
             const {p,context,errors}=await fixture(browser,true);
             await p.evaluate(()=>{find('demo-start').body=find('demo-start').body.replace('A fictional example','Alpha beta gamma');reindex();select('demo-start')});
@@ -1190,8 +1235,8 @@ async function run(){
         const tools=q.locator('#floatingTools'),toggle=q.locator('#headerActions'),tool=name=>tools.getByRole('button',{name,exact:true});
         await tools.waitFor({state:'visible'});
         assert.equal(await toggle.getAttribute('aria-pressed'),'true');
-        assert.equal(await tools.locator('button').count(),9);
-        assert.equal(await tools.locator('button svg').count(),9);
+        assert.equal(await tools.locator('button').count(),8);
+        assert.equal(await tools.locator('button svg').count(),8);
         assert.equal((await tools.innerText()).trim(),'');
         assert.equal(await tools.getByRole('button',{name:'历史',exact:true}).count(),0);
         await toggle.tap();await tools.waitFor({state:'hidden'});
