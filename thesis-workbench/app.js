@@ -884,6 +884,7 @@ function setEditorControlMode(node){
 function syncEditMode(){
     document.body.classList.toggle('viewMode',!editingEnabled);
     for(const node of document.querySelectorAll('.richText,.editableTitle,math-field'))setEditorControlMode(node);
+    for(const doc of document.querySelectorAll('.visualDocument'))doc._syncRange?.();
     $('newNode').disabled=!editingEnabled;
     for(const b of document.querySelectorAll('.annotationDelete,.createBlockButton'))b.disabled=!editingEnabled;
     const b=$('editModeToggle');

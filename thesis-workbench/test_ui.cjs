@@ -1148,6 +1148,37 @@ async function run(){
             assert.deepEqual(desktop.errors,[]);assert.deepEqual(mobile.errors,[]);await desktop.context.close();await mobile.context.close();console.log('PASS: desktop/mobile live refresh, independent sections and objects, highlighted conflict diff, draft reload and both resolution choices');return;
         }
         if(process.argv.includes('--reading-switch-only')){await checkTreeReturn(browser,false);await checkTreeReturn(browser,true);console.log('PASS: tree return and shared position across desktop/mobile; explicit network jump');return}
+        if(process.argv.includes('--reading-caret-only')){
+            const {p,context,errors}=await fixture(browser,true);
+            await p.evaluate(()=>select('demo-start'));
+            const area=p.locator('.pane .part-text .richText').first(),caret=p.locator('.readingCaret:visible');
+            const original=await p.evaluate(()=>find('demo-start').body);
+            const tapAt=async offset=>{
+                await area.scrollIntoViewIfNeeded();
+                const point=await area.evaluate((a,i)=>{const t=a.querySelector('p').firstChild,r=document.createRange();r.setStart(t,i);r.collapse(true);const b=r.getBoundingClientRect();return {x:b.left,y:(b.top+b.bottom)/2}},offset);
+                await p.touchscreen.tap(point.x,point.y);
+                await p.waitForFunction(i=>{const s=getSelection();return s.isCollapsed&&s.anchorOffset===i&&s.anchorNode?.nodeType===3&&!!s.anchorNode.parentElement.closest('.richText')},offset);
+                await caret.waitFor({state:'visible'});
+            };
+            await tapAt(2);await tapAt(5);
+            assert.equal(await area.getAttribute('contenteditable'),'false');
+            assert.equal(await p.evaluate(()=>document.activeElement?.isContentEditable),false);
+            await p.keyboard.press('Delete');await p.keyboard.insertText('X');
+            assert.equal(await p.evaluate(()=>find('demo-start').body),original);
+            await tapAt(5);
+            const note=p.locator('#floatingTools [data-tool="新建批注"]');
+            await p.waitForFunction(()=>document.querySelector('#floatingTools [data-tool="新建批注"]').getAttribute('aria-disabled')==='false');
+            await note.tap();await p.locator('#dialog .richText').first().fill('Read-mode caret note');
+            await p.evaluate(()=>closeWorkbenchDialog());
+            await p.waitForFunction(()=>db.blocks.some(n=>n.body.includes('Read-mode caret note')));
+            const result=await p.evaluate(()=>{const n=db.blocks.find(n=>n.body.includes('Read-mode caret note'));return {annotation:n.annotation,body:find('demo-start').body,id:n.id}});
+            assert.equal(result.annotation.mode,'caret');assert.equal(result.annotation.owner,'demo-start');assert.equal(result.annotation.quote,'');
+            assert.equal(result.body.replace('[[embed:'+result.id+']]',''),original);
+            assert.equal(result.body.indexOf('[[embed:'+result.id+']]'),5);
+            await tapAt(2);await p.locator('#editModeToggle').tap();await caret.waitFor({state:'hidden'});
+            assert.equal(await area.getAttribute('contenteditable'),'true');
+            assert.deepEqual(errors,[]);await context.close();console.log('PASS: mobile read-only tap caret, exact inline annotation, no editable focus or body changes, edit-mode cleanup');return
+        }
         if(process.argv.includes('--newline-only')){await checkNewlineDeletion(browser,false);await checkNewlineDeletion(browser,true);console.log('PASS: paragraph joins, caret, undo, inline objects, desktop and mobile beforeinput');return}
         if(process.argv.includes('--local-annotation-range-only')){await checkLocalRangeAnnotations(browser);console.log('PASS: same-paragraph annotation highlight selection, copy, cut, delete and undo');return}
         if(process.argv.includes('--mouse-range-only')){await checkMouseRange(browser);await checkRangeAnnotations(browser);await checkLocalRangeAnnotations(browser);console.log('PASS: mouse drag across paragraphs, objects and annotations, reverse, copy, cut, delete and undo');return}

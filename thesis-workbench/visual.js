@@ -455,15 +455,31 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root._mixedRange=activeMixed;
     const handles=[el('span','rangeHandle rangeStart'),el('span','rangeHandle rangeEnd')];
     for(const h of handles){h.hidden=true;root.append(h);h.setAttribute('aria-hidden','true')}
+    // Non-editable prose cannot display a native insertion caret on touch
+    // browsers. Paint one from the collapsed DOM range without making the
+    // text host editable or focusing an input (which would open the IME).
+    const readingCaret=el('span','readingCaret');readingCaret.hidden=true;readingCaret.setAttribute('aria-hidden','true');root.append(readingCaret);
+    let readingCaretActive=false;
+    function clearReadingCaret(){readingCaretActive=false;readingCaret.hidden=true}
+    function syncReadingCaret(r){
+        readingCaret.hidden=true;
+        if(!readingCaretActive||canEditControl(root)||dialog.open||!r?.collapsed){clearReadingCaret();return}
+        const node=r.startContainer,area=(node.nodeType===1?node:node.parentElement)?.closest('.part-text .richText');
+        if(!area||!body.contains(area)){clearReadingCaret();return}
+        const b=caretBounds(r),pane=root.closest('.pane'),clip=pane?.getBoundingClientRect();
+        if(!b||!clip||b.bottom<=clip.top||b.top>=clip.bottom||b.left<clip.left||b.left>clip.right)return;
+        readingCaret.style.left=b.left+'px';readingCaret.style.top=b.top+'px';readingCaret.style.height=b.height+'px';readingCaret.hidden=false
+    }
     let ownsHighlight=false;
     let touchPressSerial=0,preparedTouchSerial=0,touchTap=null,touchLongPressTimer=0;
     function clearHighlight(){if(ownsHighlight&&window.CSS?.highlights){CSS.highlights.delete('paper-range');CSS.highlights.delete('paper-range-annotation');ownsHighlight=false}}
     let highlightedNotes=[];
     function clearRangeNotes(){for(const chip of highlightedNotes)chip.classList.remove('rangeNoteSelected');highlightedNotes=[]}
-    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearRangeNotes();clearHighlight()}
+    function clearMixed(){mixed=null;anchorPoint=focusPoint=null;clearReadingCaret();for(const c of cards())c.classList.remove('rangeSelected');for(const h of handles)h.hidden=true;clearRangeNotes();clearHighlight()}
     root._clearMixed=clearMixed;
     function syncRange(){
         const cross=mixed&&!mixed.collapsed&&body.contains(mixed.startContainer)&&body.contains(mixed.endContainer)?mixed:null,r=cross||nativeRange(),pieces=selectedPieces(r);
+        syncReadingCaret(r);
         for(const c of cards())c.classList.toggle('rangeSelected',cross&&pieces.some(x=>x.card===c&&!x.local));
         clearRangeNotes();
         const ids=new Set(cross?selectedRangeNotes(cross).map(x=>x.note.id):[]);
@@ -578,6 +594,15 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
     root.addEventListener('lostpointercapture',e=>{if(touchTap?.id===e.pointerId){touchTap=null;clearTimeout(touchLongPressTimer)}},true);
     root.addEventListener('selectstart',e=>{if(touchTap?.prose&&touchTap.longPress&&!touchTap.moved&&window.CSS?.highlights&&window.Highlight&&e.cancelable)e.preventDefault()},true);
     root.addEventListener('click',e=>{if(suppressDragClick||(e.shiftKey&&activeMixed())){suppressDragClick=false;e.preventDefault();e.stopImmediatePropagation()}},true);
+    root.addEventListener('click',e=>{
+        if(canEditControl(root)||!touchContextEvent(e)||e.target.closest('math-field,[data-token],img,a,button,.rangeHandle'))return;
+        const area=e.target.closest('.part-text .richText');
+        if(!area||!body.contains(area)||!root.closest('.pane:not(.historicalPane)'))return;
+        const r=document.caretRangeFromPoint?.(e.clientX,e.clientY);
+        if(!r||!area.contains(r.startContainer)||r.startContainer.parentElement?.closest('math-field,[data-token]'))return;
+        e.preventDefault();clearMixed();clearObject();clearNoteLabel();
+        const s=getSelection();r.collapse(true);s.removeAllRanges();s.addRange(r);readingCaretActive=true;syncRange();scheduleToolbarUpdate()
+    },true);
     for(let i=0;i<2;i++)handles[i].addEventListener('pointerdown',e=>{
         const r=activeMixed()||nativeRange();if(!r)return;
         e.preventDefault();e.stopPropagation();dragging=true;$('menu').hidden=true;const h=handles[i],fixed=i?point(r.startContainer,r.startOffset):point(r.endContainer,r.endOffset);h.setPointerCapture(e.pointerId);
