@@ -19,6 +19,55 @@ let draftDB=null,draftQueue=Promise.resolve(),draftWarning=false,draftRunning=fa
 const draftPending=new Map();
 const draftTab=(()=>{try{let id=sessionStorage.getItem('wb:draft-tab');if(!id){id=uid();sessionStorage.setItem('wb:draft-tab',id)}return id}catch{return uid()}})();
 const paneBox=$('panes'), nav=$('nav'), dialog=$('dialog');
+// The separators live beside (not inside) the scroll panes, preserving
+// existing pane indices, focus and saved reading positions while dragging.
+const splitLayout=$('layout'),splitSidebar=$('sidebar'),splitDesktop=matchMedia('(min-width: 761px)');
+const splitKey='wb:split-widths:v1';
+let splitWidths=(()=>{try{const v=JSON.parse(localStorage.getItem(splitKey)||'{}');return {nav:Number.isFinite(v?.nav)?v.nav:294,pane:Number.isFinite(v?.pane)?v.pane:.5}}catch{return {nav:294,pane:.5}}})();
+const splitClamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+function splitNavBounds(){return [160,Math.max(160,Math.min(splitLayout.clientWidth*.5,splitLayout.clientWidth-(panes.length>1?400:240)))]}
+function splitPaneBounds(){const w=paneBox.clientWidth||1,min=Math.min(180,w*.4)/w;return [min,1-min]}
+function applySplitWidths(){
+    const navWidth=splitClamp(splitWidths.nav,...splitNavBounds());
+    splitLayout.style.setProperty('--split-nav-width',navWidth+'px');
+    const ratio=splitClamp(splitWidths.pane,...splitPaneBounds());
+    paneBox.style.setProperty('--split-left-width',(ratio*100)+'%');
+    paneBox.classList.toggle('splitDual',panes.length>1);
+    positionSplitHandles();
+    scheduleViewportLines();
+}
+function saveSplitWidths(){try{localStorage.setItem(splitKey,JSON.stringify(splitWidths))}catch{}}
+function makeSplitHandle(kind,label){
+    const h=el('div','layoutSplitHandle');h.id=kind==='nav'?'navSplitHandle':'paneSplitHandle';
+    h.setAttribute('role','separator');h.setAttribute('aria-orientation','vertical');h.setAttribute('aria-label',label);h.title=label;h.tabIndex=0;
+    function set(value){splitWidths[kind]=splitClamp(value,...(kind==='nav'?splitNavBounds():splitPaneBounds()));applySplitWidths()}
+    h.addEventListener('pointerdown',e=>{
+        if(e.button!==0||!splitDesktop.matches)return;e.preventDefault();e.stopPropagation();
+        const x=e.clientX,start=kind==='nav'?splitSidebar.getBoundingClientRect().width:paneBox.firstElementChild.getBoundingClientRect().width/paneBox.clientWidth;
+        h.setPointerCapture(e.pointerId);document.body.classList.add('layoutSplitting');
+        const move=ev=>{if(ev.pointerId!==e.pointerId)return;set(start+(ev.clientX-x)/(kind==='nav'?1:paneBox.clientWidth))};
+        const end=ev=>{if(ev.pointerId!==e.pointerId)return;h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',end);h.removeEventListener('pointercancel',end);h.removeEventListener('lostpointercapture',end);document.body.classList.remove('layoutSplitting');saveSplitWidths()};
+        h.addEventListener('pointermove',move);for(const type of ['pointerup','pointercancel','lostpointercapture'])h.addEventListener(type,end)
+    });
+    h.addEventListener('keydown',e=>{
+        const [min,max]=kind==='nav'?splitNavBounds():splitPaneBounds(),step=kind==='nav'?16:16/(paneBox.clientWidth||1);
+        if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();e.stopPropagation();
+        const value=kind==='nav'?splitSidebar.getBoundingClientRect().width:paneBox.firstElementChild.getBoundingClientRect().width/(paneBox.clientWidth||1);
+        set(e.key==='Home'?min:e.key==='End'?max:value+(e.key==='ArrowLeft'?-step:step));saveSplitWidths()
+    });
+    h.addEventListener('dblclick',e=>{e.preventDefault();set(kind==='nav'?294:.5);saveSplitWidths()});
+    splitLayout.append(h);return h
+}
+const navSplitHandle=makeSplitHandle('nav','调整导航栏宽度'),paneSplitHandle=makeSplitHandle('pane','调整左右页宽度');
+function positionSplitHandles(){
+    navSplitHandle.hidden=!splitDesktop.matches;paneSplitHandle.hidden=!splitDesktop.matches||panes.length!==2||paneBox.children.length!==2;
+    if(!splitDesktop.matches)return;
+    const left=splitLayout.getBoundingClientRect().left,navWidth=splitSidebar.getBoundingClientRect().width;
+    navSplitHandle.style.left=(splitSidebar.getBoundingClientRect().right-left)+'px';
+    const [nmin,nmax]=splitNavBounds();navSplitHandle.setAttribute('aria-valuemin',Math.round(nmin));navSplitHandle.setAttribute('aria-valuemax',Math.round(nmax));navSplitHandle.setAttribute('aria-valuenow',Math.round(navWidth));
+    if(!paneSplitHandle.hidden){const first=paneBox.firstElementChild,rect=first.getBoundingClientRect(),[min,max]=splitPaneBounds();paneSplitHandle.style.left=(rect.right-left)+'px';paneSplitHandle.setAttribute('aria-valuemin',Math.round(min*100));paneSplitHandle.setAttribute('aria-valuemax',Math.round(max*100));paneSplitHandle.setAttribute('aria-valuenow',Math.round(rect.width/paneBox.clientWidth*100))}
+}
+window.addEventListener('resize',applySplitWidths);splitDesktop.addEventListener('change',applySplitWidths);
 const READING_KEY='wb:reading-position:v1';
 const PAGE_FOLD_KEY='wb:page-folds:v1';
 let currentWorkspace=null;
@@ -481,17 +530,9 @@ function historyMarkdown(raw,host){
     host.append(fragment)
 }
 function historicalBody(raw,host){
-    for(const part of visualParts(raw||'')){
-        if(part.kind==='text')historyMarkdown(part.raw,host);
-        else if(part.kind==='embed')host.append(el('p','historicalRef','※ '+part.ref));
-        else{
-            const box=el('section','historicalObject');
-            box.append(el('div','small',({equation:'公式',figure:'图',table:'表'}[part.kind]||'')+' · '+part.id));
-            if(part.kind==='equation'){const m=el('div','mathscroll');math(m,part.body.trim(),true);box.append(m)}
-            else historyMarkdown(part.body,box);
-            host.append(box)
-        }
-    }
+    const section=el('div','viewportHistorySection');
+    visualParts(raw||'').forEach((part,index)=>{const group=viewportDiffGroup(part,index);group.append(historyRenderedPart(part,true));section.append(group)});
+    host.append(section)
 }
 function closeHistoricalVersion(redraw=true){
     const h=panes[1]?.history;if(!h)return;
@@ -543,30 +584,35 @@ function historyDiffDOM(a,b,host){
     }
     return true;
 }
-function historyRenderedPart(p){
+function historyRenderedPart(p,showId=false){
     const host=el('div','historyRenderedPart');
     if(p.kind==='text')historyMarkdown(p.raw,host);
     else if(p.kind==='embed')host.append(el('p','historicalRef','※ '+p.ref));
     else{
-        const box=el('section','historicalObject');box.append(el('div','small',({equation:'公式',figure:'图',table:'表'}[p.kind]||'')));
+        const box=el('section','historicalObject');box.append(el('div','small',({equation:'公式',figure:'图',table:'表'}[p.kind]||'')+(showId?' · '+p.id:'')));
         if(p.kind==='equation'){const m=el('div','mathscroll historicalMath');math(m,p.body.trim(),true);box.append(m)}
         else historyMarkdown(p.body,box);
         host.append(box);
     }
     return host;
 }
+function viewportDiffGroup(part,index){
+    const group=el('div','viewportDiffPart');group._viewportPart=part;group._viewportIndex=index;return group
+}
 function historyDiffBody(old,now,host){
     const before=visualParts(old||''),after=visualParts(now||'');
+    const indexes=new Map(after.map((part,index)=>[part,index]));
     const identity=p=>p.kind==='text'?'text:'+p.raw:p.kind+':'+(p.id||p.ref);
     const chunks=window.Diff?.diffArrays(before,after,{comparator:(a,b)=>identity(a)===identity(b),timeout:250})||[{removed:true,value:before},{added:true,value:after}];
     let i=0,j=0,changed=false;
     function pair(a,b){
-        if(!a||!b){const node=historyRenderedPart(a||b);node.classList.add(a?'historyRemoved':'historyAdded');host.append(node);changed=true;return}
-        if(a.raw===b.raw){host.append(historyRenderedPart(b));return}
+        const group=viewportDiffGroup(b||a,b?indexes.get(b):-1);host.append(group);
+        if(!a||!b){const node=historyRenderedPart(a||b);node.classList.add(a?'historyRemoved':'historyAdded');group.append(node);changed=true;return}
+        if(a.raw===b.raw){group.append(historyRenderedPart(b));return}
         changed=true;
         const x=historyRenderedPart(a),y=historyRenderedPart(b);
-        if(a.kind===b.kind&&a.kind!=='equation')historyDiffDOM(x,y,host);
-        else{ x.classList.add('historyRemoved');y.classList.add('historyAdded');host.append(x,y)}
+        if(a.kind===b.kind&&a.kind!=='equation')historyDiffDOM(x,y,group);
+        else{ x.classList.add('historyRemoved');y.classList.add('historyAdded');group.append(x,y)}
     }
     for(let k=0;k<chunks.length;){
         const c=chunks[k];
@@ -595,14 +641,15 @@ function renderHistoryDiff(host,h){
     if(host._diffSignature===signature)return;
     host._diffSignature=signature;host.replaceChildren();
     if(!id){host.append(el('p','muted','请在首页打开要比较的章节或批注。'));return}
-    host.append(el('p','small','当前首页：'+(newNodes[0]?.title||oldNodes[0]?.title||id)+' · 历史版本 → 当前版本'));
+    host.append(el('p','small','当前首页：'+(newNodes[0]?.title||oldNodes[0]?.title||id)+' · 历史版本 → 当前版本 · 行号以当前版本为准'));
     let changes=false;
     function sections(oldList,newList,notes=false){
         const before=new Map(oldList.map(n=>[n.id,n])),after=new Map(newList.map(n=>[n.id,n]));
         for(const key of new Set([...after.keys(),...before.keys()])){
             const a=before.get(key),b=after.get(key),section=el('section','historyDiffSection'),title=el('h3','historyDiffHeading');
+            section._viewportOwner=key;
             if(!notes){let depth=0,parent=(b||a).parent;const seen=new Set();while(parent&&parent!==id&&!seen.has(parent)){seen.add(parent);parent=(after.get(parent)||before.get(parent))?.parent;depth++}section.style.marginInlineStart=Math.min(3,key===id?0:depth+1)*10+'px'}
-            if(!a||!b){title.textContent=(b||a).title||'未命名';section.classList.add(a?'historyRemoved':'historyAdded');historicalBody((b||a).body,section);changes=true;section.prepend(title)}
+            if(!a||!b){title.textContent=(b||a).title||'未命名';section.classList.add(a?'historyRemoved':'historyAdded');section.append(title);historyDiffBody(a?.body||'',b?.body||'',section);changes=true}
             else{
                 changes=historyDiffText(a.title||'',b.title||'',title)||changes;section.append(title);
                 changes=historyDiffBody(a.body,b.body,section)||changes;
@@ -619,6 +666,149 @@ function refreshHistoryDiff(){
     const h=panes[1]?.history,host=paneBox.children[1]?.querySelector('.historyPageDiff');
     if(h?.mode==='diff'&&host)renderHistoryDiff(host,h);
 }
+// View-only line coordinates. Count rendered prose rows and one row per
+// atomic object, independently for each section. No document IDs or line
+// positions are written back. Diff projects current-version row starts onto
+// its rendered text, skipping removed runs (which may change its wrapping).
+function viewportTextLayout(root,measure=true){
+    const runs=[],lines=[];let text='';
+    const range=document.createRange();
+    const center=r=>(r.top+r.bottom)/2;
+    function pushLine(offset,rect){
+        if(!rect?.height)return;
+        lines.push({offset,y:center(rect)});
+    }
+    function walk(node){
+        if(node.nodeType===Node.TEXT_NODE){
+            const value=node.data;if(!value.length)return;
+            const start=text.length;text+=value;
+            const rectAt=i=>{range.setStart(node,i);range.setEnd(node,i+1);return range.getBoundingClientRect()};
+            runs.push({start,end:text.length,rectAt});
+            if(!measure||!value.trim())return;
+            range.selectNodeContents(node);
+            const rects=[...range.getClientRects()].filter(r=>r.width>.1&&r.height>0);
+            for(const rect of rects){
+                let lo=0,hi=value.length-1;
+                if(rects.length>1)while(lo<hi){const mid=(lo+hi)>>1;if(center(rectAt(mid))<center(rect)-1)lo=mid+1;else hi=mid}
+                pushLine(start+lo,rect);
+            }
+            return;
+        }
+        if(node.nodeType!==Node.ELEMENT_NODE||node.matches('.historyRemoved,[hidden],.objectNoteMarkers'))return;
+        if(node.matches('.inlineMathAtom,.historicalMath,.visualRef,.historicalRef,math-field,img,br')){
+            const start=text.length;text+=node.tagName==='BR'?'\n':'\ufffc';
+            const rectAt=()=>node.getBoundingClientRect();runs.push({start,end:text.length,rectAt});
+            if(measure)pushLine(start,rectAt());return
+        }
+        for(const child of node.childNodes)walk(child)
+    }
+    walk(root);
+    lines.sort((a,b)=>a.y-b.y||a.offset-b.offset);
+    const rows=[];
+    for(const line of lines){const last=rows.at(-1);if(last&&Math.abs(last.y-line.y)<9){if(line.offset<last.offset){last.offset=line.offset;last.y=line.y}}else rows.push({...line})}
+    if(measure&&!rows.length){const r=root.getBoundingClientRect();if(r.height)rows.push({offset:0,y:r.top+Math.min(r.height,parseFloat(getComputedStyle(root).lineHeight)||28)/2})}
+    function yAt(offset){
+        let lo=0,hi=runs.length;
+        while(lo<hi){const mid=(lo+hi)>>1;if(runs[mid].end<=offset)lo=mid+1;else hi=mid}
+        for(let i=lo;i<runs.length;i++){const run=runs[i],r=run.rectAt(Math.max(0,offset-run.start));if(r.height)return center(r)}
+        return root.getBoundingClientRect().top+14
+    }
+    return {text,rows,yAt}
+}
+function viewportOffsetMap(source,target){
+    if(source===target)return offset=>offset;
+    const changes=window.Diff?.diffChars(source,target,{timeout:60});
+    if(!changes)return offset=>Math.min(offset,Math.max(0,target.length-1));
+    const spans=[];let a=0,b=0;
+    for(const c of changes){const n=c.value.length;if(c.added)b+=n;else{spans.push({start:a,end:a+n,target:b,removed:!!c.removed});a+=n;if(!c.removed)b+=n}}
+    return offset=>{const s=spans.find(s=>offset>=s.start&&offset<s.end);return Math.min(Math.max(0,target.length-1),s?s.target+(s.removed?0:offset-s.start):b)}
+}
+function viewportObjectY(node){const r=node.getBoundingClientRect();return r.top+Math.min(r.height,26)/2}
+function viewportPartLayout(part,node){
+    if(part.kind==='text')return viewportTextLayout(node);
+    return {text:'',rows:[{offset:0,y:viewportObjectY(node)}],yAt:()=>viewportObjectY(node)}
+}
+let viewportFrame=0;
+const viewportObservedPages=new Set();
+const viewportResize=new ResizeObserver(scheduleViewportLines);
+viewportResize.observe(paneBox);
+function scheduleViewportLines(){if(!viewportFrame)viewportFrame=requestAnimationFrame(updateViewportLines)}
+function updateViewportLines(){
+    viewportFrame=0;
+    const pages=[...paneBox.querySelectorAll(':scope > .pane > .page')];
+    for(const p of viewportObservedPages)if(!pages.includes(p)){viewportResize.unobserve(p);viewportObservedPages.delete(p)}
+    for(const p of pages)if(!viewportObservedPages.has(p)){viewportResize.observe(p);viewportObservedPages.add(p)}
+    const live=new Map(),labels=new Map(),hidden=[];
+    function label(page,section,owner,index,y,value){
+        const list=labels.get(page),x=Math.max(0,section.getBoundingClientRect().left-page.getBoundingClientRect().left-32);
+        const last=list.at(-1);
+        if(last&&last.owner===owner&&last.index===index&&Math.abs(last.y-y)<9&&value!=='–'&&last.values[0]!=='–'){last.values.push(value);return}
+        list.push({owner,index,x,y,values:[value]})
+    }
+    try{
+        for(const page of pages){
+            labels.set(page,[]);
+            const pane=page.parentElement;
+            // Mobile shows one pane at a time. Measure the hidden current pane
+            // at the same width without changing its active state or scroll.
+            if(!pane.getClientRects().length&&!pane.classList.contains('historicalPane')){pane.classList.add('viewportMeasurePane');hidden.push(pane)}
+        }
+        for(const page of pages){
+            if(page.parentElement.classList.contains('historicalPane'))continue;
+            for(const doc of page.querySelectorAll('.visualDocument')){
+                if(!doc.getClientRects().length)continue;
+                let line=1;const parts=[];
+                for(const [index,card] of [...doc.querySelector(':scope > .visualBody').children].entries()){
+                    const part=card._part;if(!part)continue;
+                    const area=part.kind==='text'?card.querySelector('.richText'):card;
+                    const layout=viewportPartLayout(part,area);
+                    const start=line;for(const row of layout.rows)label(page,doc,doc._owner,index,row.y,line++);
+                    parts.push({part,layout,start})
+                }
+                if(page.parentElement===paneBox.firstElementChild)live.set(doc._owner,parts)
+            }
+        }
+        for(const page of pages){
+            if(!page.parentElement.classList.contains('historicalPane')||!page.getClientRects().length)continue;
+            for(const section of page.querySelectorAll('.historyDiffSection,.viewportHistorySection')){
+                let line=1;const owner=section._viewportOwner,source=live.get(owner);
+                for(const group of section.querySelectorAll(':scope > .viewportDiffPart')){
+                    const index=group._viewportIndex,part=group._viewportPart;
+                    if(index<0){label(page,section,owner,index,viewportObjectY(group),'–');continue}
+                    const current=[...group.children].find(n=>!n.classList.contains('historyRemoved'))||group;
+                    const target=part.kind==='text'?viewportTextLayout(group,false):viewportPartLayout(part,current);
+                    let baseline=source?.[index];
+                    if(!baseline||baseline.part.raw!==part.raw){
+                        // A folded/unopened section has no live DOM. Measure
+                        // the current part alone, never the mixed diff text.
+                        const probe=el('div','viewportLineMeasure');probe.style.width=group.clientWidth+'px';probe.append(historyRenderedPart(part));page.append(probe);
+                        const layout=viewportPartLayout(part,probe.firstElementChild);probe.remove();baseline={layout,start:line}
+                    }
+                    const map=viewportOffsetMap(baseline.layout.text,target.text);
+                    line=baseline.start;
+                    for(const row of baseline.layout.rows)label(page,section,owner,index,target.yAt(map(row.offset)),line++);
+                }
+            }
+        }
+        for(const page of pages){
+            const gutter=el('div','viewportLineGutter');gutter.setAttribute('aria-hidden','true');
+            const top=page.getBoundingClientRect().top;
+            for(const entry of labels.get(page)){
+                const v=entry.values,mark=el('span','viewportLineNumber',v.length>1?v[0]+'–'+v.at(-1):String(v[0]));
+                mark.dataset.viewportLine=v.join(',');mark.dataset.viewportOwner=entry.owner||'';mark.dataset.viewportPart=String(entry.index);mark.style.left=entry.x+'px';mark.style.top=(entry.y-top)+'px';gutter.append(mark)
+            }
+            page.querySelector(':scope > .viewportLineGutter')?.remove();page.append(gutter)
+        }
+    }finally{for(const pane of hidden)pane.classList.remove('viewportMeasurePane')}
+}
+const viewportDecoration=node=>node.nodeType===1&&node.matches('.viewportLineGutter,.viewportLineMeasure');
+new MutationObserver(records=>{
+    if(records.some(r=>!r.target.closest?.('.viewportLineGutter,.viewportLineMeasure')&&(r.type!=='childList'||[...r.addedNodes,...r.removedNodes].some(n=>!viewportDecoration(n)))))scheduleViewportLines()
+}).observe(paneBox,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','open']});
+window.addEventListener('resize',scheduleViewportLines);
+paneBox.addEventListener('load',scheduleViewportLines,true);
+document.fonts?.ready.then(scheduleViewportLines);
+document.fonts?.addEventListener('loadingdone',scheduleViewportLines);
 function renderHistoricalPage(pane,p,pi){
     const h=p.history,{entry,past}=h,toolbar=el('div','toolbar historyPageToolbar'),page=el('article','page historyPreview');
     toolbar.append(btn('切换 首页',()=>{active=0;renderNav();renderPanes()},'mobileOnly'),el('span','historyReadOnly',h.mode==='diff'?'历史差异 · 只读':'历史版本 · 只读'),el('div','spacer'),btn(h.mode==='diff'?'查看历史版本':'查看差异',()=>{h.mode=h.mode==='diff'?'version':'diff';h.scrollTop=0;renderPanes()}),btn('关闭历史',()=>closeHistoricalVersion()));
@@ -1800,6 +1990,7 @@ function renderPanes(){
         });
         if(toolbar.childNodes.length)pane.append(toolbar);pane.append(page);paneBox.append(pane);updatePageFoldButton(pi);restorePane(pane,p)
     });
+    applySplitWidths();
     refreshFreeNotes();
     $('dual').textContent=panes.length===2?'单页':'双页';
     rememberPosition();

@@ -566,6 +566,45 @@ async function run(){
     const executablePath=process.env.PAPEREDITER_CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined);
     const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
     try{
+        if(process.argv.includes('--viewport-lines-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                const owner='demo-method';
+                const prose='A long paragraph with words and inline **formatting** and $x^2$ that wraps naturally. '.repeat(18);
+                const next=prose+'\n\n:::equation eq-viewport\nx^2\n:::\n\nLast paragraph.\n';
+                const old='Removed paragraph that must not consume a number.\n\n'+prose.replace('A long paragraph','A shorter paragraph')+'\n\n:::equation eq-viewport\nx\n:::\n\nLast paragraph.\n';
+                await p.evaluate(({owner,next,old})=>{
+                    find(owner).body=next;select(owner,0);
+                    const past=structuredClone(db);past.thesis.find(n=>n.id===owner).body=old;
+                    openHistoricalVersion({id:'d'.repeat(40),time:'2026-11-26T10:00:00Z',message:'Example'},past,null,'diff')
+                },{owner,next,old});
+                const read=()=>p.evaluate(owner=>[...document.querySelectorAll('#panes > .pane')].map(pane=>[...pane.querySelectorAll(`.viewportLineNumber[data-viewport-owner="${owner}"]`)].map(n=>n.dataset.viewportLine).flatMap(s=>s.split(',')).filter(s=>s!=='–').map(Number)),owner);
+                await p.waitForFunction(owner=>document.querySelectorAll(`.historicalPane .viewportLineNumber[data-viewport-owner="${owner}"]`).length>4,owner);
+                let [left,right]=await read();assert(left.length>4);assert.deepEqual(right,left);assert.deepEqual(left,Array.from({length:left.length},(_,i)=>i+1));
+                assert(await p.locator('.historicalPane .viewportLineNumber[data-viewport-line="–"]').count()>0);
+                if(!mobile){
+                    const nav=p.locator('#sidebar'),navHandle=p.locator('#navSplitHandle'),paneHandle=p.locator('#paneSplitHandle');
+                    const widths=()=>p.evaluate(()=>[document.querySelector('#sidebar').clientWidth,...[...document.querySelectorAll('#panes > .pane')].map(e=>e.clientWidth)]);
+                    async function drag(handle,dx){const r=await handle.boundingBox();assert(r);await p.mouse.move(r.x+r.width/2,r.y+r.height/2);await p.mouse.down();await p.mouse.move(r.x+r.width/2+dx,r.y+r.height/2,{steps:5});await p.mouse.up()}
+                    const original=await widths();await drag(navHandle,80);let sized=await widths();assert(sized[0]>original[0]+65);assert(sized[1]<original[1]);
+                    await drag(paneHandle,100);let split=await widths();assert(split[1]>sized[1]+85);assert(split[2]<sized[2]-85);assert.equal(split[0],sized[0]);
+                    await p.waitForFunction(owner=>{const a=[...document.querySelectorAll('#panes > .pane')].map(pane=>[...pane.querySelectorAll(`.viewportLineNumber[data-viewport-owner="${owner}"]`)].flatMap(n=>n.dataset.viewportLine.split(',')).filter(n=>n!=='–'));return a[0].length>4&&a[0].join(',')===a[1].join(',')},owner);
+                    [left,right]=await read();assert.deepEqual(left,right);
+                    const stored=await p.evaluate(()=>JSON.parse(localStorage.getItem('wb:split-widths:v1')));assert(stored.nav>350&&stored.pane>.5);
+                    await p.evaluate(()=>renderPanes());await p.waitForFunction(()=>!document.getElementById('paneSplitHandle').hidden);assert.deepEqual(await widths(),split);
+                    assert(await nav.isVisible());
+                }else{assert(!await p.locator('#navSplitHandle').isVisible());assert(!await p.locator('#paneSplitHandle').isVisible())}
+                if(mobile)await p.getByRole('button',{name:'切换 首页',exact:true}).tap();
+                const pane=p.locator('#panes > .pane').first();await pane.evaluate(e=>{e.scrollTop=e.scrollHeight});
+                assert.deepEqual((await read())[0],left);
+                await p.evaluate(()=>{select('demo-start',0);select('demo-method',0)});
+                await p.waitForFunction(owner=>document.querySelectorAll(`.pane:not(.historicalPane) .viewportLineNumber[data-viewport-owner="${owner}"]`).length>4,owner);
+                assert.deepEqual((await read())[0],left);
+                assert.equal(await p.evaluate(()=>document.querySelector('.visualDocument').contains(document.querySelector('.viewportLineGutter'))),false);
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: desktop/mobile viewport lines, current-version diff mapping, deletion, wrapping, page switch and scroll');return;
+        }
         if(process.argv.includes('--theme-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);
