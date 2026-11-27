@@ -728,13 +728,15 @@ def resolve_history(filename, doc=None, attach_from=None, recover=False, new_cop
             row["headHash"] = content_hash(current) if current else None
             # Copy and verify first, then publish the registry; retain the old
             # directory until the index is durable (cleanup below).
-            staging = root / (rid + ".migrating-" + uuid.uuid4().hex)
-            shutil.copytree(legacy, staging)
-            copied = History(staging)
+            # The index is the publication boundary; an unregistered
+            # target is not visible to the editor. Copy directly to its
+            # final unique directory, avoiding Windows directory rename
+            # failures from virus scanners holding Git object handles.
+            shutil.copytree(legacy, target)
+            copied = History(target)
             copied.run("fsck", "--full")
             if copied.run("show-ref", allowed=(0, 1)) != source.run("show-ref", allowed=(0, 1)):
                 raise RuntimeError("Legacy history changed during migration")
-            staging.rename(target)
         index[rid] = row
     return rid, target, str(filename)
 
@@ -776,7 +778,14 @@ def cleanup_legacy(filename, history):
         def clear_readonly(func, path, exc):
             os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
             func(path)
-        shutil.rmtree(legacy, onerror=clear_readonly)
+        for attempt in range(12):
+            try:
+                shutil.rmtree(legacy, onerror=clear_readonly)
+                break
+            except OSError:
+                if not legacy.exists():break
+                if attempt == 11:raise
+                time.sleep(min(.25 * (attempt + 1), 2))
 
 
 class Document:
