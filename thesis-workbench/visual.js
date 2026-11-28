@@ -274,13 +274,15 @@ function visualRef(kind,id,allowRefs=true){
     else {const t=resolve(id),note=db.blocks.find(n=>n.id===id);const text=kind==='cite'?'['+id+']':note?note.title:t?(kind==='eqref'?'('+(t.number||t.title)+')':t.number||t.title):'〔未解析：'+id+'〕';chip.textContent=text;if(note||!allowRefs)chip.classList.add('legacyNoteRef');else if(texTarget(t)){chip.title=t.title;context(chip,()=>refMenu(t),()=>resolve(id)||t);chip.addEventListener('click',e=>{e.stopPropagation();jump(id,e.shiftKey)})}}
     return chip
 }
+// Share the inline token grammar between initial rendering and clipboard insertion.
+function inlineTokenPattern(){return /(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\$([^\n$]+?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\[\[(ref|eqref|embed|cite):([^\]\n]+)\]\]/g}
 function visualRich(raw,changed,compact=false,allowRefs=true){
     const host=el('div','richText'+(compact?' compact':''));host.contentEditable='true';host.spellcheck=false;host.setAttribute('role','textbox');host.setAttribute('aria-multiline','true');
     if(!allowRefs){host._noteEditor=true;host.dataset.noteEditor=""}
     setEditorControlMode(host);
     const tokens=[];
     function token(kind,value){const i=tokens.push({kind,value})-1;return '<span data-wb-token="'+i+'"></span>'}
-    const src=raw.replace(/(?<!\\)\$\$([\s\S]+?)\$\$|(?<!\\)\$([^\n$]+?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\[\[(ref|eqref|embed|cite):([^\]\n]+)\]\]/g,(m,dm,im,bd,bi,k,id)=>dm!=null?token('math',dm):im!=null?token('math',im):bd!=null?token('math',bd):bi!=null?token('math',bi):token(k,id));
+    const src=raw.replace(inlineTokenPattern(),(m,dm,im,bd,bi,k,id)=>dm!=null?token('math',dm):im!=null?token('math',im):bd!=null?token('math',bd):bi!=null?token('math',bi):token(k,id));
     host.innerHTML=DOMPurify.sanitize(marked.parse(src,{gfm:true,breaks:false}),{ADD_ATTR:['data-wb-token']});
     for(const p of host.querySelectorAll('[data-wb-token]')){
         const t=tokens[Number(p.dataset.wbToken)];if(!t){p.remove();continue}
@@ -1029,7 +1031,13 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const s=window.getSelection();let r=s?.rangeCount&&area.contains(s.getRangeAt(0).commonAncestorContainer)?s.getRangeAt(0).cloneRange():null;
         if(!r){r=document.createRange();r.selectNodeContents(area);r.collapse(false)}
         const frag=document.createDocumentFragment();let at=0;
-        for(const m of text.matchAll(refPattern())){if(m.index>at)frag.append(document.createTextNode(text.slice(at,m.index)));frag.append(visualRef(m[1],m[2],!internal));at=m.index+m[0].length}
+        for(const m of text.matchAll(inlineTokenPattern())){
+            if(m.index>at)frag.append(document.createTextNode(text.slice(at,m.index)));
+            const [,dm,im,bd,bi,kind,id]=m,tex=dm??im??bd??bi;
+            if(tex!=null)frag.append(inlineMathAtom(visualMath(tex,false,()=>area.dispatchEvent(new Event('input',{bubbles:true})),internal)));
+            else frag.append(visualRef(kind,id,!internal));
+            at=m.index+m[0].length
+        }
         if(at<text.length)frag.append(document.createTextNode(text.slice(at)));
         const last=frag.lastChild;if(!last)return;
         r.deleteContents();r.insertNode(frag);r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);area.dispatchEvent(new Event('input',{bubbles:true}));remember();centerAfterPaste(area)})

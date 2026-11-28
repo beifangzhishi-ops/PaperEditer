@@ -1113,6 +1113,25 @@ async function run(){
             assert.equal(await raw(),'Before first \\(a^2\\) and $b$ tail.\n\nDestination here.\n');
             assert.deepEqual(errors,[]);await context.close();console.log('PASS: inline math mixed text copy/cut/paste at caret, selection replacement and paragraph preservation');return
         }
+        if(process.argv.includes('--mixed-math-paste-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                const source='Alpha $a+b$ [[cite:JHTDB]] and $c^2$ [[eqref:range-eq]] Omega';
+                const raw=source+'\n\nDestination\n\n:::equation range-eq\nx^2\n:::\n';
+                await p.evaluate(raw=>{find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start');if(!editingEnabled)toggleEditMode()},raw);
+                const areas=p.locator('.pane .part-text .richText'),from=areas.first(),dest=areas.nth(1);
+                await from.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a.querySelector('p'));getSelection().removeAllRanges();getSelection().addRange(r)});
+                if(mobile)await p.locator('#floatingTools [data-tool="\u590d\u5236"]').tap();else await p.keyboard.press('Control+c');
+                await p.waitForFunction(source=>localClipboard===source,source);
+                await dest.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a.querySelector('p'));r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r)});
+                if(mobile)await p.locator('#floatingTools [data-tool="\u7c98\u8d34"]').tap();else await p.keyboard.press('Control+v');
+                await p.waitForFunction(source=>find('demo-start').body.includes('Destination'+source),source);
+                assert.deepEqual(await dest.locator('math-field').evaluateAll(fs=>fs.map(f=>f.dataset.tex)),['a+b','c^2']);
+                assert.deepEqual(await dest.locator('[data-token]').evaluateAll(xs=>xs.map(x=>x.dataset.token)),['[[cite:JHTDB]]','[[eqref:range-eq]]']);
+                assert.deepEqual(errors,[]);await context.close();
+            }
+            console.log('PASS: mixed prose, formulas and references round trip through desktop clipboard and mobile toolbar');return
+        }
         if(process.argv.includes('--math-clipboard-only')){
             const {p,context,errors}=await fixture(browser);
             await p.evaluate(()=>select('demo-start'));
