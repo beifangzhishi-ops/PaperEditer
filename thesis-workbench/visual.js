@@ -327,8 +327,8 @@ function caretBounds(range){
     const r=[...range.getClientRects()].find(r=>r.height>0)||range.getBoundingClientRect();
     return r.height>0?r:null
 }
-// Scroll the editing pane, not the document or the beginning of the pasted
-// block. Re-measure after layout, and cancel if the user moves the caret.
+// Reveal the insertion end only when it leaves the visible editing pane.
+// Re-measure after layout, and cancel if the user moves the caret.
 function centerAfterPaste(target){
     if(!target?.isConnected)return;
     const sel=getSelection(),range=sel?.rangeCount&&target.contains(sel.getRangeAt(0).commonAncestorContainer)?sel.getRangeAt(0).cloneRange():null;
@@ -341,8 +341,10 @@ function centerAfterPaste(target){
         if(!target.isConnected||scroller._pasteCenter!==ticket)return;
         if(range){const s=getSelection();if(!s?.rangeCount||s.focusNode!==range.endContainer||s.focusOffset!==range.endOffset)return}
         const rect=(range&&caretBounds(range))||target.getBoundingClientRect();
-        const box=scroller.getBoundingClientRect(),toolbar=scroller.querySelector(':scope > .toolbar'),top=Math.max(box.top,toolbar?.getBoundingClientRect().bottom||box.top);
-        const viewportBottom=Math.min(box.bottom,(window.visualViewport?.offsetTop||0)+(window.visualViewport?.height||innerHeight));
+        const box=scroller.getBoundingClientRect(),toolbar=scroller.querySelector(':scope > .toolbar'),viewport=window.visualViewport;
+        const top=Math.max(box.top,toolbar?.getBoundingClientRect().bottom||box.top,viewport?.offsetTop||0);
+        const viewportBottom=Math.min(box.bottom,(viewport?.offsetTop||0)+(viewport?.height||innerHeight));
+        if(rect.top>=top&&rect.bottom<=viewportBottom)return;
         const y=(top+Math.max(top,viewportBottom))/2;
         const desired=scroller.scrollTop+(rect.top+rect.bottom)/2-y;
         // Leave room below the final paragraph so it can also be centered.
