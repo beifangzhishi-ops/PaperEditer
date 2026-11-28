@@ -763,7 +763,7 @@ function renderHistoryDiff(host,h){
         const before=new Map(oldList.map(n=>[n.id,n])),after=new Map(newList.map(n=>[n.id,n]));
         for(const key of new Set([...after.keys(),...before.keys()])){
             const a=before.get(key),b=after.get(key),section=el('section','historyDiffSection'),title=el('h3','historyDiffHeading');
-            section._viewportOwner=key;
+            section._viewportOwner=key;section._diffTitle=b?.title||'';
             if(!notes){let depth=0,parent=(b||a).parent;const seen=new Set();while(parent&&parent!==id&&!seen.has(parent)){seen.add(parent);parent=(after.get(parent)||before.get(parent))?.parent;depth++}section.style.marginInlineStart=Math.min(3,key===id?0:depth+1)*10+'px'}
             if(!a||!b){title.textContent=(b||a).title||'未命名';section.classList.add(a?'historyRemoved':'historyAdded');section.append(title);historyDiffBody(a?.body||'',b?.body||'',section);changes=true}
             else{
@@ -781,6 +781,77 @@ function renderHistoryDiff(host,h){
 function refreshHistoryDiff(){
     const h=panes[1]?.history,host=paneBox.children[1]?.querySelector('.historyPageDiff');
     if(h?.mode==='diff'&&host)renderHistoryDiff(host,h);
+    scheduleViewportLines();
+}
+// Mirror only the new side of the rendered diff, without inserting markup
+// into editable prose (which would affect selection, clipboard and saving).
+function historyLiveRuns(root){
+    const runs=[];let text='';
+    function walk(node,added=false){
+        if(node.nodeType===Node.TEXT_NODE){
+            if(!node.data)return;
+            runs.push({node,start:text.length,end:text.length+node.data.length,added});text+=node.data;return;
+        }
+        if(node.nodeType!==Node.ELEMENT_NODE||node.matches('.historyRemoved,.objectNoteMarkers,[hidden]'))return;
+        added=added||node.classList.contains('historyAdded');
+        if(node.matches('.inlineMathAtom,.historicalMath,.visualRef,.historicalRef,math-field,img,br')){
+            runs.push({node,start:text.length,end:text.length+1,added,atomic:true});text+=node.matches('br')?'\n':'\ufffc';return;
+        }
+        for(const child of node.childNodes)walk(child,added);
+    }
+    walk(root,!!root.closest('.historyAdded'));return {text,runs};
+}
+function mirrorHistoryAdditions(){
+    const left=paneBox.firstElementChild,host=paneBox.children[1]?.querySelector('.historyPageDiff');
+    for(const node of left?.querySelectorAll('.historyLiveAdded')||[])node.classList.remove('historyLiveAdded');
+    const registry=window.CSS?.highlights;
+    registry?.delete('paper-history-added');
+    if(!left||!host||panes[1]?.history?.mode!=='diff')return;
+    const sections=new Map([...host.querySelectorAll('.historyDiffSection')].map(s=>[s._viewportOwner,s]));
+    const ranges=[];
+    for(const doc of left.querySelectorAll('.visualDocument')){
+        const section=sections.get(doc._owner);if(!section)continue;
+        const heading=[...left.querySelectorAll('.editableHeading')].find(h=>h.dataset.bindObject===doc._owner);
+        const title=heading?.querySelector('.editableTitle'),diffTitle=section.querySelector('.historyDiffHeading');
+        if(title&&title.value===section._diffTitle&&(section.matches('.historyAdded')||diffTitle?.querySelector('.historyAdded')))title.classList.add('historyLiveAdded');
+        const cards=[...doc.querySelector(':scope > .visualBody').children];
+        const groups=[...section.querySelectorAll(':scope > .viewportDiffPart')].filter(g=>g._viewportIndex>=0);
+        const byIndex=new Map(groups.map(g=>[g._viewportIndex,g]));
+        for(const [index,card] of cards.entries()){
+            const part=card._part;if(!part)continue;
+            const same=g=>g?._viewportPart?.raw===part.raw;
+            let group=byIndex.get(index);
+            if(!same(group)){
+                // Older comparisons can have shifted paragraphs. Only use a
+                // unique exact match, never a similarly worded unrelated part.
+                const matches=groups.filter(same);
+                group=matches.length===1&&cards.filter(c=>c._part?.raw===part.raw).length===1?matches[0]:null;
+            }
+            if(!group||!group.closest('.historyAdded')&&!group.querySelector('.historyAdded'))continue;
+            if(part.kind!=='text'){card.classList.add('historyLiveAdded');continue}
+            const area=card.querySelector('.richText');if(!area)continue;
+            const source=historyLiveRuns(group),target=historyLiveRuns(area);
+            const changes=source.text===target.text?[{value:source.text}]:window.Diff?.diffChars(source.text,target.text,{timeout:60});
+            if(!changes)continue;
+            let a=0,b=0;
+            for(const change of changes){
+                const len=change.value.length;
+                if(!change.added&&!change.removed){
+                    for(const run of source.runs){
+                        if(!run.added||run.end<=a||run.start>=a+len)continue;
+                        const start=b+Math.max(run.start,a)-a,end=b+Math.min(run.end,a+len)-a;
+                        for(const dest of target.runs){
+                            if(dest.end<=start||dest.start>=end)continue;
+                            if(dest.atomic){if(run.atomic)dest.node.classList.add('historyLiveAdded');continue}
+                            const range=document.createRange();range.setStart(dest.node,Math.max(start,dest.start)-dest.start);range.setEnd(dest.node,Math.min(end,dest.end)-dest.start);ranges.push(range);
+                        }
+                    }
+                }
+                if(!change.added)a+=len;if(!change.removed)b+=len;
+            }
+        }
+    }
+    if(ranges.length&&registry&&window.Highlight){const highlight=new Highlight(...ranges);highlight.priority=-2;registry.set('paper-history-added',highlight)}
 }
 // View-only line coordinates. Count rendered prose rows and one row per
 // atomic object, independently for each section. No document IDs or line
@@ -851,6 +922,7 @@ viewportResize.observe(paneBox);
 function scheduleViewportLines(){if(!viewportFrame)viewportFrame=requestAnimationFrame(updateViewportLines)}
 function updateViewportLines(){
     viewportFrame=0;
+    mirrorHistoryAdditions();
     const pages=[...paneBox.querySelectorAll(':scope > .pane > .page')];
     for(const p of viewportObservedPages)if(!pages.includes(p)){viewportResize.unobserve(p);viewportObservedPages.delete(p)}
     for(const p of pages)if(!viewportObservedPages.has(p)){viewportResize.observe(p);viewportObservedPages.add(p)}

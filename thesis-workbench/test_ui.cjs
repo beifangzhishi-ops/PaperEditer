@@ -870,6 +870,41 @@ async function run(){
             }
             console.log('PASS: figure rows, break insertion/deletion, drag reorder, resize, persistence, history, mobile and single-image deletion');return
         }
+        if(process.argv.includes('--history-mirror-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                try{
+                    const owner='demo-method',old='Alpha old omega.\n\nMath $x$ here.\n\n:::equation eq-mirror\nx\n:::\n\nDeleted paragraph.\n\nUnchanged.',next='Alpha fresh omega.\n\nMath $y$ here.\n\n:::equation eq-mirror\ny\n:::\n\nAdded paragraph.\n\nUnchanged.';
+                    await p.evaluate(({owner,old,next})=>{
+                        const n=find(owner);n.body=next;n.title='New title';select(owner,0);
+                        const past=structuredClone(db),previous=past.thesis.find(n=>n.id===owner);previous.body=old;previous.title='Old title';
+                        openHistoricalVersion({id:'f'.repeat(40),time:'2026-11-26T10:00:00Z',message:'Example'},past,null,'diff');
+                    },{owner,old,next});
+                    const marks=()=>p.evaluate(()=>[...(CSS.highlights.get('paper-history-added')||[])].map(r=>r.toString()).join('|'));
+                    await p.waitForFunction(()=>CSS.highlights.get('paper-history-added')?.size>0);
+                    assert.match(await marks(),/fresh/);assert.match(await marks(),/Added/);assert.doesNotMatch(await marks(),/Alpha|omega|Deleted|Unchanged/);
+                    assert.equal(await p.locator('.pane:not(.historicalPane) .inlineMathAtom.historyLiveAdded').count(),1);
+                    assert.equal(await p.locator('.pane:not(.historicalPane) .part-equation.historyLiveAdded').count(),1);
+                    assert.equal(await p.locator('.pane:not(.historicalPane) .editableTitle.historyLiveAdded').count(),1);
+                    assert.equal(await p.evaluate(owner=>find(owner).body,owner),next);
+                    // Historical-to-historical comparison: never mark a different live paragraph.
+                    await p.evaluate(({owner,old,next})=>{
+                        const selected=structuredClone(db),base=structuredClone(db);base.thesis.find(n=>n.id===owner).body=old;
+                        find(owner).body='Different live paragraph.\n\n'+next.split('\n\n').slice(1).join('\n\n');
+                        openHistoricalVersion({id:'e'.repeat(40),time:'2026-11-26T10:00:00Z',message:'Example'},selected,null,'diff',{entry:null,doc:base});
+                    },{owner,old,next});
+                    await p.waitForFunction(()=>[...(CSS.highlights.get('paper-history-added')||[])].some(r=>r.toString().includes('Added'))&&![...(CSS.highlights.get('paper-history-added')||[])].some(r=>r.toString().includes('fresh')));
+                    await p.evaluate(()=>{panes[1].history.mode='version';renderPanes()});
+                    await p.waitForFunction(()=>!CSS.highlights.has('paper-history-added')&&!document.querySelector('.historyLiveAdded'));
+                    await p.evaluate(()=>{panes[1].history.mode='diff';renderPanes()});
+                    await p.waitForFunction(()=>CSS.highlights.has('paper-history-added'));
+                    await p.evaluate(()=>closeHistoricalVersion());
+                    await p.waitForFunction(()=>!CSS.highlights.has('paper-history-added')&&!document.querySelector('.historyLiveAdded'));
+                    assert.deepEqual(errors,[]);
+                }finally{await context.close()}
+            }
+            console.log('PASS: mirrored current-side text, inline math, objects, title, historical mismatch and cleanup on desktop/mobile');return;
+        }
         if(process.argv.includes('--viewport-lines-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);

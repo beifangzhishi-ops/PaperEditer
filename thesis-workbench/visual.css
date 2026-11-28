@@ -97,6 +97,9 @@
 .historyDiff{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 ui-monospace,Consolas,monospace;max-height:36vh;overflow:auto;padding:10px;background:var(--pe-sidebar,#f6f8fa);border-radius:6px}
 .historyDiff span{white-space:pre-wrap}
 .historyAdded{background:var(--pe-added-bg,#e0f2e6);color:var(--pe-added-text,#176237)}
+::highlight(paper-history-added){background-color:var(--pe-added-bg,#e0f2e6);color:var(--pe-added-text,#176237)}
+.pane .historyLiveAdded,.pane .historyLiveAdded:focus{background-color:var(--pe-added-bg,#e0f2e6);color:var(--pe-added-text,#176237);border-radius:2px}
+.pane .visualCard.historyLiveAdded{box-shadow:inset 3px 0 var(--pe-added-text,#176237)}
 .historyRemoved{background:var(--pe-removed-bg,#f9e2e2);color:var(--pe-removed-text,#9c3030);text-decoration:line-through}
 .conflictLegend{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:12px;margin:8px 0}
 .conflictLegend>span{padding:2px 5px;border-radius:3px}
