@@ -412,6 +412,33 @@ async function checkInlineMathRange(browser){
     await p.evaluate(raw=>{find('demo-start').body=raw;clearAnnotationPlacement(find('demo-free'));reindex();select('demo-start')},raw);
     const doc=p.locator('.pane .visualDocument').first(),area=doc.locator('.part-text .richText').first(),atoms=area.locator('.inlineMathAtom');
     await atoms.nth(1).waitFor();
+    await p.evaluate(()=>{if(!editingEnabled)toggleEditMode()});
+    const key=key=>p.keyboard.press('Shift+'+key);
+    const boundary=(i,after)=>area.evaluate((a,[i,after])=>{
+        a.focus();const atom=a.querySelectorAll('.inlineMathAtom')[i],r=inlineMathEdge(atom,after);
+        getSelection().collapse(r.startContainer,r.startOffset)
+    },[i,after]);
+    const checkFocus=(i,after)=>area.evaluate((a,[i,after])=>{
+        const r=inlineMathEdge(a.querySelectorAll('.inlineMathAtom')[i],after),s=getSelection();
+        return s.focusNode===r.startContainer&&s.focusOffset===r.startOffset&&document.activeElement===a
+    },[i,after]);
+    for(const [i,forward,reverse] of [[0,'ArrowRight','ArrowLeft'],[1,'ArrowLeft','ArrowRight']]){
+        const right=forward==='ArrowRight';await boundary(i,!right);
+        await key(forward);assert(await checkFocus(i,right),'Shift+Arrow crosses an inline atom');
+        await p.waitForFunction(()=>document.querySelectorAll('.inlineMathAtom.rangeMathSelected').length===1);
+        await key(forward);assert(!await checkFocus(i,right),'Shift+Arrow continues into text');
+        await key(reverse);assert(await checkFocus(i,right),'reverse extension shrinks text');
+        await key(reverse);assert(await checkFocus(i,!right),'reverse extension shrinks the atom');
+        assert(await p.evaluate(()=>getSelection().isCollapsed));
+        await p.waitForFunction(()=>!document.querySelector('.rangeMathSelected'));
+    }
+    // Cross an independent formula, then return through the last inline atom.
+    await area.evaluate(a=>{a.focus();const r=document.createRange();r.selectNodeContents(a);r.collapse(false);getSelection().collapse(r.startContainer,r.startOffset)});
+    await key('ArrowRight');await p.waitForFunction(()=>document.querySelector('.part-equation.rangeSelected'));
+    await key('ArrowLeft');await p.waitForFunction(()=>!document.querySelector('.part-equation.rangeSelected'));
+    for(let i=0;i<12;i++)await key('ArrowLeft');
+    await p.waitForFunction(()=>document.querySelectorAll('.inlineMathAtom.rangeMathSelected').length===1);
+    await p.keyboard.press('ArrowRight');
     await area.scrollIntoViewIfNeeded();
     await p.evaluate(async()=>{await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))});
     const count=()=>area.locator('.rangeMathSelected').count();

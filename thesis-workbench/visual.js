@@ -93,11 +93,8 @@ function inlineMathEdge(atom,after){
     else if(after)r.setStartAfter(atom);else r.setStartBefore(atom);
     r.collapse(true);return r
 }
-function enterAdjacentInlineMath(e,area){
-    if(e.defaultPrevented||e.isComposing||e.keyCode===229||e.shiftKey||e.ctrlKey||e.altKey||e.metaKey||!canEditControl(area)||!['ArrowLeft','ArrowRight'].includes(e.key)||e.composedPath().some(n=>n.tagName==='MATH-FIELD'))return;
-    const s=getSelection();
-    if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.focusNode))return;
-    const caret=s.getRangeAt(0),forward=e.key==='ArrowRight',node=s.focusNode;
+function adjacentInlineMath(area,caret,forward){
+    const node=caret.startContainer;
     const inside=(node.nodeType===Node.ELEMENT_NODE?node:node.parentElement)?.closest('.inlineMathAtom');
     let atom=inside;
     if(!atom){
@@ -115,6 +112,13 @@ function enterAdjacentInlineMath(e,area){
             break
         }
     }
+    return atom
+}
+function enterAdjacentInlineMath(e,area){
+    if(e.defaultPrevented||e.isComposing||e.keyCode===229||e.shiftKey||e.ctrlKey||e.altKey||e.metaKey||!canEditControl(area)||!['ArrowLeft','ArrowRight'].includes(e.key)||e.composedPath().some(n=>n.tagName==='MATH-FIELD'))return;
+    const s=getSelection();
+    if(!s?.rangeCount||!s.isCollapsed||!area.contains(s.focusNode))return;
+    const forward=e.key==='ArrowRight',atom=adjacentInlineMath(area,s.getRangeAt(0),forward);
     const field=atom?.querySelector('math-field');
     if(!field||field.readOnly||typeof field.lastOffset!=='number')return;
     e.preventDefault();e.stopPropagation();
@@ -610,6 +614,16 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         else try{s.setBaseAndExtent(a.node,a.offset,b.node,b.offset)}catch{}
         syncRange();scheduleToolbarUpdate()
     }
+    // Keyboard extension within a single editing host keeps a native range.
+    // This also restores a real caret when reversing a cross-object range.
+    function setKeyboardRange(a,b){
+        const card=cardOf(b.node),area=card?.querySelector('.part-text .richText');
+        if(area&&area.contains(a.node)&&area.contains(b.node)&&!selectedRangeNotes(rangeOf(a,b)).length){
+            clearMixed();clearObject();if(canEditControl(root))area.focus({preventScroll:true});
+            getSelection().setBaseAndExtent(a.node,a.offset,b.node,b.offset);
+            syncRange();scheduleToolbarUpdate()
+        }else setRange(a,b)
+    }
     function pointAt(x,y,fixed){
         const hits=document.elementsFromPoint(x,y);
         let card=hits.map(n=>n.closest('.visualCard')).find(c=>c?.parentElement===body);
@@ -829,13 +843,21 @@ function visualDocument(raw,onUpdate,owner=null,pi=null){
         const a=selectionAnchor(),s=getSelection(),b=focusPoint||(s?.focusNode&&body.contains(s.focusNode)?point(s.focusNode,s.focusOffset):null);if(!a||!b)return;
         const forward=['ArrowRight','ArrowDown'].includes(e.key),vertical=['ArrowUp','ArrowDown'].includes(e.key),card=cardOf(b.node),list=cards();let next;
         if(card?._part.kind==='text'){
-            const area=card.querySelector('.richText'),rest=document.createRange();rest.selectNodeContents(area);if(forward)rest.setStart(b.node,b.offset);else rest.setEnd(b.node,b.offset);
+            const area=card.querySelector('.richText'),cursor=collapsed(b);
+            // Chromium can get stuck at a nested MathLive editing host.
+            // Extend over the whole atom from either side without focusing it.
+            const atom=!vertical&&adjacentInlineMath(area,cursor,forward);
+            if(atom){
+                const dest=inlineMathEdge(atom,forward);
+                e.preventDefault();e.stopImmediatePropagation();setKeyboardRange(a,point(dest.startContainer,dest.startOffset));return
+            }
+            const rest=document.createRange();rest.selectNodeContents(area);if(forward)rest.setStart(b.node,b.offset);else rest.setEnd(b.node,b.offset);
             const frag=rest.cloneContents(),atEdge=!frag.textContent.trim()&&!frag.querySelector('math-field,[data-token],img');
             const caret=caretBounds(collapsed(b)),line=vertical&&proseEdge(area,!forward),atLine=vertical&&caret&&Math.abs((caret.top+caret.bottom)/2-line.y)<(parseFloat(getComputedStyle(area).lineHeight)||26)*.6;
             if(atEdge||atLine)next=list[list.indexOf(card)+(forward?1:-1)];
-            else if(r){try{s.collapse(b.node,b.offset);s.modify('move',forward?'forward':'backward',vertical?'line':'character');const p=point(s.focusNode,s.focusOffset);if(body.contains(p.node)) {e.preventDefault();setRange(a,p);return}}catch{}}
+            else if(r){try{if(canEditControl(root))area.focus({preventScroll:true});s.collapse(b.node,b.offset);s.modify('move',forward?'forward':'backward',vertical?'line':'character');const p=point(s.focusNode,s.focusOffset);if(body.contains(p.node)) {e.preventDefault();setKeyboardRange(a,p);return}}catch{}}
         }else if(b.node===body)next=list[b.offset+(forward?0:-1)];else if(card)next=list[list.indexOf(card)+(forward?1:-1)];
-        if(next){e.preventDefault();e.stopImmediatePropagation();setRange(a,edge(next,next._part.kind==='text'?!forward:forward));next.scrollIntoView({block:'nearest'})}
+        if(next){e.preventDefault();e.stopImmediatePropagation();setKeyboardRange(a,edge(next,next._part.kind==='text'?!forward:forward));next.scrollIntoView({block:'nearest'})}
     },true);
     root.addEventListener('beforeinput',e=>{if(activeMixed()&&!dragging&&canEditControl(root)&&e.inputType?.startsWith('insert')&&!e.isComposing){e.preventDefault();if(e.inputType==='insertText'&&e.data)replaceMixed(activeMixed(),e.data)}},true);
     function selectObject(p,card){
