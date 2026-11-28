@@ -887,13 +887,16 @@ async function run(){
                     assert.equal(await p.locator('.pane:not(.historicalPane) .part-equation.historyLiveAdded').count(),1);
                     assert.equal(await p.locator('.pane:not(.historicalPane) .editableTitle.historyLiveAdded').count(),1);
                     assert.equal(await p.evaluate(owner=>find(owner).body,owner),next);
-                    // Historical-to-historical comparison: never mark a different live paragraph.
-                    await p.evaluate(({owner,old,next})=>{
+                    // Historical-to-historical comparison: never mark the live pane,
+                    // even when the selected historical version exactly matches it.
+                    await p.evaluate(({owner,old})=>{
                         const selected=structuredClone(db),base=structuredClone(db);base.thesis.find(n=>n.id===owner).body=old;
-                        find(owner).body='Different live paragraph.\n\n'+next.split('\n\n').slice(1).join('\n\n');
                         openHistoricalVersion({id:'e'.repeat(40),time:'2026-11-26T10:00:00Z',message:'Example'},selected,null,'diff',{entry:null,doc:base});
-                    },{owner,old,next});
-                    await p.waitForFunction(()=>[...(CSS.highlights.get('paper-history-added')||[])].some(r=>r.toString().includes('Added'))&&![...(CSS.highlights.get('paper-history-added')||[])].some(r=>r.toString().includes('fresh')));
+                    },{owner,old});
+                    await p.waitForFunction(()=>!CSS.highlights.has('paper-history-added')&&!document.querySelector('.historyLiveAdded'));
+                    assert.match((await p.locator('.historyPageDiff .historyAdded').allTextContents()).join(' '),/fresh/);
+                    await p.evaluate(()=>{panes[1].history.past=panes[1].history.comparison.doc;panes[1].history.comparison=null;renderPanes()});
+                    await p.waitForFunction(()=>CSS.highlights.has('paper-history-added'));
                     await p.evaluate(()=>{panes[1].history.mode='version';renderPanes()});
                     await p.waitForFunction(()=>!CSS.highlights.has('paper-history-added')&&!document.querySelector('.historyLiveAdded'));
                     await p.evaluate(()=>{panes[1].history.mode='diff';renderPanes()});
@@ -903,7 +906,7 @@ async function run(){
                     assert.deepEqual(errors,[]);
                 }finally{await context.close()}
             }
-            console.log('PASS: mirrored current-side text, inline math, objects, title, historical mismatch and cleanup on desktop/mobile');return;
+            console.log('PASS: mirrored live comparison only, text, inline math, objects, title, history-only isolation and cleanup on desktop/mobile');return;
         }
         if(process.argv.includes('--viewport-lines-only')){
             for(const mobile of [false,true]){
@@ -940,6 +943,21 @@ async function run(){
                 await p.waitForFunction(owner=>document.querySelectorAll(`.pane:not(.historicalPane) .viewportLineNumber[data-viewport-owner="${owner}"]`).length>4,owner);
                 assert.deepEqual((await read())[0],left);
                 assert.equal(await p.evaluate(()=>document.querySelector('.visualDocument').contains(document.querySelector('.viewportLineGutter'))),false);
+                // History-to-history numbering must not borrow the start of
+                // a matching trailing part from a differently wrapped live page.
+                const historical=await p.evaluate(owner=>{
+                    const selected=structuredClone(db),base=structuredClone(db);
+                    selected.thesis.find(n=>n.id===owner).body='New short paragraph.\n\nLast paragraph.';
+                    base.thesis.find(n=>n.id===owner).body='Deleted paragraph.\n\nOld short paragraph.\n\nLast paragraph.';
+                    find(owner).body='Long live paragraph '.repeat(180)+'\n\nLast paragraph.';
+                    openHistoricalVersion({id:'e'.repeat(40),time:'2026-11-26T10:00:00Z',message:'Example'},selected,null,'diff',{entry:null,doc:base});
+                    updateViewportLines();
+                    return [...document.querySelectorAll('.historicalPane .viewportLineNumber')].map(n=>n.dataset.viewportLine);
+                },owner);
+                const numbers=historical.flatMap(s=>s.split(',')).map(Number).filter(Number.isFinite);
+                assert.deepEqual(numbers,[1,2]);
+                await p.evaluate(owner=>{find(owner).body='New short paragraph.\n\nLast paragraph.';renderPanes();updateViewportLines()},owner);
+                assert.deepEqual(await p.locator('.historicalPane .viewportLineNumber').evaluateAll(nodes=>nodes.map(n=>n.dataset.viewportLine)),historical);
                 assert.deepEqual(errors,[]);await context.close();
             }
             console.log('PASS: desktop/mobile viewport lines, current-version diff mapping, deletion, wrapping, page switch and scroll');return;

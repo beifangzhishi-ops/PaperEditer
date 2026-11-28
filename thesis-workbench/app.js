@@ -806,7 +806,9 @@ function mirrorHistoryAdditions(){
     for(const node of left?.querySelectorAll('.historyLiveAdded')||[])node.classList.remove('historyLiveAdded');
     const registry=window.CSS?.highlights;
     registry?.delete('paper-history-added');
-    if(!left||!host||panes[1]?.history?.mode!=='diff')return;
+    const history=panes[1]?.history;
+    // Only a comparison against the live document belongs to the left pane.
+    if(!left||!host||history?.mode!=='diff'||history.comparison)return;
     const sections=new Map([...host.querySelectorAll('.historyDiffSection')].map(s=>[s._viewportOwner,s]));
     const ranges=[];
     for(const doc of left.querySelectorAll('.visualDocument')){
@@ -819,14 +821,8 @@ function mirrorHistoryAdditions(){
         const byIndex=new Map(groups.map(g=>[g._viewportIndex,g]));
         for(const [index,card] of cards.entries()){
             const part=card._part;if(!part)continue;
-            const same=g=>g?._viewportPart?.raw===part.raw;
-            let group=byIndex.get(index);
-            if(!same(group)){
-                // Older comparisons can have shifted paragraphs. Only use a
-                // unique exact match, never a similarly worded unrelated part.
-                const matches=groups.filter(same);
-                group=matches.length===1&&cards.filter(c=>c._part?.raw===part.raw).length===1?matches[0]:null;
-            }
+            const group=byIndex.get(index);
+            if(group?._viewportPart?.raw!==part.raw)continue;
             if(!group||!group.closest('.historyAdded')&&!group.querySelector('.historyAdded'))continue;
             if(part.kind!=='text'){card.classList.add('historyLiveAdded');continue}
             const area=card.querySelector('.richText');if(!area)continue;
@@ -958,8 +954,12 @@ function updateViewportLines(){
         }
         for(const page of pages){
             if(!page.parentElement.classList.contains('historicalPane')||!page.getClientRects().length)continue;
+            const history=page.parentElement._readingPane?.history;
+            const compareLive=history?.mode==='diff'&&!history.comparison;
             for(const section of page.querySelectorAll('.historyDiffSection,.viewportHistorySection')){
-                let line=1;const owner=section._viewportOwner,source=live.get(owner);
+                // Historical comparisons have their own newer-version line
+                // coordinates, even if individual parts match the live page.
+                let line=1;const owner=section._viewportOwner,source=compareLive?live.get(owner):null;
                 for(const group of section.querySelectorAll(':scope > .viewportDiffPart')){
                     const index=group._viewportIndex,part=group._viewportPart;
                     if(index<0){label(page,section,owner,index,viewportObjectY(group),'–');continue}
@@ -967,8 +967,8 @@ function updateViewportLines(){
                     const target=part.kind==='text'?viewportTextLayout(group,false):viewportPartLayout(part,current);
                     let baseline=source?.[index];
                     if(!baseline||baseline.part.raw!==part.raw){
-                        // A folded/unopened section has no live DOM. Measure
-                        // the current part alone, never the mixed diff text.
+                        // Measure the newer part alone at the historical page
+                        // width, never the mixed diff text or deleted rows.
                         const probe=el('div','viewportLineMeasure');probe.style.width=group.clientWidth+'px';probe.append(historyRenderedPart(part));page.append(probe);
                         const layout=viewportPartLayout(part,probe.firstElementChild);probe.remove();baseline={layout,start:line}
                     }
