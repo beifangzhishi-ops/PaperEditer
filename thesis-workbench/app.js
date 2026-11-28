@@ -665,14 +665,47 @@ function historyDiffText(old,now,host){
     for(const item of items)if(item.value)host.append(item.added||item.removed?historyDiffMark(document.createTextNode(item.value),item.added?'add':'remove'):document.createTextNode(item.value));
     return true;
 }
+// Align prose across inserted/deleted inline objects instead of replacing the
+// whole paragraph when its number of child nodes changes. Keep math, links
+// and formatting atomic; use word boundaries for Chinese as well as Latin.
+const historyWordSegmenter=typeof Intl.Segmenter==='function'?new Intl.Segmenter('zh',{granularity:'word'}):null;
+function historyDiffInline(a,b,host){
+    function tokens(node){
+        return [...node.childNodes].flatMap(n=>n.nodeType===3?
+            (historyWordSegmenter?[...historyWordSegmenter.segment(n.data)].map(s=>s.segment):n.data.match(/\s+|[\p{L}\p{N}]+|[^\s]/gu)||[]):[n]);
+    }
+    const before=tokens(a),after=tokens(b);
+    const diff=window.Diff?.diffArrays(before,after,{comparator:(x,y)=>typeof x==='string'?x===y:typeof y!=='string'&&x.isEqualNode(y),timeout:60});
+    if(!diff)return false;
+    const weight=tokens=>tokens.reduce((sum,token)=>sum+(typeof token==='string'?(token.match(/[\p{L}\p{N}]/gu)||[]).length:token.nodeType===1?4:0),0);
+    const shared=diff.reduce((sum,chunk)=>sum+(!chunk.added&&!chunk.removed?weight(chunk.value):0),0);
+    if(shared<2||shared<Math.min(weight(before),weight(after))*.2)return false;
+    const next=b.cloneNode(false);
+    for(const chunk of diff){
+        const kind=chunk.added?'add':chunk.removed?'remove':null;
+        let value='';
+        const flush=()=>{if(value){const node=document.createTextNode(value);next.append(kind?historyDiffMark(node,kind):node);value=''}};
+        for(const token of chunk.value){
+            if(typeof token==='string'){value+=token;continue}
+            flush();const node=token.cloneNode(true);
+            if(kind&&node.nodeType===1)node.classList.add(kind==='add'?'historyAdded':'historyRemoved');
+            next.append(node);
+        }
+        flush();
+    }
+    host.append(next);return true;
+}
 function historyDiffDOM(a,b,host){
     if(a.isEqualNode(b)){host.append(b.cloneNode(true));return false}
     if(a.nodeType===3&&b.nodeType===3)return historyDiffText(a.textContent,b.textContent,host);
     if(a.nodeType===1&&b.nodeType===1&&a.tagName===b.tagName&&!a.matches('.historicalMath,.historicalRef,img,svg,pre')&&
-        a.getAttributeNames().every(k=>a.getAttribute(k)===b.getAttribute(k))&&a.attributes.length===b.attributes.length&&a.childNodes.length===b.childNodes.length){
-        const next=b.cloneNode(false);let changed=false;
-        for(let i=0;i<a.childNodes.length;i++)changed=historyDiffDOM(a.childNodes[i],b.childNodes[i],next)||changed;
-        host.append(next);return changed;
+        a.getAttributeNames().every(k=>a.getAttribute(k)===b.getAttribute(k))&&a.attributes.length===b.attributes.length){
+        if(a.matches('p,h1,h2,h3,h4,h5,h6')){if(historyDiffInline(a,b,host))return true}
+        else if(a.childNodes.length===b.childNodes.length){
+            const next=b.cloneNode(false);let changed=false;
+            for(let i=0;i<a.childNodes.length;i++)changed=historyDiffDOM(a.childNodes[i],b.childNodes[i],next)||changed;
+            host.append(next);return changed;
+        }
     }
     // Do not place spans directly inside table rows or lists.
     for(const [node,kind] of [[a,'remove'],[b,'add']]){
@@ -725,7 +758,7 @@ function historyDiffBody(old,now,host){
         if(a.raw===b.raw){group.append(historyRenderedPart(b));return}
         changed=true;
         const x=historyRenderedPart(a),y=historyRenderedPart(b);
-        if(a.kind===b.kind&&a.kind!=='equation')historyDiffDOM(x,y,group);
+        if(a.kind===b.kind&&a.kind!=='equation'){historyDiffDOM(x,y,group);if(b.kind==='text')group._viewportBaselineNode=y}
         else{ x.classList.add('historyRemoved');y.classList.add('historyAdded');group.append(x,y)}
     }
     for(let k=0;k<chunks.length;){
@@ -780,8 +813,8 @@ function renderHistoryDiff(host,h){
 }
 function refreshHistoryDiff(){
     const h=panes[1]?.history,host=paneBox.children[1]?.querySelector('.historyPageDiff');
-    if(h?.mode==='diff'&&host)renderHistoryDiff(host,h);
-    scheduleViewportLines();
+    if(h?.mode==='diff'&&host&&!h.comparison)renderHistoryDiff(host,h);
+    if(h?.mode==='diff'&&!h.comparison)scheduleViewportLines();
 }
 // Mirror only the new side of the rendered diff, without inserting markup
 // into editable prose (which would affect selection, clipboard and saving).
@@ -857,9 +890,9 @@ function viewportTextLayout(root,measure=true){
     const runs=[],lines=[];let text='';
     const range=document.createRange();
     const center=r=>(r.top+r.bottom)/2;
-    function pushLine(offset,rect){
+    function pushLine(offset,rect,fragment=0){
         if(!rect?.height)return;
-        lines.push({offset,y:center(rect)});
+        lines.push({offset,y:center(rect),fragment});
     }
     function walk(node){
         if(node.nodeType===Node.TEXT_NODE){
@@ -880,20 +913,21 @@ function viewportTextLayout(root,measure=true){
         if(node.nodeType!==Node.ELEMENT_NODE||node.matches('.historyRemoved,[hidden],.objectNoteMarkers'))return;
         if(node.matches('.inlineMathAtom,.historicalMath,.visualRef,.historicalRef,math-field,img,br')){
             const start=text.length;text+=node.tagName==='BR'?'\n':'\ufffc';
-            const rectAt=()=>node.getBoundingClientRect();runs.push({start,end:text.length,rectAt});
-            if(measure)pushLine(start,rectAt());return
+            const rectAt=(_i,fragment=0)=>{const rects=node.getClientRects();return rects[Math.min(fragment,rects.length-1)]||node.getBoundingClientRect()};
+            runs.push({start,end:text.length,rectAt});
+            if(measure)[...node.getClientRects()].forEach((rect,i)=>pushLine(start,rect,i));return
         }
         for(const child of node.childNodes)walk(child)
     }
     walk(root);
     lines.sort((a,b)=>a.y-b.y||a.offset-b.offset);
     const rows=[];
-    for(const line of lines){const last=rows.at(-1);if(last&&Math.abs(last.y-line.y)<9){if(line.offset<last.offset){last.offset=line.offset;last.y=line.y}}else rows.push({...line})}
+    for(const line of lines){const last=rows.at(-1);if(last&&Math.abs(last.y-line.y)<9){if(line.offset<last.offset)Object.assign(last,line)}else rows.push({...line})}
     if(measure&&!rows.length){const r=root.getBoundingClientRect();if(r.height)rows.push({offset:0,y:r.top+Math.min(r.height,parseFloat(getComputedStyle(root).lineHeight)||28)/2})}
-    function yAt(offset){
+    function yAt(offset,fragment=0){
         let lo=0,hi=runs.length;
         while(lo<hi){const mid=(lo+hi)>>1;if(runs[mid].end<=offset)lo=mid+1;else hi=mid}
-        for(let i=lo;i<runs.length;i++){const run=runs[i],r=run.rectAt(Math.max(0,offset-run.start));if(r.height)return center(r)}
+        for(let i=lo;i<runs.length;i++){const run=runs[i],r=run.rectAt(Math.max(0,offset-run.start),i===lo?fragment:0);if(r.height)return center(r)}
         return root.getBoundingClientRect().top+14
     }
     return {text,rows,yAt}
@@ -912,6 +946,7 @@ function viewportPartLayout(part,node){
     return {text:'',rows:[{offset:0,y:viewportObjectY(node)}],yAt:()=>viewportObjectY(node)}
 }
 let viewportFrame=0;
+let viewportFontEpoch=0;
 const viewportObservedPages=new Set();
 const viewportResize=new ResizeObserver(scheduleViewportLines);
 viewportResize.observe(paneBox);
@@ -923,6 +958,7 @@ function updateViewportLines(){
     for(const p of viewportObservedPages)if(!pages.includes(p)){viewportResize.unobserve(p);viewportObservedPages.delete(p)}
     for(const p of pages)if(!viewportObservedPages.has(p)){viewportResize.observe(p);viewportObservedPages.add(p)}
     const live=new Map(),labels=new Map(),hidden=[];
+    const liveComparison=panes[1]?.history?.mode==='diff'&&!panes[1].history.comparison;
     function label(page,section,owner,index,y,value){
         const list=labels.get(page),x=Math.max(0,section.getBoundingClientRect().left-page.getBoundingClientRect().left-32);
         const last=list.at(-1);
@@ -935,7 +971,7 @@ function updateViewportLines(){
             const pane=page.parentElement;
             // Mobile shows one pane at a time. Measure the hidden current pane
             // at the same width without changing its active state or scroll.
-            if(!pane.getClientRects().length&&!pane.classList.contains('historicalPane')){pane.classList.add('viewportMeasurePane');hidden.push(pane)}
+            if(liveComparison&&!pane.getClientRects().length&&!pane.classList.contains('historicalPane')){pane.classList.add('viewportMeasurePane');hidden.push(pane)}
         }
         for(const page of pages){
             if(page.parentElement.classList.contains('historicalPane'))continue;
@@ -956,6 +992,29 @@ function updateViewportLines(){
             if(!page.parentElement.classList.contains('historicalPane')||!page.getClientRects().length)continue;
             const history=page.parentElement._readingPane?.history;
             const compareLive=history?.mode==='diff'&&!history.comparison;
+            // Batch only the genuinely mixed prose baselines. Unchanged and
+            // fully added parts already have a correctly laid-out newer DOM.
+            const probes=[];
+            for(const group of page.querySelectorAll('.viewportDiffPart')){
+                const part=group._viewportPart,index=group._viewportIndex;
+                if(index<0||part.kind!=='text')continue;
+                const source=compareLive?live.get(group.parentElement._viewportOwner)?.[index]:null;
+                if(source?.part.raw===part.raw)continue;
+                const current=[...group.children].find(n=>!n.classList.contains('historyRemoved'));
+                if(!current?.querySelector('.historyRemoved'))continue;
+                const width=current.getBoundingClientRect().width;
+                const key=width+':'+viewportFontEpoch;
+                if(group._viewportBaseline?.key===key)continue;
+                const probe=el('div','viewportLineMeasure');probe.style.width=width+'px';
+                probe.append(group._viewportBaselineNode||historyRenderedPart(part));
+                probes.push({group,probe,key});
+            }
+            for(const {group,probe} of probes)group.append(probe);
+            for(const {group,probe,key} of probes){
+                const layout=viewportPartLayout(group._viewportPart,probe.firstElementChild);
+                group._viewportBaseline={key,text:layout.text,rows:layout.rows.map(({offset,fragment})=>({offset,fragment}))};
+            }
+            for(const {probe} of probes)probe.remove();
             for(const section of page.querySelectorAll('.historyDiffSection,.viewportHistorySection')){
                 // Historical comparisons have their own newer-version line
                 // coordinates, even if individual parts match the live page.
@@ -964,17 +1023,20 @@ function updateViewportLines(){
                     const index=group._viewportIndex,part=group._viewportPart;
                     if(index<0){label(page,section,owner,index,viewportObjectY(group),'–');continue}
                     const current=[...group.children].find(n=>!n.classList.contains('historyRemoved'))||group;
-                    const target=part.kind==='text'?viewportTextLayout(group,false):viewportPartLayout(part,current);
                     let baseline=source?.[index];
-                    if(!baseline||baseline.part.raw!==part.raw){
-                        // Measure the newer part alone at the historical page
-                        // width, never the mixed diff text or deleted rows.
-                        const probe=el('div','viewportLineMeasure');probe.style.width=group.clientWidth+'px';probe.append(historyRenderedPart(part));page.append(probe);
-                        const layout=viewportPartLayout(part,probe.firstElementChild);probe.remove();baseline={layout,start:line}
+                    if(baseline?.part.raw!==part.raw)baseline=null;
+                    if(!baseline&&!group._viewportBaseline){
+                        // Direct coordinates avoid offset projection and a
+                        // different-font/width probe for unmodified content.
+                        const layout=viewportPartLayout(part,current);
+                        for(const row of layout.rows)label(page,section,owner,index,row.y,line++);
+                        continue;
                     }
+                    if(!baseline)baseline={layout:group._viewportBaseline,start:line};
+                    const target=part.kind==='text'?viewportTextLayout(group,false):viewportPartLayout(part,current);
                     const map=viewportOffsetMap(baseline.layout.text,target.text);
                     line=baseline.start;
-                    for(const row of baseline.layout.rows)label(page,section,owner,index,target.yAt(map(row.offset)),line++);
+                    for(const row of baseline.layout.rows)label(page,section,owner,index,target.yAt(map(row.offset),row.fragment),line++);
                 }
             }
         }
@@ -994,9 +1056,10 @@ new MutationObserver(records=>{
     if(records.some(r=>!r.target.closest?.('.viewportLineGutter,.viewportLineMeasure')&&(r.type!=='childList'||[...r.addedNodes,...r.removedNodes].some(n=>!viewportDecoration(n)))))scheduleViewportLines()
 }).observe(paneBox,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','open']});
 window.addEventListener('resize',scheduleViewportLines);
-paneBox.addEventListener('load',scheduleViewportLines,true);
-document.fonts?.ready.then(scheduleViewportLines);
-document.fonts?.addEventListener('loadingdone',scheduleViewportLines);
+paneBox.addEventListener('load',e=>{if(!e.target.closest?.('.viewportLineMeasure'))scheduleViewportLines()},true);
+function viewportFontsChanged(){viewportFontEpoch++;scheduleViewportLines()}
+document.fonts?.ready.then(viewportFontsChanged);
+document.fonts?.addEventListener('loadingdone',viewportFontsChanged);
 function renderHistoricalPage(pane,p,pi){
     const h=p.history,{entry,past}=h,toolbar=el('div','toolbar historyPageToolbar'),page=el('article','page historyPreview');
     toolbar.append(btn('切换 首页',()=>{active=0;renderNav();renderPanes()},'mobileOnly'),el('span','historyReadOnly',h.mode==='diff'?'历史差异 · 只读':'历史版本 · 只读'),el('div','spacer'),btn(h.mode==='diff'?'查看历史版本':'查看差异',()=>{h.mode=h.mode==='diff'?'version':'diff';h.scrollTop=0;renderPanes()}),btn('关闭历史',()=>closeHistoricalVersion()));

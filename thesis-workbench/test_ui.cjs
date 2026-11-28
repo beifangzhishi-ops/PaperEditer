@@ -908,6 +908,36 @@ async function run(){
             }
             console.log('PASS: mirrored live comparison only, text, inline math, objects, title, history-only isolation and cleanup on desktop/mobile');return;
         }
+        if(process.argv.includes('--history-layout-only')){
+            for(const mobile of [false,true]){
+                const {p,context,errors}=await fixture(browser,mobile);
+                try{
+                    const result=await p.evaluate(()=>{
+                        const owner='demo-method',same='\u8131\u79bb\u58c1\u9762\u540e\u5fae\u6c14\u6ce1\u968f\u6db2\u76f8\u6d41\u52a8\u3002'.repeat(12);
+                        const old=structuredClone(db),next=structuredClone(db);
+                        old.thesis.find(n=>n.id===owner).body=same+'\n\nStable prefix. Old wording. Stable suffix.\n\n:::equation eq-layout\nx\n:::';
+                        next.thesis.find(n=>n.id===owner).body=same+'\n\nStable prefix. New $y$ wording. Stable suffix.\n\n:::equation eq-layout\ny\n:::\n\n'+same;
+                        select(owner,0);openHistoricalVersion({id:'a'.repeat(40),time:'2026-11-26T10:00:00Z',message:'Example'},next,null,'diff',{entry:null,doc:old});
+                        updateViewportLines();
+                        const page=document.querySelector('.historicalPane .page'),groups=[...page.querySelectorAll('.viewportDiffPart')];
+                        const first=groups[0],last=groups.at(-1),mixed=groups[1];
+                        function check(group){
+                            const node=group.querySelector('.historicalMarkdown p').firstChild,r=document.createRange();r.selectNodeContents(node);
+                            const rows=[...r.getClientRects()].filter(r=>r.width>.1&&r.height>0).length;
+                            const marks=[...page.querySelectorAll('.viewportLineNumber')].filter(n=>n.dataset.viewportPart===String(group._viewportIndex));
+                            return {rows,marks:marks.map(n=>n.dataset.viewportLine),cached:!!group._viewportBaseline};
+                        }
+                        const baseline=mixed._viewportBaseline;
+                        updateViewportLines();
+                        return {first:check(first),last:check(last),cached:!!baseline&&baseline===mixed._viewportBaseline,added:[...mixed.querySelectorAll('.historyAdded')].map(n=>n.textContent).join(''),removed:[...mixed.querySelectorAll('.historyRemoved')].map(n=>n.textContent).join(''),numbers:[...page.querySelectorAll('.viewportLineNumber')].flatMap(n=>n.dataset.viewportLine.split(',')).map(Number).filter(Number.isFinite)};
+                    });
+                    for(const part of [result.first,result.last]){assert(part.rows>1);assert.equal(part.marks.length,part.rows);assert(part.marks.every(x=>!x.includes(',')));assert.equal(part.cached,false)}
+                    assert.equal(result.cached,true);assert.match(result.added,/New/);assert.match(result.removed,/Old/);assert.doesNotMatch(result.added+result.removed,/Stable prefix|Stable suffix/);
+                    assert.deepEqual(result.numbers,Array.from({length:result.numbers.length},(_,i)=>i+1));assert.deepEqual(errors,[]);
+                }finally{await context.close()}
+            }
+            console.log('PASS: historical CJK wrapping, unchanged/added visual rows, inline math diff and cached mixed baseline on desktop/mobile');return;
+        }
         if(process.argv.includes('--viewport-lines-only')){
             for(const mobile of [false,true]){
                 const {p,context,errors}=await fixture(browser,mobile);
